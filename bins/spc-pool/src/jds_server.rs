@@ -7,13 +7,17 @@ use std::sync::Arc;
 
 use spc_ext::{DistributionIdTlv, SetPayoutDistribution};
 use stratum_apps::key_utils::{Secp256k1PublicKey, Secp256k1SecretKey};
-use stratum_core::binary_sv2;
+use stratum_core::binary_sv2::{self, B0255, B064K};
 use stratum_core::codec_sv2::SerializedFrame;
 use stratum_core::common_messages_sv2::{
     SetupConnection, SetupConnectionSuccess, MESSAGE_TYPE_SETUP_CONNECTION,
     MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
 };
-use stratum_core::job_declaration_sv2::{DeclareMiningJob, MESSAGE_TYPE_DECLARE_MINING_JOB};
+use stratum_core::job_declaration_sv2::{
+    AllocateMiningJobToken, AllocateMiningJobTokenSuccess, DeclareMiningJob,
+    MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN, MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN_SUCCESS,
+    MESSAGE_TYPE_DECLARE_MINING_JOB,
+};
 use stratum_core::mining_sv2::MESSAGE_TYPE_SET_CUSTOM_MINING_JOB;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, Mutex};
@@ -83,6 +87,7 @@ impl JdsServer {
             dist_tx: self.dist_tx.clone(),
             pk: self.pk,
             sk: self.sk,
+            token_seq: Arc::new(Mutex::new(0)),
         });
         let handle = tokio::spawn(async move {
             while let Ok((socket, _)) = listener.accept().await {
@@ -104,6 +109,7 @@ struct JdsServerRef {
     dist_tx: broadcast::Sender<Vec<u8>>,
     pk: Secp256k1PublicKey,
     sk: Secp256k1SecretKey,
+    token_seq: Arc<Mutex<u64>>,
 }
 
 impl JdsServerRef {
@@ -132,6 +138,27 @@ impl JdsServerRef {
                             }
                         }
                         (EXT_PAYOUTS, 0) => { /* client must not publish */ }
+                        (_, MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN) => {
+                            let msg: AllocateMiningJobToken = binary_sv2::from_bytes(&mut payload)
+                                .map_err(|e| format!("allocate: {e}"))?;
+                            let mut seq = self.token_seq.lock().await;
+                            *seq = seq.wrapping_add(1);
+                            let token = format!("spc-token-{}", *seq);
+                            drop(seq);
+                            let success = AllocateMiningJobTokenSuccess {
+                                request_id: msg.request_id,
+                                mining_job_token: B0255::new(token.as_bytes())
+                                    .map_err(|e| format!("token: {e}"))?,
+                                coinbase_outputs: B064K::new(&[])
+                                    .map_err(|e| format!("outputs: {e}"))?,
+                            };
+                            write_msg(
+                                &mut write,
+                                success,
+                                MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN_SUCCESS,
+                            )
+                            .await?;
+                        }
                         (_, MESSAGE_TYPE_DECLARE_MINING_JOB) => {
                             let msg: DeclareMiningJob = binary_sv2::from_bytes(&mut payload)
                                 .map_err(|e| format!("declare: {e}"))?;
