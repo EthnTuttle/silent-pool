@@ -16,6 +16,7 @@ Pins guarantee reproducibility and a known-good starting point; nothing here gat
 | `warioishere/blitzpool-server-rust` | `b48998f40c1a9ef573ef25a5cf2d6383664fc9e8` | origin/main, release 2.4.1 (2026-10-11): the deployed 0x0003 JDS the comment's mainnet claim refers to. Reading reference for the spc-jds module in `front` (jdp/payout_distribution.rs validator, bridge.rs DistributionSlot grace, jdp_server.rs publisher, booking-time settle). AGPL-3.0-or-later; read, not ported. Note: rejects non-zero additional_outputs and has no F term (pre-2026-09-09 reading); always sends additional_outputs = vec![]. Frontmatter provenance pin 7815884 for the ported bp-pplns math is unchanged. |
 | `demand-open-source/share-accounting-ext` | `c661e93` | Existing pin (extension.md, crate v0.0.13); unchanged. |
 | `bitcoin/bips` | `60f5b33` | Existing pin (bip-0352.mediawiki v1.1.1, bip-0323); unchanged. |
+| `stratum-mining/stratum` (`stratum-core`) | `0.6.0` (crates.io) | **Implementation baseline (2026-11-02).** Codec/messages/Noise/SV1 baseline for `spc-pool`, `spc-agent`, `spc-share-ext`; behaviour is checked against the SHA pins above. Project `0x0003`/`0x5350` codecs live in `spc-ext`, so no fork of `extensions_sv2` is required. See `docs/decisions/2026-11-02-native-sv1-nix-and-protocol-baseline.md`. |
 
 ## Rules
 

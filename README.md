@@ -1,6 +1,6 @@
 # silent-pool
 
-A Stratum V2 mining pool that pays miners to **BIP 352 silent-payment addresses**: one-time, unlinkable P2TR outputs **directly in the coinbase** for earnings above a threshold, and **Ark (bark) out-of-round payments** below it. Accounting is **SLICE / PPLNS-JD**, so miners build their own block templates via Job Declaration and are paid for both hashrate and the fees they selected.
+A Stratum (SV1 and SV2) mining pool that pays miners to **BIP 352 silent-payment addresses**: one-time, unlinkable P2TR outputs **directly in the coinbase** for earnings above a threshold, and **Ark (bark) out-of-round payments** below it. Accounting is **SLICE / PPLNS-JD**, so miners build their own block templates via Job Declaration and are paid for both hashrate and the fees they selected.
 
 **Status: design phase.** No pool code yet; the Ark-tier derivation, mailbox and client are prototyped and validated on regtest (`spc_ark/`, `spc_ark_mailbox/`, `spc_ark_client/`, see `RESULTS.md`). The prototype crates are reference material, not throwaway: their frozen test vectors are normative inputs and they are absorbed into `spc-crypto` / `spc-agent` (see `docs/ARCHITECTURE.md` §2.3). The technical specification and roadmap are in `docs/`; the research behind them lives in a separate knowledge base (see *Provenance*).
 
@@ -13,8 +13,8 @@ A Stratum V2 mining pool that pays miners to **BIP 352 silent-payment addresses*
 
 | Binary | Role |
 |---|---|
-| `spc-pool` | SV2 pool; roles `front` / `payout` / `api` / `ark`; SLICE accounting; SPc coinbase; Ark settlement. `front` includes the `spc-jds` module — Job Declarator Server implementing sv2-spec PR #203 (`0x0003` Coinbase Transaction Payouts), always on |
-| `spc-agent` | Miner-side: SV1/SV2 translator + JDC + payout verifier + Ark wallet, one binary, one seed |
+| `spc-pool` | Stratum pool; roles `front` / `payout` / `api` / `ark`; native SV1 **and** SV2 listeners; SLICE accounting; SPc coinbase; Ark settlement. `front` includes the `spc-jds` module — Job Declarator Server implementing sv2-spec PR #203 (`0x0003` Coinbase Transaction Payouts), always on |
+| `spc-agent` | Miner-side: SV1/SV2 translator + JDC + payout verifier + Ark wallet, one binary, one seed (optional when the miner connects to the pool directly over SV1 or SV2) |
 | `spc-scan` | Reference scanner / wallet helper for SPc outputs |
 
 Miner identity is the silent-payment address, full stop: it is the only thing that keys a miner's account, and both payout tiers are derived from it per block. Separately, a miner MAY register a private **delivery capability** for the Ark tier (`B_ark` plus mailbox blinding data, signed with the scan key) over a small project-defined SV2 extension; it changes where the miner can be paid, never who they are, and is never published.

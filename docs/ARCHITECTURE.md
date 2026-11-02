@@ -12,22 +12,21 @@ disagree, the spec wins; where the payout derivation is concerned,
 ```
                         ┌───────────────────────── MINER SIDE ─────────────────────────┐
                         │                                                              │
-   SV1 ASICs ──SV1──▶   │   ┌────────────────────── spc-agent ─────────────────────┐   │
-                        │   │ translator role (SV1→SV2)                            │   │
-   SV2 miners ──────────┼──▶│ JDC role (optional, needs miner's own bitcoin-core)  │   │
-                        │   │ payout verifier · scanner · SP-aware bark keystore   │   │
+   SV1 ASICs ──SV1──▶   │   ┌──────────────── spc-agent (optional) ────────────────┐   │
+   SV2 miners ──────────┼──▶│ translator role · JDC role · payout verifier        │   │
+                        │   │ scanner · SP-aware bark keystore                    │   │
                         │   └───────┬──────────────────────────────┬───────────────┘   │
-                        └───────────┼──────────────────────────────┼───────────────────┘
-                          SV2 MP    │                JDP + 0x0003  │  TDP
-                                    │                              │
-┌─────────── POOL SIDE ─────────────┼──────────────────────────────┼───────────────────┐
-│                                   │                              │                   │
-│   ┌──────────── spc-pool ─────────┼──────────────────────────────┴──────────┐        │
-│   │  role: front  (includes the   │  spc-jds module: JDP listener, 0x0003   │        │
-│   │  role: payout                  │  publication/validation — JD always on)│        │
-│   │  role: api                     │                                        │        │
-│   │  role: ark  (own host, prod)   │                                        │        │
-│   └──────┬───────────┬────────────┼─────┬──────────────────────────────────┘        │
+                        │           │ SV2 MP / JDP + 0x0003        │ TDP               │
+                        │           │                              │                   │
+   SV1 ASICs ──SV1────────────────────┼──────────────────────────────┼───────────────────┼──▶ native SV1
+                        └────────────┼──────────────────────────────┼───────────────────┘
+                                     │                              │
+┌─────────── POOL SIDE ──────────────┼──────────────────────────────┼───────────────────┐
+│                                    │                              │                   │
+│   ┌──────────── spc-pool ──────────┴──────────────────────────────┴─────────┐        │
+│   │  role: front  (SV2 + native SV1 listeners; spc-jds module: JDP, 0x0003)│        │
+│   │  role: payout  (sole Postgres writer) · role: api · role: ark          │        │
+│   └──────┬───────────┬────────────┬─────┬───────────────────────────────────┘        │
 │          │           │            │     │                                            │
 │       Redis       Postgres     (TDP/IPC via bitcoin_core_sv2)                        │
 │      streams      (payout only)                                                      │
@@ -57,7 +56,7 @@ Postgres. The pool never speaks SV1 and never runs an Ark server.
 
 | Binary | Forked from | Responsibility | Secrets held | Durable state access |
 |---|---|---|---|---|
-| `spc-pool --roles front` | `sv2-apps/pool-apps/pool` (incl. its bundled JDS) | SV2 MP listeners **and the JDP listener** (the `spc-jds` module: `0x0003` publication + validation, JD always on), template stream, job building, share validation, slice aggregation, block submit, distribution building + publishing, `a_send` generation | `a_send[H]` (RAM only, zeroised on height advance; SPEC §2.2); Noise authority key | Redis (write streams); Bootstrap RPC to `payout` at start (window rebuild; single-site: Postgres read) |
+| `spc-pool --roles front` | `sv2-apps/pool-apps/pool` (incl. its bundled JDS) | SV2 MP listeners, **native SV1 listener**, **and the JDP listener** (the `spc-jds` module: `0x0003` publication + validation, JD always on), template stream, job building, share validation, slice aggregation, block submit, distribution building + publishing, `a_send` generation | `a_send[H]` (RAM only, zeroised on height advance; SPEC §2.2); Noise authority key | Redis (write streams); Bootstrap RPC to `payout` at start (window rebuild; single-site: Postgres read) |
 | `spc-pool --roles payout` | (Blitzpool pattern, re-implemented) | Slice persistence, confirmation-gated idempotent ledger apply, Ark send-order signing/scheduling, scrub job | Ark order-signing key (not the ark seed) | **Sole Postgres writer**; Redis streams |
 | `spc-pool --roles api` | — | Read-only HTTP/JSON, public + `b_scan`-authenticated | none | Postgres read, Redis read |
 | `spc-pool --roles ark` | bark wallet integration | Pool's bark wallet + Ark float; executes signed, capped `ArkSendOrder`s; boards matured pool outputs to refill float | the **`ark` seed** (bark wallet + pool output keychain `m/86'/coin'/1'`) — the pool's only hot spending key | Redis ACL: read `spc:ark:orders`, write `spc:ark:receipts` **only**; no Postgres |
@@ -165,6 +164,7 @@ Dev/regtest MAY run all roles in one process; production splits `front`
 | Interface | Endpoints | Transport | Content / notes |
 |---|---|---|---|
 | SV2 Mining Protocol | miners / `spc-agent` ↔ `front` | TCP + Noise | `user_identity` = SP address, fail-closed parse (SPEC §2.1, §3.1); shares; jobs. One connection = one `sp_id` |
+| Stratum V1 | SV1 ASICs / `spc-agent` translator ↔ `front` | TCP | `mining.subscribe`/`authorize`/`notify`/`submit`; username = SP address with optional `.worker`, same §2.1 fail-closed parse; pool-template only; `extranonce1 + extranonce2` must fit §2.4.1 (SPEC §3.1, §3.4) |
 | Ext `0x0001` | all SV2 clients ↔ `front` | in-band | extensions negotiation, immediately after `SetupConnection.Success` (SPEC §3.2) |
 | Ext `0x0003` (PR #203 @ 47dbedd) | `spc-agent` JDC role ↔ `front` (`spc-jds` module) | in-band | `SetPayoutDistribution{distribution_id, pool_payout(weight_P), payouts[], dust_limits[], additional_outputs[0] = OP_RETURN "SPc"‖A_send}`; `distribution_id` TLV on `DeclareMiningJob`/`SetCustomMiningJob`; same-height-only grace (SPEC §3.5). Always served — no opt-out |
 | Ext `0x0020` (32) | `front` ↔ auditing clients | in-band | share accounting: `NewBlockFound`, `GetWindow`, `GetShares`, `GetTransactionsInJob`, … (SPEC §3.7; deltas doc) |

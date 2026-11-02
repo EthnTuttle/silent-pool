@@ -1,0 +1,19 @@
+[package]
+name = "spc-ext"
+description = "Project SV2 extensions: 0x0003 coinbase payouts and 0x5350 delivery capabilities"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+spc-crypto.workspace = true
+bitcoin.workspace = true
+secp256k1.workspace = true
+serde.workspace = true
+stratum-core = { version = "0.6.0" }
+thiserror.workspace = true
+
+[dev-dependencies]
+hex.workspace = true
+rand.workspace = true

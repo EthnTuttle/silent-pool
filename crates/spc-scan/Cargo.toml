@@ -1,0 +1,25 @@
+[package]
+name = "spc-scan"
+description = "SPc coinbase carrier parser, block scanner and reference CLI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+rpc = ["dep:bitcoincore-rpc"]
+
+[dependencies]
+spc-crypto.workspace = true
+anyhow.workspace = true
+bitcoin.workspace = true
+clap.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+bitcoincore-rpc = { version = "0.19", optional = true }
+
+[dev-dependencies]
+rand.workspace = true

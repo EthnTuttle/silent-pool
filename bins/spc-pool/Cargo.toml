@@ -1,0 +1,37 @@
+[package]
+name = "spc-pool"
+description = "silent-pool: SV1/SV2 pool, SPc coinbase, JD and Ark settlement roles"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+ark = ["spc-crypto/ark"]
+
+[dependencies]
+spc-accounting.workspace = true
+spc-crypto.workspace = true
+spc-ext.workspace = true
+spc-scan.workspace = true
+spc-share-ext.workspace = true
+spc-store.workspace = true
+anyhow.workspace = true
+axum = "0.8"
+bitcoin.workspace = true
+clap.workspace = true
+hex.workspace = true
+rand.workspace = true
+secp256k1.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+stratum-core = { version = "0.6.0", features = ["sv1"] }
+thiserror.workspace = true
+tokio.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

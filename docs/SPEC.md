@@ -9,6 +9,7 @@ updated: 2026-10-15
 status: current
 supersedes: none
 changelog:
+  - "2026-11-02: native SV1 in `front` (same §2.1 fail-closed identity parse from the SV1 username, pool-template only, one share/accounting path) and Nix-flake-only build/CI/deploy. Protocol baseline is `stratum-core` 0.6.0; `0x0003` and `0x5350` codecs live in `spc-ext`. `§1`, `§3.1`, `§3.4`, `§6.3`, `§7.1`, `§9` amended. See docs/decisions/2026-11-02-native-sv1-nix-and-protocol-baseline.md."
   - "2026-10-15: four design decisions applied. D1: MULTI-REGION §10 deltas 3, 6, 7, 8 applied - `high_water` vector (§4.3 `select_window`, §4.7, §5.1 `distribution_snapshot.high_water`, §3.3/§5.2 `spc:blocks` and `BlockFound` payloads, §7.4 settlement reconstructs the window from it); §11.1 tier gains a committed-but-not-propagated registration -> `pending` branch and §4.6 (f) reads 'no `ark_delivery` row in Postgres at settlement'; §11.3 `ark` tracks pool outputs by `(txid, vout)` and re-checks the chain at maturity (+ §11.9 same-height test); §3.7/§5.3 type-32 served from bootstrap-RPC blobs + live `spc:slices` tail. D2: `provisional_paids` announced on `BlockFound`, not `LedgerApplied` (§5.2, §5.3). D3: `ArkSendOrder.sig` = BIP340 over `hash_SPc/ArkSendOrder(...)`, no chain prefix (§11.3 order verification, §11.10). D4: `block_found.fingerprint` nullable with `CHECK (status <> 'confirmed' OR fingerprint IS NOT NULL)` (§5.1, §7.4, §11.1)."
   - "2026-10-14 (c): multi-region amendments adopted (docs/decisions/2026-10-14-multi-region-amendments-adopted.md). §2.2 repeat alarm scoped per front; §3.3 the `spc:blocks` event carries `entries` (Redis snapshot and `snapshot_ttl_secs` deleted); §3.5 `distribution_id = front_id << 56 | local_seq`, `local_seq = max(last_local_seq + 1, unix_time_ms)`, and the grace rule rewritten as 'previous id from the same front on the same connection' (no `id − 1` arithmetic); §5.1 `slice_id` per front; §5.2 streams (+`spc:arkreg`, +`spc:front:events`, −`spc:snapshot:*`, `spc:dist:current` struck as intra-front) and trim discipline (XTRIM MINID behind the slowest live reader — payout group ack and front cursor heartbeats, TTL 120 s — 600 s floor, 1M-entry backstop alarm, re-bootstrap); §5.3 front RAM; §6.3 `front_id`, `outbox_max`, `tip_divergence_secs`, `front_cursor_*` (replacing `snapshot_ttl_secs`); §7.4 missing-event settlement failure model; §9 topology ('RAM-only state — no durable state of its own'), `front_id` lease, monitoring. MULTI-REGION §10 deltas 3, 6, 7, 8 were applied afterwards (2026-10-15 entry)."
   - "2026-10-14 (b): O11 resolved — JD-mode claim formula is revenue-scaled: `claim(id) = floor(owed(id) · (T_actual − F) / W)`; `pending'(id) = claim(id) − paid(id)` (docs/decisions/2026-10-14-o11-claim-formula.md). O14 resolved — default mailbox mode is `epoch_derived` (variant B); no server-side registration exists; caveats on related keys and network linkability recorded (docs/decisions/2026-10-14-mailbox-default-epoch.md). M3 resolved — order-signing key is secp256k1 BIP340 Schnorr, CSPRNG-generated, stored at `/run/secrets/spc/ark-order-key` with 0o600/0o700 perms; pubkey via `[ark] order_pubkey` config; operator-driven rotation (docs/research/output/ark-order-key-spec-recommendation.md)."
@@ -89,7 +90,7 @@ external_pins:
 
 **Threat model (stated, not overclaimed).** SPc hides *which output pays which miner* from **third-party chain observers**. It does **not** hide anything from the pool, which validated the shares ([Payout Attribution Privacy](research/wiki/concepts/payout-attribution-privacy.md)), and it does **not** hide **amounts** — a miner with a stable hashrate share is fingerprintable by `amount_i / T` across blocks regardless of addresses ([Coinbase Amount Linkability](research/wiki/concepts/coinbase-amount-linkability.md)). Forward secrecy is bounded per height: compromise of one `a_send` reveals one block's payee set and nothing else; `a_send` authorises **no funds**.
 
-Out of scope for v0.1: BIP 352 labels; a Lightning/BOLT12 rail for pending credits; finder bonuses; SV1 on the pool itself; mainnet.
+Out of scope for v0.1: BIP 352 labels; a Lightning/BOLT12 rail for pending credits; finder bonuses; Job Declaration over SV1 (SV1 is pool-template only); mainnet.
 
 ## 1. System architecture
 
@@ -113,7 +114,7 @@ Out of scope for v0.1: BIP 352 labels; a Lightning/BOLT12 rail for pending credi
 
 | Binary / crate | Role | Forked from |
 |---|---|---|
-| `spc-pool` | one binary, `--roles front,payout,api,ark` (Blitzpool pattern). `front`: SV2 listeners, template stream, job building, share validation, slice aggregation, block submit. `payout`: slice persistence, confirmation-gated ledger apply, Ark send orders, scrub. `api`: read-only HTTP. `ark`: the pool's bark wallet and Ark float; executes signed send orders and nothing else (§11.3) | `sv2-apps/pool-apps/pool` |
+| `spc-pool` | one binary, `--roles front,payout,api,ark` (Blitzpool pattern). `front`: SV2 listeners **and a native SV1 listener**, template stream, job building, share validation, slice aggregation, block submit. SV1 is pool-template only: its username is parsed with §2.1 and its shares enter the same pipeline (§3.1, §3.4). `payout`: slice persistence, confirmation-gated ledger apply, Ark send orders, scrub. `api`: read-only HTTP. `ark`: the pool's bark wallet and Ark float; executes signed send orders and nothing else (§11.3) | `sv2-apps/pool-apps/pool` (SV2 structure); `stratum-core` for codecs |
 | `spc-jds` (**module of `spc-pool`'s `front` role**, not a separate binary) | Job Declarator Server implementing sv2-spec PR #203 (`0x0003`), publishing `SetPayoutDistribution` per height; JD is always on (decision 2026-10-13, matching the SRI pool's bundled JDS); PR #203 §10's "Pool and JDS are assumed to share state" is satisfied in-process | `sv2-apps` pool (JDS included) |
 | `spc-agent` | the miner side, one binary: SV1/SV2 downstream listener and SV1→SV2 translation (the **translator role**, forked from `sv2-apps/miner-apps/translator`); optional Job Declarator Client with `0x0003` that builds outputs per PR #203 §4 (the **JDC role**, forked per roadmap Phase 4); own-payout verifier (§3.6); scanner and SP-aware Ark keystore (§11.5). `sp_address` config becomes the upstream `user_identity` | `sv2-apps/miner-apps/{translator,jd-client}` |
 | `spc-crypto` | BIP 352 address parsing, `sp_id`, the SPc ECDH, the tier KDF (`t_onchain`, `t_ark`, `t_mb`), carriers, mailbox blinding, zeroising key types — every derivation in DESIGN.md / MAILBOX.md, used by pool and agent alike | new; absorbs the `spc_ark` and `spc_ark_mailbox` prototypes |
@@ -122,6 +123,8 @@ Out of scope for v0.1: BIP 352 labels; a Lightning/BOLT12 rail for pending credi
 | `spc-share-ext` | extension type 32 messages on current `stratum-core` codec; server + sampling verifier | `demand-open-source/share-accounting-ext` |
 
 **Miner-side consolidation (2026-10-12, made canonical 2026-10-13).** SRI ships the translator and JDC as separate binaries; this project ships them as **roles of one binary, `spc-agent`**: one process, one config, one seed. Where this spec says `spc-translator` or `spc-jdc` it means `spc-agent` running in that role.
+
+**Native SV1 (2026-11-02).** The pool itself accepts SV1 connections on a separate listener (`[sv1]`, §6.3). This is a reach decision, not a second protocol implementation in the accounting sense: the SV1 username is parsed by the same §2.1 function and rejected fail-closed, SV1 is always pool-template mode (`delta = 0`, §4.1), and its shares use the same replay set, slice store and distribution builder as SV2. The `spc-agent` translator role remains for miners that want local fan-out, own-payout verification (§3.6) or a single upstream connection for several devices; it is not required to reach the pool.
 
 **Process boundaries that matter.** Only `front` ever holds `a_send`; the `spc-jds` module is part of `front` (decision 2026-10-13), so JD-mode use of the key is an in-process share. Only `payout` writes Postgres. `api` reads Postgres and Redis. Only `ark` holds the `ark` seed (bark wallet and pool output keys), and `ark` sees no attribution data — only signed send orders carrying what the Ark server sees anyway (§11.3). SPc receiver privacy and Ark-tier funds are protected by disjoint secrets on disjoint hosts.
 
@@ -247,6 +250,8 @@ There is **no default payout mode and no donation fallback.** This is the direct
 
 One connection = one `sp_id`. Extended channels on the same connection MUST present the same address (differing addresses on one connection → `invalid-user-identity`), because SRI's payout slot is per connection and group jobs never rebuild the coinbase per channel ([xpub spec rev. 5](research/output/plan-xpub-miner-identity-spec-2026-07-29.md)). Worker labels (`.worker`) are stats-only.
 
+**SV1 channel open (native listener, 2026-11-02).** `mining.subscribe` returns the connection's `extranonce1` (default 4 bytes) and `extranonce2_size` (default 4); `mining.authorize` carries the identity in its username. `front` strips an optional `.worker` suffix at the first `.` and runs §2.1 on the remainder; any failure returns JSON-RPC error `invalid-user-identity`, sends no `mining.notify`, and leaves the connection open for a retry. Every `mining.notify` is pool-template mode: `coinb1`/`coinb2` carry the BIP 34 height push, `push32(ser_x(A_send))` and the extranonce split; the §2.4.1 budget MUST be checked at `mining.subscribe` and a connection whose `extranonce1 + extranonce2` does not fit is rejected before any job. `mining.submit` shares are validated, deduplicated and recorded exactly as §3.4, at the connection's current vardiff target. SV1 clients MUST NOT be offered `0x0003`, `0x0020` or `0x5350`, cannot run §3.6 own-payout verification, and are told the §11.1 forfeiture policy in the `mining.subscribe` response extensions.
+
 Channel open establishes **identity only**. Delivery capabilities (§0) are registered separately, over the authenticated session, by the SPc extension (§11.4). A channel with none is valid, but under the pool's published policy its earnings below `C` are **forfeited** (§11.1); only balances at or above `C` are paid, in the coinbase. The policy is advertised in the `0x5350` negotiation response and at `/api/pool`, and `spc-agent` does not start submitting shares until `SetArkIdentity.Success` (§11.5), so the default setup never forfeits.
 
 ### 3.2 Extension negotiation
@@ -287,6 +292,8 @@ reply SubmitShares.Success (or ShareOk{ref_job_id, share_index} if 0x0020 is act
 ```
 
 `seen_shares` is per process and is lost on restart; `front` MUST reject shares whose `job_id` predates process start (jobs are re-issued on start), which bounds the replay window to zero at the cost of a few lost shares ([share accounting & durability](research/sibling/mining-pool-architecture/wiki/concepts/share-accounting-and-durability.md)).
+
+SV1 shares take this exact path (2026-11-02): the SV1 `mining.submit` is converted to the same `ShareRec` with the connection's `sp_id`, `job_id` derived from `(H << 32) | sv1_job_seq`, `job_fees = ref_fees` (pool-template), and `extranonce = extranonce1 ‖ extranonce2`; the nullifier key is computed over that concatenation. There is no SV1-specific slice, ledger or distribution code path.
 
 ### 3.5 JD mode (PR #203, extension `0x0003`)
 
@@ -635,6 +642,13 @@ source = "ipc"                   # "ipc" (bitcoin-core Cap'n Proto) | "sv2-tp"
 socket_path = "/run/bitcoin/node.sock"
 extranonce_bytes = 16            # scriptSig budget: 100 − 4 − 33 − 16 = 47 B spare (§2.4.1)
 
+[sv1]                              # native SV1 listener (2026-11-02); pool-template only
+enabled = true
+listen = "0.0.0.0:3333"
+extranonce1_bytes = 4            # per connection; extranonce1 + extranonce2 must fit §2.4.1
+extranonce2_bytes = 4            # miner-chosen
+vardiff = true
+
 [accounting]
 window_n = 8
 slice_fee_delta_sats = 0
@@ -699,19 +713,22 @@ silent-pool/                      MIT OR Apache-2.0
   crates/spc-scan                 lib + bin                                       (bitcoin RPC optional)
   crates/spc-accounting           pure; proptest dev-dep                         (no I/O)
   crates/spc-share-ext            binary-sv2 / codec-sv2 message structs + server/verifier
-  crates/spc-ext                  0x5350 delivery-capability messages (§11.4)
+  crates/spc-ext                  0x0003 (PR #203) and 0x5350 delivery-capability messages (§3.5, §11.4)
+  crates/spc-store                Postgres models/migrations, Redis stream codecs, bootstrap RPC (WIRE-FORMATS)
   bins/spc-pool                   fork of sv2-apps pool (JDS included) + roles front/payout/api/ark;
-                                  the spc-jds module (in front) implements PR #203 0x0003 — JD always on
+                                  the spc-jds module (in front) implements PR #203 0x0003 — JD always on;
+                                  the native SV1 listener shares the §3.4 share path
   bins/spc-agent                  translator role (fork of sv2-apps translator) + JDC role (fork per roadmap
                                   Phase 4, 0x0003) + verifier + SP-aware bark keystore (§11.5)
   vendor/channels-sv2             patched: pool_tag: Option<Vec<u8>>
+  testing/regtest-harness         bitcoind + pool + agent + CPU miners
+  flake.nix                       devShell, packages, checks, NixOS modules (only build/CI path)
   docs/spc-spec.md                §2 of this document, standalone, for BIP review
   docs/share-accounting-ext-deltas.md
   UPSTREAM_DEPS.md                pinned commits: stratum-core, sv2-apps, sv2-spec PR #203, share-accounting-ext, bips
-  testing/regtest-harness
 ```
 
-**`UPSTREAM_DEPS.md` pins (added 2026-10-12).** Pin SHAs, never branches. `sv2-spec` PR #203 @ `47dbedd` — its single commit (2026-09-10) and the commit warioishere/stratum#1 and warioishere/sv2-apps#3 implement. `bitcoin_core_sv2` MUST be pinned at a commit containing the shared `block_reserved_weight(size) = max(1168 + 4·size, 2000)` helper in `unix_capnp/mod.rs` (it patches both `v30x` and `v31x` `bootstrap_template_ipc_client_from_coinbase_output_constraints`; warioishere/sv2-apps#2 @ `ec35ac8`, carried as `4e526de` in #3's branch, or its upstream merge) in **both** `spc-pool` (`[template] source = "ipc"`) and `spc-agent`/`spc-jdc` (`[tp]`). Upstream `sv2-apps` `main` (as of 2026-10-12) and tag `v0.8.0` still reserve `max(4·size, 2000)` — none of the 1168 WU of header, tx count, coinbase fixed fields, 100 B scriptSig and witness commitment once `coinbase_output_max_additional_size > 208 B` — and are excluded; a `0x0003` JDC that reserves the exact output size got `bad-blk-weight` on mainnet with 42 outputs and a full mempool. `source = "sv2-tp"` needs no pin (it reserves `1168 + 400 + 4·size`). If `spc-jdc` is forked from warioishere/sv2-apps#3 (roadmap Phase 4), pin `warioishere/sv2-apps @ 90b3e3d` and `warioishere/stratum @ 9be4023` (`extensions_sv2` 0.3.1, MIT OR Apache-2.0); #3's `stratum-apps/Cargo.toml` pins `stratum-core` by branch, so re-pin by SHA. `warioishere/blitzpool-server-rust @ b48998f` (release 2.4.1) is the reference `0x0003` JDS for reading, not porting; the frontmatter pin `7815884` stays as the provenance of the `bp-pplns` patterns §7.6 re-implements.
+**`spc-pool` pins (added 2026-11-02).** The codec baseline is `stratum-core` 0.6.0 (crates.io; `binary_sv2`, `codec_sv2`, `framing_sv2`, `noise_sv2`, `mining_sv2`, `channels_sv2`, `sv1_api`). Project-defined `0x0003` (PR #203 text at `47dbedd`) and `0x5350` message structs live in `spc-ext`, so no fork of `extensions_sv2` is required. The `sv2-spec` and warioishere pins below remain behavioural references; deviations are absorbed in-tree per `docs/decisions/2026-10-14-upstream-own-suite.md`. Pin SHAs, never branches. `sv2-spec` PR #203 @ `47dbedd` — its single commit (2026-09-10) and the commit warioishere/stratum#1 and warioishere/sv2-apps#3 implement. `bitcoin_core_sv2` MUST be pinned at a commit containing the shared `block_reserved_weight(size) = max(1168 + 4·size, 2000)` helper in `unix_capnp/mod.rs` (it patches both `v30x` and `v31x` `bootstrap_template_ipc_client_from_coinbase_output_constraints`; warioishere/sv2-apps#2 @ `ec35ac8`, carried as `4e526de` in #3's branch, or its upstream merge) in **both** `spc-pool` (`[template] source = "ipc"`) and `spc-agent`/`spc-jdc` (`[tp]`). Upstream `sv2-apps` `main` (as of 2026-10-12) and tag `v0.8.0` still reserve `max(4·size, 2000)` — none of the 1168 WU of header, tx count, coinbase fixed fields, 100 B scriptSig and witness commitment once `coinbase_output_max_additional_size > 208 B` — and are excluded; a `0x0003` JDC that reserves the exact output size got `bad-blk-weight` on mainnet with 42 outputs and a full mempool. `source = "sv2-tp"` needs no pin (it reserves `1168 + 400 + 4·size`). If `spc-jdc` is forked from warioishere/sv2-apps#3 (roadmap Phase 4), pin `warioishere/sv2-apps @ 90b3e3d` and `warioishere/stratum @ 9be4023` (`extensions_sv2` 0.3.1, MIT OR Apache-2.0); #3's `stratum-apps/Cargo.toml` pins `stratum-core` by branch, so re-pin by SHA. `warioishere/blitzpool-server-rust @ b48998f` (release 2.4.1) is the reference `0x0003` JDS for reading, not porting; the frontmatter pin `7815884` stays as the provenance of the `bp-pplns` patterns §7.6 re-implements.
 
 ### 7.2 Key types and zeroisation
 
@@ -775,7 +792,7 @@ Grinding `a_send` to collide with a known earlier payment (must be a fixed-point
 
 ## 9. Deployment
 
-**Topology.** One `spc-pool` binary; dev/testnet runs `--roles front,payout,api` in one process, and MAY add `ark` to it on regtest/signet only; production splits `front` (one per region; RAM-only state — no durable state of its own) from a single `payout` (sole Postgres writer), N `api` replicas, and a single `ark` on its own host. Each `front` claims its `front_id` at start with a Redis `SET NX` lease (heartbeat-refreshed, holding an instance UUID) and refuses to start if the lease is held — a duplicate `front_id` would silently collide `distribution_id`s and `slice_id`s (MULTI-REGION §10). The `spc-jds` module is part of `front` — JD is always on, and `a_send` is shared in-process (§2.2). Redis and Postgres are the only durable state of the SPc side, and **no spending key lives on it**: it holds only the xpub of `pool_payout_descriptor`. The pool has exactly one hot seed, the `ark` seed (bark wallet + pool output keychain), held only by the `ark` role on its own host with its own secret store and no access to the attribution data (§11.3). Its blast radius is the float plus whatever pool revenue the operator leaves under it; moving surplus elsewhere is operator policy and out of scope.
+**Topology.** One `spc-pool` binary; dev/testnet runs `--roles front,payout,api` in one process, and MAY add `ark` to it on regtest/signet only; production splits `front` (one per region; RAM-only state — no durable state of its own) from a single `payout` (sole Postgres writer), N `api` replicas, and a single `ark` on its own host. Each `front` listens for SV2 (Noise) and native SV1 (plain TCP, §3.1) on separate ports; both listeners feed the same share and distribution path. Each `front` claims its `front_id` at start with a Redis `SET NX` lease (heartbeat-refreshed, holding an instance UUID) and refuses to start if the lease is held — a duplicate `front_id` would silently collide `distribution_id`s and `slice_id`s (MULTI-REGION §10). The `spc-jds` module is part of `front` — JD is always on, and `a_send` is shared in-process (§2.2). Redis and Postgres are the only durable state of the SPc side, and **no spending key lives on it**: it holds only the xpub of `pool_payout_descriptor`. The pool has exactly one hot seed, the `ark` seed (bark wallet + pool output keychain), held only by the `ark` role on its own host with its own secret store and no access to the attribution data (§11.3). Its blast radius is the float plus whatever pool revenue the operator leaves under it; moving surplus elsewhere is operator policy and out of scope.
 
 **Migrations.** `sqlx migrate` at boot under `pg_advisory_lock`; every process may run them (Blitzpool pattern). Schema changes are additive until v1.0.
 

@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/spc-crypto",
+  "crates/spc-accounting",
+  "crates/spc-scan",
+  "crates/spc-ext",
+  "crates/spc-share-ext",
+  "crates/spc-store",
+  "crates/spc-testutil",
+  "bins/spc-pool",
+  "bins/spc-agent",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.93"
+repository = "https://github.com/average-gary/silent-pool"
+
+[workspace.dependencies]
+spc-crypto = { path = "crates/spc-crypto" }
+spc-accounting = { path = "crates/spc-accounting" }
+spc-scan = { path = "crates/spc-scan" }
+spc-ext = { path = "crates/spc-ext" }
+spc-share-ext = { path = "crates/spc-share-ext" }
+spc-store = { path = "crates/spc-store" }
+spc-testutil = { path = "crates/spc-testutil" }
+
+anyhow = "1"
+bech32 = "0.11"
+bitcoin = { version = "0.32", features = ["rand", "serde"] }
+clap = { version = "4", features = ["derive", "env"] }
+hex = "0.4"
+proptest = "1"
+rand = "0.8"
+secp256k1 = { version = "0.29", features = ["rand", "global-context"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+zeroize = { version = "1", features = ["derive"] }

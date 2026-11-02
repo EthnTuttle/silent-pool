@@ -1,0 +1,17 @@
+[package]
+name = "spc-accounting"
+description = "Pure SLICE/PPLNS-JD accounting, tier routing, trim and distribution building"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+spc-crypto.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+hex.workspace = true
+proptest.workspace = true
+rand.workspace = true
