@@ -2574,6 +2574,7 @@ dependencies = [
  "rand 0.8.8",
  "secp256k1 0.29.1",
  "serde",
+ "sha2",
  "spc-crypto",
  "stratum-core",
  "thiserror",

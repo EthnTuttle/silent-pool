@@ -10,6 +10,8 @@ rust-version.workspace = true
 spc-crypto.workspace = true
 bitcoin.workspace = true
 secp256k1.workspace = true
+sha2.workspace = true
+rand.workspace = true
 serde.workspace = true
 stratum-core = { version = "0.6.0" }
 thiserror.workspace = true
