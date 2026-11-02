@@ -9,7 +9,6 @@ reviews are recorded for risky packets, and the commit is pushed.
 - `ses_e62e807baffeHQ44Si9P5gGkut` — accounting fixes: share difficulty, job fees, slice ref fields (`tff/kimi-k3`).
 - `ses_e62e807b8ffeAMdUHT3LQ2UmQJ` — protocol fixes: SV2 identity, JD coinbase, own-payout verify, carriers (`tff/glm-5.3`).
 - `ses_e62e807b6ffeSH7wErs28rvi6Z` — settlement/Ark fixes: pending status, chain view, forfeiture, Redis dedupe (`tff/kimi-k3`).
-- `ses_e62eb23c0fferiwgs7fbq8NhPu` — OPERATIONS.md + API.md (`tff/glm-5.3`).
 - `ses_e62eb23beffe0je1nbzg2cc235` — bark adapter decision record (`tff/kimi-k3`).
 
 The integrated review returned REQUEST CHANGES (11 blockers); the three fix sessions above own disjoint files. This thread only dispatches, verifies commits and updates this board.
@@ -23,6 +22,7 @@ stock-bark `ark` adapter, and the type-32 network server.
 
 ## Done
 
+- `docs/OPERATIONS.md` and `docs/API.md` (commit `7fcbd64`).
 - Plan, decision records and spec amendments for native SV1, Nix-only builds
   and the `stratum-core` 0.6.0 baseline.
 - `spc-crypto`: identity, BIP 352 address, ECDH, tier tweaks, P/U, mailbox
