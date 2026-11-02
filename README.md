@@ -2,7 +2,7 @@
 
 A Stratum (SV1 and SV2) mining pool that pays miners to **BIP 352 silent-payment addresses**: one-time, unlinkable P2TR outputs **directly in the coinbase** for earnings above a threshold, and **Ark (bark) out-of-round payments** below it. Accounting is **SLICE / PPLNS-JD**, so miners build their own block templates via Job Declaration and are paid for both hashrate and the fees they selected.
 
-**Status: design phase.** No pool code yet; the Ark-tier derivation, mailbox and client are prototyped and validated on regtest (`spc_ark/`, `spc_ark_mailbox/`, `spc_ark_client/`, see `RESULTS.md`). The prototype crates are reference material, not throwaway: their frozen test vectors are normative inputs and they are absorbed into `spc-crypto` / `spc-agent` (see `docs/ARCHITECTURE.md` §2.3). The technical specification and roadmap are in `docs/`; the research behind them lives in a separate knowledge base (see *Provenance*).
+**Status: implementation phase.** The core is running: `spc-crypto`, `spc-scan`, `spc-accounting`, `spc-store`, `spc-ext` and `spc-share-ext` are implemented and tested; `spc-pool` serves native SV1 and SV2, builds the SPc coinbase, assembles and submits blocks, settles through the payout role, and serves the read-only API; `spc-agent` translates SV1 miners to SV2. A real-bitcoind regtest run (`testing/regtest-e2e.sh`) mines two blocks and recovers a miner's coinbase output with `spc-scan`. The Ark role's order verification and the JD distribution validation are in place; the remaining work is the live JDS/JDC loop, the bark wallet adapter, and the type-32 network server. The Ark-tier derivation, mailbox and client prototypes (`spc_ark/`, `spc_ark_mailbox/`, `spc_ark_client/`, see `RESULTS.md`) are still reference material for the wallet side.
 
 ## The two ideas
 
@@ -18,6 +18,25 @@ A Stratum (SV1 and SV2) mining pool that pays miners to **BIP 352 silent-payment
 | `spc-scan` | Reference scanner / wallet helper for SPc outputs |
 
 Miner identity is the silent-payment address, full stop: it is the only thing that keys a miner's account, and both payout tiers are derived from it per block. Separately, a miner MAY register a private **delivery capability** for the Ark tier (`B_ark` plus mailbox blinding data, signed with the scan key) over a small project-defined SV2 extension; it changes where the miner can be paid, never who they are, and is never published.
+
+## Build and run
+
+Nix is the only supported build path:
+
+```sh
+nix develop
+just check                 # fmt + clippy + tests
+nix flake check            # what CI runs
+nix build .#spc-pool .#spc-agent .#spc-scan
+
+# real-regtest end to end (bitcoind + pool front + two SV1 shares)
+./testing/regtest-e2e.sh
+```
+
+`config/spc-pool.example.toml` and `config/spc-agent.example.toml` are validated
+starting points. The pool's `[template] source` is `"rpc"` for the regtest
+harness, `"ipc"`/`"sv2-tp"` for the production TDP paths, and `"mock"` for a
+smoke run.
 
 ## Documents
 

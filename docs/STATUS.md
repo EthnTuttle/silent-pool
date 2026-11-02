@@ -4,63 +4,60 @@ Live build board. `docs/IMPLEMENTATION-PLAN.md` defines the packets and gates.
 A packet is Done only when its tests exist, `nix flake check` passes, both
 reviews are recorded for risky packets, and the commit is pushed.
 
-## Current wave and packet
+## Current state
 
-Wave 5-7: JD publication, agent roles, Ark role and the regtest harness.
+The pool runs end to end on regtest. Native SV1 and SV2 listeners build the
+same SPc coinbase, the front assembles and submits a block, and `spc-scan`
+recovers the miner's output. The remaining work is the live JDS/JDC loop, the
+stock-bark `ark` adapter, and the type-32 network server.
 
 ## Done
 
-- 2026-11-02: implementation plan, decision record for native SV1/Nix/protocol
-  baseline, SPEC/ARCHITECTURE/ROADMAP/README/UPSTREAM_DEPS updates.
-- WP0: workspace, `flake.nix` (devShell, binaries, checks, NixOS modules), CI.
-  Commit `0d2e333`.
-- WP1: `spc-crypto` complete, BIP 352 reference address, frozen vectors,
-  negative controls. Commit `8546cd0`; review fixes `c2d5b89`.
-- WP2: `spc-scan` full-block and light-proof scanning, carriers, tweak export,
-  CLI. Commit `be175c8`.
-- WP3: `spc-accounting` slices, window, SLICE scores, tier routing, trim,
-  autoscaler, distribution, O11 claim; SPEC §4.5 fixture and proptests.
-  Commit `19598e5`.
-- WP4: schema/migrations, binary stream codecs, bootstrap frame, Redis stream
-  helpers, settlement/orphan/Ark-failure paths. Commits `f1ed26d`, `e5bb990`,
-  `25c7b20`.
-- WP5: native SV1 session + TCP listener; native SV2 Noise listener with
-  SetupConnection, extended channel, jobs and shares; pool-template coinbase;
-  block assembly; front state. Commits `9c6d2de`, `b508935`, `5953230`,
-  `fb9c834`, `c3f5efa`.
-- WP6 (partial): read-only API with `b_scan` challenge auth; payout role
-  consuming `spc:slices`/`spc:blocks`/`spc:arkreg` and publishing
-  `spc:front:events`; liability/settlement store. Commits `d3e0247`,
-  `25c7b20`.
-- WP7/WP8/WP9 (codec half): 0x0003 distribution/TLV/formula, 0x5350
-  registration messages and error matrix, Ark order/receipt signing.
-  Commit `b2ff4e2`.
-- WP10 (partial): agent config validation and own-payout verifier.
-  Commit `3cb96ae`.
-- WP11 (partial): identity-free share leaf, merkle proofs, sampling verifier.
-  Commit `4769802`.
-- End-to-end tests: real SV1 socket finds a block; real SV2 Noise session
-  finds a block. Commits `abf7102`, `c3f5efa`.
-- `nix flake check` green after the SV1/SV2 and store additions.
+- Plan, decision records and spec amendments for native SV1, Nix-only builds
+  and the `stratum-core` 0.6.0 baseline.
+- `spc-crypto`: identity, BIP 352 address, ECDH, tier tweaks, P/U, mailbox
+  blinding, carriers, zeroising `SendKey`; frozen vectors and BIP 352
+  reference address.
+- `spc-scan`: full-block and light-proof scanning, both carriers, H/H-1,
+  tweak export, `gen-address`, file and RPC sources.
+- `spc-accounting`: slices, sealing, window, SLICE scores, tier routing,
+  pending, trim, autoscaler, distribution, JD weights, O11 claim. SPEC §4.5
+  fixture and proptests.
+- `spc-store`: SPEC §5.1 schema, migrations, settlement/orphan/Ark-failure
+  paths, binary stream codecs, bootstrap frame, Redis stream helpers, store
+  queries for the API.
+- `spc-pool`: native SV1 session + TCP listener; native SV2 Noise listener
+  (SetupConnection, extended channel, jobs, extended shares); pool-template
+  coinbase; block assembly; front state; payout role; read-only API with
+  `b_scan` auth; JD distribution publication/validation state; Ark order
+  verification; identity-free share blobs and the API audit view.
+- `spc-ext`: 0x0003 distribution/TLV/formula and 0x5350 registration messages,
+  BIP340 signing, Ark order/receipt codecs.
+- `spc-share-ext`: identity-free leaf, merkle proofs, sampling verifier.
+- `spc-agent`: SV2 client, translator role, own-payout verifier, config.
+- End-to-end: mock SV1, mock SV2, SV1 -> translator -> SV2, and a real
+  bitcoind regtest run that submits two blocks and scans the miner output.
+- `nix flake check` green.
 
-Note: the background implementation sessions returned no files; all code above
-was written and verified in the orchestration session plus local runs.
+## Remaining
 
-## In progress
-
-- JDS publication/validation on top of `spc-ext::SetPayoutDistribution`.
-- `spc-agent` translator/JDC roles and miner wallet.
-- `ark` role using the signed order codec.
-- `testing/regtest-e2e.sh` and the real-bitcoind path.
+1. Wire the JD network loop: JDP listener in `front`, `SetPayoutDistribution`
+   publication, `distribution_id` TLV extraction from declarations, and the
+   JDC role in `spc-agent` (state machine and codecs are done).
+2. Replace the mock Ark transport with a stock bark wallet adapter, and emit
+   `spc:ark:orders` from `payout` at `H_f + 6`.
+3. Serve type-32 messages over SV2 from the stored slices and add the seeded
+   cheat-slice test.
+4. Add the Postgres/Redis services and the payout/API roles to the regtest
+   harness (the front path already passes without them).
+5. Run the plan's normative and security reviews over the integrated tree.
 
 ## Blocked
 
-None. Remaining gaps are implementation, not decisions.
+None. The remaining items are implementation.
 
 ## Next dispatch
 
-1. JDS/JDC: wire `SetPayoutDistribution`, `distribution_id` TLV, validation and
-   same-height grace into `front` and `spc-agent`.
-2. Ark role: order verification, float sends, receipts, board shortfall.
-3. Regtest harness: bitcoind + pool + two SV1 miners + one SV2/JDC miner.
-4. Type-32 server endpoints from the slice store and the seeded cheat test.
+One session per item above, disjoint paths, with the existing tests as the
+acceptance gate. Every change ends with `nix flake check` and a why-first
+commit.
