@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Parser, ValueEnum};
 use spc_agent::config::AgentConfig;
 
-#[derive(Clone, Copy, Debug, ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum Role {
     Translator,
     Jdc,
@@ -19,7 +19,8 @@ struct Cli {
     roles: Vec<Role>,
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -35,7 +36,10 @@ fn main() -> anyhow::Result<()> {
         upstream = %config.upstream.address,
         require_own_payout = ?policy,
         roles = ?cli.roles,
-        "spc-agent starting (config validated; roles wired in later packets)"
+        "spc-agent starting"
     );
-    Ok(())
+    if cli.roles.contains(&Role::Translator) {
+        return spc_agent::translator::run(config).await;
+    }
+    anyhow::bail!("this build wires the translator role; use --roles translator")
 }

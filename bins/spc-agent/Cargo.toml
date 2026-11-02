@@ -19,6 +19,7 @@ spc-crypto.workspace = true
 spc-ext.workspace = true
 spc-scan.workspace = true
 spc-share-ext.workspace = true
+spc-pool = { path = "../spc-pool" }
 anyhow.workspace = true
 bitcoin.workspace = true
 clap.workspace = true

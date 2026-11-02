@@ -231,15 +231,17 @@ where
 /// Convert a pool job to the SV1 job shape. The translator uses an empty
 /// extranonce1 and gives the miner the pool's miner-extranonce bytes, so the
 /// pool's own `extranonce_prefix` is never rolled by the miner.
-pub fn to_sv1_job(job: &PoolJob) -> crate::translate::Sv1Job {
-    crate::translate::Sv1Job {
+pub fn to_sv1_job(job: &PoolJob, extranonce_prefix: &[u8]) -> spc_pool::sv1::Job {
+    let mut coinb1 = job.coinbase_prefix.clone();
+    coinb1.extend_from_slice(extranonce_prefix);
+    spc_pool::sv1::Job {
         job_id: format!("{:08x}", job.job_id),
         prev_hash: job.prev_hash,
         height: 0,
         version: job.version,
         nbits: job.nbits,
         ntime: job.ntime,
-        coinb1: job.coinbase_prefix.clone(),
+        coinb1,
         coinb2: job.coinbase_suffix.clone(),
         merkle_branches: job.merkle_path.clone(),
         clean_jobs: true,
@@ -271,4 +273,111 @@ pub fn share_hash(
     h.extend_from_slice(&nbits.to_le_bytes());
     h.extend_from_slice(&nonce.to_le_bytes());
     bitcoin::hashes::sha256d::Hash::hash(&h).to_byte_array()
+}
+
+/// Read-only half of a connected client. Keeps the last `SetNewPrevHash`
+/// fields, because the job message itself does not repeat them.
+pub struct PoolJobReader {
+    read: NoiseTcpReadHalf,
+    pub channel_id: u32,
+    pub extranonce_prefix: Vec<u8>,
+    pub extranonce_size: u16,
+    prev_hash: Option<[u8; 32]>,
+    ntime: Option<u32>,
+    nbits: Option<u32>,
+}
+
+pub struct PoolShareWriter {
+    write: NoiseTcpWriteHalf,
+    channel_id: u32,
+    sequence: u32,
+}
+
+impl Sv2Client {
+    pub fn split(self) -> (PoolJobReader, PoolShareWriter) {
+        let reader = PoolJobReader {
+            read: self.read,
+            channel_id: self.channel_id,
+            extranonce_prefix: self.extranonce_prefix,
+            extranonce_size: self.extranonce_size,
+            prev_hash: None,
+            ntime: None,
+            nbits: None,
+        };
+        let writer = PoolShareWriter {
+            write: self.write,
+            channel_id: self.channel_id,
+            sequence: self.sequence,
+        };
+        (reader, writer)
+    }
+}
+
+impl PoolJobReader {
+    pub async fn next_job(&mut self) -> Result<PoolJob, ClientError> {
+        loop {
+            let mut f = self
+                .read
+                .read_frame()
+                .await
+                .map_err(|e| ClientError::Network(e.to_string()))?;
+            let ty = f.header().msg_type();
+            let mut p = f.payload().to_vec();
+            match ty {
+                MESSAGE_TYPE_MINING_SET_NEW_PREV_HASH => {
+                    let m: SetNewPrevHash = binary_sv2::from_bytes(&mut p)
+                        .map_err(|e| ClientError::Codec(e.to_string()))?;
+                    let mut h = [0u8; 32];
+                    h.copy_from_slice(m.prev_hash.as_bytes());
+                    self.prev_hash = Some(h);
+                    self.ntime = Some(m.min_ntime);
+                    self.nbits = Some(m.nbits);
+                }
+                MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB => {
+                    let m: NewExtendedMiningJob = binary_sv2::from_bytes(&mut p)
+                        .map_err(|e| ClientError::Codec(e.to_string()))?;
+                    let mut merkle_path = Vec::with_capacity(m.merkle_path.len());
+                    for b in m.merkle_path.iter() {
+                        let mut h = [0u8; 32];
+                        h.copy_from_slice(b.as_bytes());
+                        merkle_path.push(h);
+                    }
+                    return Ok(PoolJob {
+                        job_id: m.job_id,
+                        prev_hash: self.prev_hash.ok_or(ClientError::Unexpected(ty))?,
+                        version: m.version,
+                        nbits: self.nbits.ok_or(ClientError::Unexpected(ty))?,
+                        ntime: self.ntime.ok_or(ClientError::Unexpected(ty))?,
+                        coinbase_prefix: m.coinbase_tx_prefix.as_bytes().to_vec(),
+                        coinbase_suffix: m.coinbase_tx_suffix.as_bytes().to_vec(),
+                        merkle_path,
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+impl PoolShareWriter {
+    pub async fn submit(&mut self, share: PoolShare) -> Result<(), ClientError> {
+        let msg = SubmitSharesExtended {
+            channel_id: self.channel_id,
+            sequence_number: self.sequence,
+            job_id: share.job_id,
+            nonce: share.nonce,
+            ntime: share.ntime,
+            version: share.version,
+            extranonce: B032::new(&share.extranonce)
+                .map_err(|e| ClientError::Codec(e.to_string()))?,
+        };
+        self.sequence = self.sequence.wrapping_add(1);
+        write_msg(
+            &mut self.write,
+            msg,
+            MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED,
+            true,
+        )
+        .await
+    }
 }
