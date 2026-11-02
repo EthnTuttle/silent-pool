@@ -57,6 +57,11 @@ enum Command {
         #[arg(long)]
         blocks: PathBuf,
     },
+    /// Generate a fresh scan/spend keypair and its SP address (dev/test).
+    GenAddress {
+        #[arg(long, default_value = "regtest")]
+        network: String,
+    },
     /// Run the embedded vector checks.
     Vectors,
 }
@@ -64,6 +69,30 @@ enum Command {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
+        Command::GenAddress { network } => {
+            let net = match network.as_str() {
+                "mainnet" => spc_crypto::Network::Mainnet,
+                "testnet4" | "testnet" => spc_crypto::Network::Testnet,
+                "signet" => spc_crypto::Network::Signet,
+                _ => spc_crypto::Network::Regtest,
+            };
+            let secp = bitcoin::secp256k1::Secp256k1::new();
+            let scan = bitcoin::secp256k1::SecretKey::new(&mut rand::thread_rng());
+            let spend = bitcoin::secp256k1::SecretKey::new(&mut rand::thread_rng());
+            let b_scan = bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &scan);
+            let b_spend = bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &spend);
+            let address = spc_crypto::address::encode_sp_address(net, &b_scan, &b_spend)?;
+            println!(
+                "{}",
+                serde_json::json!({
+                    "address": address,
+                    "b_scan": spc_scan::hex(&b_scan.serialize()),
+                    "b_spend": spc_scan::hex(&b_spend.serialize()),
+                    "scan_key": spc_scan::hex(&scan.secret_bytes()),
+                    "spend_key": spc_scan::hex(&spend.secret_bytes()),
+                })
+            );
+        }
         Command::Vectors => {
             // The crate's own test suite is the authoritative vector run; this
             // command exists so an operator can smoke-test an installed binary.

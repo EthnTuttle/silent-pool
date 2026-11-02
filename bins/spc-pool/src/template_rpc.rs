@@ -43,7 +43,7 @@ impl TemplateSource for RpcTemplateSource {
             .client
             .get_block_template(
                 bitcoincore_rpc::json::GetBlockTemplateModes::Template,
-                &[],
+                &[bitcoincore_rpc::json::GetBlockTemplateRules::SegWit],
                 &[],
             )
             .map_err(|e| TemplateError::Unavailable(e.to_string()))?;

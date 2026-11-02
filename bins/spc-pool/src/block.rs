@@ -70,10 +70,10 @@ pub fn assemble(
     );
     block.extend_from_slice(&header);
     write_compact_size(&mut block, (transactions.len() + 1) as u64);
-    write_compact_size(&mut block, coinbase.len() as u64);
+    // Bitcoin block serialization is a raw transaction list, not a list of
+    // length-prefixed blobs.
     block.extend_from_slice(coinbase);
     for tx in transactions {
-        write_compact_size(&mut block, tx.len() as u64);
         block.extend_from_slice(tx);
     }
 
@@ -142,7 +142,7 @@ mod tests {
     fn assembles_a_header_and_transaction_count() {
         let coinbase = vec![0xaa; 100];
         let b = assemble(2, [0x11; 32], 1_700_000_000, 0x1d00_ffff, 7, &coinbase, &[]);
-        assert_eq!(b.block.len(), 80 + 1 + 1 + 100);
+        assert_eq!(b.block.len(), 80 + 1 + 100);
         assert_eq!(&b.block[..4], &2u32.to_le_bytes());
         assert_eq!(&b.block[4..36], &[0x11; 32]);
         assert_eq!(&b.block[36..68], &b.merkle_root);
@@ -150,8 +150,7 @@ mod tests {
         assert_eq!(&b.block[72..76], &0x1d00_ffffu32.to_le_bytes());
         assert_eq!(&b.block[76..80], &7u32.to_le_bytes());
         assert_eq!(b.block[80], 1); // one tx
-        assert_eq!(b.block[81], 100); // coinbase length
-        assert_eq!(&b.block[82..], &coinbase);
+        assert_eq!(&b.block[81..], &coinbase);
     }
 
     #[test]
