@@ -6,7 +6,6 @@ reviews are recorded for risky packets, and the commit is pushed.
 
 ## Active sessions
 
-- `ses_e62e807b6ffeSH7wErs28rvi6Z` — settlement/Ark fixes: pending status, chain view, forfeiture, Redis dedupe (`tff/kimi-k3`).
 
 The integrated review returned REQUEST CHANGES (11 blockers); the fix session above owns its files. This thread only dispatches, verifies commits and updates this board.
 
@@ -28,6 +27,9 @@ stock-bark `ark` adapter, and the type-32 network server.
   (commit `76df4f8`).
 - Front accounting fixes: network-difficulty share `d`, template `job_fees`,
   slice `ref_job_id`/`ref_fees`, fee-band tests (commit `3b79e76`).
+- Settlement/Ark fixes: chain-gated booking, null-fingerprint pending,
+  settlement-time forfeiture, Redis-backed Ark dedupe, scrub excludes
+  `failed_to_pending` (commit `af8a818`).
 - Plan, decision records and spec amendments for native SV1, Nix-only builds
   and the `stratum-core` 0.6.0 baseline.
 - `spc-crypto`: identity, BIP 352 address, ECDH, tier tweaks, P/U, mailbox
@@ -60,6 +62,10 @@ stock-bark `ark` adapter, and the type-32 network server.
 - `payout` emits signed, capped `ArkSendOrder`s for Ark-rail entries; the `ark`
   role verifies them.
 - `nix flake check` green.
+
+## Active sessions (continued)
+
+- `ses_e6244a39bffe4tzubdnupgzJ90` — merge-gate fixes: slice-credit FK placeholder, identity upsert, harness confirmation depth.
 
 ## Review
 
