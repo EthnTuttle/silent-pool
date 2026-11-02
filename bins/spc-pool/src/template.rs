@@ -12,7 +12,11 @@ pub struct Template {
     pub version: u32,
     pub bits: u32,
     pub curtime: u32,
-    /// Subsidy plus selected fees, in satoshis.
+    /// Block subsidy, in satoshis.
+    pub subsidy: u64,
+    /// Selected transaction fees, in satoshis.
+    pub fees: u64,
+    /// Subsidy plus selected fees.
     pub coinbase_value: u64,
     /// Non-coinbase transactions in template order.
     pub transactions: Vec<Vec<u8>>,
@@ -82,6 +86,8 @@ mod tests {
             version: 0x2000_0000,
             bits: 0x1d00_ffff,
             curtime: 1_700_000_000,
+            subsidy: 312_500_000,
+            fees: 0,
             coinbase_value: 312_500_000,
             transactions: vec![vec![0xaa; 10]],
             merkle_branches: vec![],

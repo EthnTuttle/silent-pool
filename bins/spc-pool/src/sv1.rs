@@ -51,6 +51,8 @@ pub struct Job {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Share {
     pub sp_id: [u8; 32],
+    pub b_scan: [u8; 33],
+    pub b_spend: [u8; 33],
     pub job_id: String,
     pub nonce: u32,
     pub ntime: u32,
@@ -66,6 +68,8 @@ pub struct Share {
 #[derive(Clone, Debug)]
 struct Authorized {
     sp_id: [u8; 32],
+    b_scan: [u8; 33],
+    b_spend: [u8; 33],
     worker: Option<String>,
 }
 
@@ -213,7 +217,12 @@ impl Session {
                 return Err(Sv1Error::InvalidIdentity);
             }
         } else {
-            self.authorized = Some(Authorized { sp_id, worker });
+            self.authorized = Some(Authorized {
+                sp_id,
+                b_scan: address.b_scan.serialize(),
+                b_spend: address.b_spend.serialize(),
+                worker,
+            });
         }
         Ok(())
     }
@@ -287,6 +296,8 @@ impl Session {
 
         Ok(Share {
             sp_id: auth.sp_id,
+            b_scan: auth.b_scan,
+            b_spend: auth.b_spend,
             job_id: job_id.to_string(),
             nonce,
             ntime,

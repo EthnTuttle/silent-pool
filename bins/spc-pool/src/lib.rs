@@ -6,6 +6,7 @@ pub mod api;
 pub mod block;
 pub mod coinbase;
 pub mod config;
+pub mod front;
 pub mod identity;
 pub mod sv1;
 pub mod sv1_server;
