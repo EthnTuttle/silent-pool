@@ -7,13 +7,19 @@ roles = ["front", "payout", "api"]
 listen = "127.0.0.1:34254"          # SV2 (Noise)
 authority_public_key = "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 pool_payout_descriptor = "tr(tpubD6NzVbkrYhZ4YTest/0/*)"
+# Dev-only: the derived P2TR script for the pool output. Production derives it
+# from the descriptor above.
+pool_payout_script = "51200000000000000000000000000000000000000000000000000000000000000000"
 fee_bps = 100
 front_id = 0
 outbox_max = 4096
 tip_divergence_secs = 30
 
 [template]
-source = "sv2-tp"                   # or "ipc" with a patched bitcoin_core_sv2
+source = "rpc"                      # "ipc" | "sv2-tp" | "rpc" | "mock"
+rpc_url = "http://127.0.0.1:18443"
+rpc_user = "user"
+rpc_pass = "pass"
 extranonce_bytes = 16
 
 [sv1]

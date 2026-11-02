@@ -2588,6 +2588,7 @@ dependencies = [
  "async-trait",
  "axum",
  "bitcoin",
+ "bitcoincore-rpc",
  "clap",
  "hex",
  "http-body-util",

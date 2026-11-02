@@ -73,6 +73,32 @@ pub struct Front {
     last_block: Option<AssembledBlock>,
 }
 
+impl FrontConfig {
+    pub fn from_config(c: &crate::config::Config) -> Result<Self, String> {
+        let network = c.network().map_err(|e| e.to_string())?;
+        let script = match &c.pool.pool_payout_script {
+            Some(h) => hex::decode(h).map_err(|e| format!("pool_payout_script: {e}"))?,
+            None => crate::coinbase::p2tr_script(&[0u8; 32]).to_bytes().to_vec(),
+        };
+        Ok(Self {
+            network,
+            fee_bps: c.pool.fee_bps,
+            window_n: c.accounting.window_n,
+            slice_fee_delta_sats: c.accounting.slice_fee_delta_sats,
+            max_slice_shares: c.accounting.max_slice_shares,
+            dust_limit_sats: c.accounting.dust_limit_sats,
+            coinbase_threshold_sats: c.accounting.coinbase_threshold_sats,
+            max_payout_slots: c.accounting.max_payout_slots,
+            budget_wu: c.budget.floor_wu,
+            overhead_wu: 0,
+            pool_payout_script: script,
+            extranonce_len: c.sv1.extranonce1_bytes + c.sv1.extranonce2_bytes,
+            front_id: c.pool.front_id,
+            keep_slices: c.accounting.retain_windows as usize,
+        })
+    }
+}
+
 impl Front {
     pub fn new(cfg: FrontConfig, source: Arc<dyn TemplateSource>) -> Self {
         Self {

@@ -70,6 +70,10 @@ pub struct Pool {
     pub outbox_max: usize,
     #[serde(default = "default_tip_divergence")]
     pub tip_divergence_secs: u64,
+    /// Dev-only override for the pool P2TR script (hex). Production derives it
+    /// from `pool_payout_descriptor`.
+    #[serde(default)]
+    pub pool_payout_script: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -81,6 +85,12 @@ pub struct Template {
     pub socket_path: PathBuf,
     #[serde(default = "default_extranonce_bytes")]
     pub extranonce_bytes: usize,
+    #[serde(default = "default_rpc_url")]
+    pub rpc_url: String,
+    #[serde(default)]
+    pub rpc_user: String,
+    #[serde(default)]
+    pub rpc_pass: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -235,6 +245,9 @@ fn default_socket() -> PathBuf {
 fn default_extranonce_bytes() -> usize {
     16
 }
+fn default_rpc_url() -> String {
+    "http://127.0.0.1:18443".into()
+}
 fn default_true() -> bool {
     true
 }
@@ -338,6 +351,9 @@ impl Default for Template {
             source: default_template_source(),
             socket_path: default_socket(),
             extranonce_bytes: default_extranonce_bytes(),
+            rpc_url: default_rpc_url(),
+            rpc_user: String::new(),
+            rpc_pass: String::new(),
         }
     }
 }
@@ -520,6 +536,14 @@ impl Config {
             return Err(ConfigError::Grace);
         }
         validate_pool_descriptor(&self.pool.pool_payout_descriptor)?;
+        match self.template.source.as_str() {
+            "ipc" | "sv2-tp" | "rpc" | "mock" => {}
+            other => {
+                return Err(ConfigError::Listen(format!(
+                    "unknown template source '{other}'"
+                )))
+            }
+        }
 
         // The height push is at most 5 bytes and push32 is 33; reserve the
         // worst case at the current height (height 0 uses 1, but the check is

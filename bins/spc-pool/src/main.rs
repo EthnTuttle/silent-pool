@@ -1,7 +1,12 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use clap::Parser;
-use spc_pool::config::Config;
+use spc_pool::config::{Config, Role};
+use spc_pool::front::{Front, FrontConfig};
+use spc_pool::sv1_server::Sv1Server;
+use spc_pool::template::{MockTemplateSource, Template, TemplateSource};
+use tokio::sync::mpsc;
 
 #[derive(Parser)]
 #[command(name = "spc-pool", version = spc_pool::VERSION)]
@@ -14,7 +19,8 @@ struct Cli {
     roles: Vec<String>,
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -29,10 +35,7 @@ fn main() -> anyhow::Result<()> {
     } else {
         cli.roles
             .iter()
-            .map(|r| {
-                spc_pool::config::Role::parse(r)
-                    .ok_or_else(|| anyhow::anyhow!("unknown role '{r}'"))
-            })
+            .map(|r| Role::parse(r).ok_or_else(|| anyhow::anyhow!("unknown role '{r}'")))
             .collect::<anyhow::Result<Vec<_>>>()?
     };
 
@@ -41,7 +44,87 @@ fn main() -> anyhow::Result<()> {
         network = %config.pool.network,
         front_id = config.pool.front_id,
         roles = ?roles,
-        "spc-pool starting (WP5 skeleton: config validated, listeners next)"
+        "spc-pool starting"
     );
+
+    if !roles.contains(&Role::Front) {
+        tracing::warn!("no front role selected; nothing to serve");
+        return Ok(());
+    }
+    if !config.sv1.enabled {
+        anyhow::bail!("this build serves SV1; set [sv1] enabled = true");
+    }
+
+    let (tx, mut rx) = mpsc::channel(4096);
+    let server = Sv1Server::new(
+        config.network().map_err(|e| anyhow::anyhow!(e))?,
+        config.sv1.extranonce1_bytes,
+        config.sv1.extranonce2_bytes,
+        1.0,
+        tx,
+    );
+    let (addr, _handle) = server.bind(&config.sv1.listen).await?;
+    tracing::info!(%addr, "native SV1 listener ready");
+
+    let source: Arc<dyn TemplateSource> = match config.template.source.as_str() {
+        "rpc" => {
+            #[cfg(feature = "rpc")]
+            {
+                Arc::new(spc_pool::template_rpc::RpcTemplateSource::new(
+                    &config.template.rpc_url,
+                    &config.template.rpc_user,
+                    &config.template.rpc_pass,
+                    config.template.extranonce_bytes as u32 * 4,
+                )?)
+            }
+            #[cfg(not(feature = "rpc"))]
+            {
+                anyhow::bail!("this spc-pool was built without the `rpc` feature");
+            }
+        }
+        "mock" => Arc::new(MockTemplateSource::new(demo_template())),
+        other => anyhow::bail!("template source '{other}' is not implemented in this build"),
+    };
+
+    let mut front = Front::new(
+        FrontConfig::from_config(&config).map_err(|e| anyhow::anyhow!(e))?,
+        source.clone(),
+    );
+    let job = front.refresh().await?;
+    server.publish(job).await;
+
+    loop {
+        let Some(share) = rx.recv().await else { break };
+        match front.on_share(share) {
+            Ok(Some(block)) => {
+                tracing::info!(merkle = %block.merkle_root.iter().map(|b| format!("{b:02x}")).collect::<String>(), "share found a block; submitting");
+                if let Err(e) = source.submit_block(&block.block).await {
+                    tracing::error!(error = %e, "block submit failed");
+                }
+                match front.refresh().await {
+                    Ok(job) => server.publish(job).await,
+                    Err(e) => tracing::error!(error = %e, "template refresh failed"),
+                }
+            }
+            Ok(None) => {}
+            Err(e) => tracing::error!(error = %e, "share rejected"),
+        }
+    }
     Ok(())
+}
+
+fn demo_template() -> Template {
+    Template {
+        height: 1,
+        prev_hash: [0u8; 32],
+        version: 0x2000_0000,
+        bits: 0x207f_ffff,
+        curtime: 1_700_000_000,
+        subsidy: 5_000_000_000,
+        fees: 0,
+        coinbase_value: 5_000_000_000,
+        transactions: Vec::new(),
+        merkle_branches: Vec::new(),
+        coinbase_output_max_additional_size: 50_000,
+    }
 }
