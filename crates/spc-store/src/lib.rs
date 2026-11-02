@@ -3,6 +3,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod bootstrap;
 pub mod codec;
 pub mod models;
 pub mod postgres;
