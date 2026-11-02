@@ -6,11 +6,13 @@ reviews are recorded for risky packets, and the commit is pushed.
 
 ## Active sessions
 
-- `ses_e62eb23c2ffe7dadbnVx4zuxun` — integrated normative/security review (`tff/nemotron-3-ultra`), read-only.
-- `ses_e62eb23c0fferiwgs7fbq8NhPu` — OPERATIONS.md + API.md (`tff/glm-5.3`), docs-only.
-- `ses_e62eb23beffe0je1nbzg2cc235` — bark adapter decision record (`tff/kimi-k3`), docs-only.
+- `ses_e62e807baffeHQ44Si9P5gGkut` — accounting fixes: share difficulty, job fees, slice ref fields (`tff/kimi-k3`).
+- `ses_e62e807b8ffeAMdUHT3LQ2UmQJ` — protocol fixes: SV2 identity, JD coinbase, own-payout verify, carriers (`tff/glm-5.3`).
+- `ses_e62e807b6ffeSH7wErs28rvi6Z` — settlement/Ark fixes: pending status, chain view, forfeiture, Redis dedupe (`tff/kimi-k3`).
+- `ses_e62eb23c0fferiwgs7fbq8NhPu` — OPERATIONS.md + API.md (`tff/glm-5.3`).
+- `ses_e62eb23beffe0je1nbzg2cc235` — bark adapter decision record (`tff/kimi-k3`).
 
-This thread only dispatches, verifies commits and updates this board.
+The integrated review returned REQUEST CHANGES (11 blockers); the three fix sessions above own disjoint files. This thread only dispatches, verifies commits and updates this board.
 
 ## Current state
 
@@ -53,6 +55,11 @@ stock-bark `ark` adapter, and the type-32 network server.
 - `payout` emits signed, capped `ArkSendOrder`s for Ark-rail entries; the `ark`
   role verifies them.
 - `nix flake check` green.
+
+## Review
+
+`docs/reviews/2026-11-02-integrated-review.md` — REQUEST CHANGES. The blockers
+are being fixed by the sessions above; re-review follows.
 
 ## Remaining
 
