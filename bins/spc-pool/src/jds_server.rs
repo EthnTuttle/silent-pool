@@ -56,10 +56,11 @@ impl JdsServer {
     pub async fn publish(
         &self,
         height: u32,
+        revenue: u64,
         distribution: SetPayoutDistribution,
     ) -> Result<u64, String> {
         let mut jds = self.jds.lock().await;
-        let id = jds.publish(height, distribution);
+        let id = jds.publish(height, revenue, distribution);
         let current = jds.current().cloned().ok_or("no current distribution")?;
         drop(jds);
         let payload = current.encode().map_err(|e| e.to_string())?;
@@ -163,11 +164,14 @@ impl JdsServerRef {
                             let msg: DeclareMiningJob = binary_sv2::from_bytes(&mut payload)
                                 .map_err(|e| format!("declare: {e}"))?;
                             if let Some(id) = find_tlv(msg.excess_data.as_bytes()) {
-                                if self.jds.lock().await.accepts_id(id) {
-                                    *self.accepted.lock().await = Some(id);
+                                let height = *self.height.lock().await;
+                                if let Ok(outputs) = parse_coinbase_outputs(msg.coinbase_tx_suffix.as_bytes()) {
+                                    let res = self.jds.lock().await.validate_declared(id, height, &outputs);
+                                    if res.is_ok() {
+                                        *self.accepted.lock().await = Some(id);
+                                    }
                                 }
                             }
-                            let _ = self.height.lock().await;
                         }
                         (_, MESSAGE_TYPE_SET_CUSTOM_MINING_JOB) => {
                             if let Some(id) = find_tlv(&payload) {
@@ -189,6 +193,46 @@ impl JdsServerRef {
             }
         }
         Ok(())
+    }
+}
+
+fn parse_coinbase_outputs(suffix: &[u8]) -> Result<Vec<spc_ext::TxOut>, String> {
+    // suffix: sequence (4) || output count || outputs || locktime
+    let mut off = 4usize;
+    let count = read_compact(suffix, &mut off).ok_or("output count")?;
+    let mut out = Vec::with_capacity(count.min(4096));
+    for _ in 0..count {
+        let value_bytes = suffix.get(off..off + 8).ok_or("value")?;
+        let value = u64::from_le_bytes(value_bytes.try_into().map_err(|_| "value")?);
+        off += 8;
+        let n = read_compact(suffix, &mut off).ok_or("script len")?;
+        let script = suffix.get(off..off + n).ok_or("script")?.to_vec();
+        off += n;
+        out.push(spc_ext::TxOut { script, value });
+    }
+    Ok(out)
+}
+
+fn read_compact(buf: &[u8], off: &mut usize) -> Option<usize> {
+    let first = *buf.get(*off)?;
+    *off += 1;
+    match first {
+        0..=0xfc => Some(first as usize),
+        0xfd => {
+            let b = buf.get(*off..*off + 2)?;
+            *off += 2;
+            Some(u16::from_le_bytes([b[0], b[1]]) as usize)
+        }
+        0xfe => {
+            let b = buf.get(*off..*off + 4)?;
+            *off += 4;
+            Some(u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
+        }
+        0xff => {
+            let b = buf.get(*off..*off + 8)?;
+            *off += 8;
+            usize::try_from(u64::from_le_bytes(b.try_into().ok()?)).ok()
+        }
     }
 }
 

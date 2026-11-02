@@ -18,7 +18,7 @@ async fn jdc_receives_the_published_distribution() {
         dust_limits: vec![330],
         additional_outputs: vec![],
     };
-    let id = server.publish(800_000, dist.clone()).await.unwrap();
+    let id = server.publish(800_000, 1_000, dist.clone()).await.unwrap();
     let jdc = spc_agent::jdc::Jdc::connect(addr).await.unwrap();
     let got = jdc.last().unwrap();
     assert_eq!(got.distribution_id, id);
@@ -30,17 +30,8 @@ async fn jdc_receives_the_published_distribution() {
 async fn jds_accepts_a_declaration_with_the_current_id() {
     let server = JdsServer::new(0);
     let (addr, _h) = server.bind("127.0.0.1:0").await.unwrap();
-    let dist = SetPayoutDistribution {
-        distribution_id: 0,
-        pool_payout: TxOut {
-            script: vec![0x51, 0x20, 1, 1],
-            value: 100,
-        },
-        payouts: vec![],
-        dust_limits: vec![],
-        additional_outputs: vec![],
-    };
-    let id = server.publish(1, dist).await.unwrap();
+    let dist = dist_for_build();
+    let id = server.publish(1, 1_000, dist).await.unwrap();
     let mut jdc = spc_agent::jdc::Jdc::connect(addr).await.unwrap();
     let token = jdc.allocate_token("dev").await.unwrap();
     let (prefix, suffix) =

@@ -177,8 +177,10 @@ async fn main() -> anyhow::Result<()> {
     );
     let job = front.refresh().await?;
     publish_events(&streams, front.take_events()).await;
-    if let Some(dist) = front.distribution() {
-        let _ = jds.publish(dist.height, jd_distribution(dist)).await;
+    if let (Some(dist), Some(revenue)) = (front.distribution(), front.template_revenue()) {
+        let _ = jds
+            .publish(dist.height, revenue, jd_distribution(dist))
+            .await;
     }
     server.publish(job.clone()).await;
     sv2.publish(job).await;
@@ -195,8 +197,12 @@ async fn main() -> anyhow::Result<()> {
                 match front.refresh().await {
                     Ok(job) => {
                         publish_events(&streams, front.take_events()).await;
-                        if let Some(dist) = front.distribution() {
-                            let _ = jds.publish(dist.height, jd_distribution(dist)).await;
+                        if let (Some(dist), Some(revenue)) =
+                            (front.distribution(), front.template_revenue())
+                        {
+                            let _ = jds
+                                .publish(dist.height, revenue, jd_distribution(dist))
+                                .await;
                         }
                         server.publish(job.clone()).await;
                         sv2.publish(job).await;

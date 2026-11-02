@@ -148,6 +148,10 @@ impl Front {
         self.last_block.as_ref()
     }
 
+    pub fn template_revenue(&self) -> Option<u64> {
+        self.template.as_ref().map(|t| t.coinbase_value)
+    }
+
     pub fn pending(&self) -> &BTreeMap<SpId, u64> {
         &self.pending
     }

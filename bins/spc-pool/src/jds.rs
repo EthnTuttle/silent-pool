@@ -21,6 +21,7 @@ pub enum JdError {
 struct Published {
     id: u64,
     height: u32,
+    revenue: u64,
     distribution: SetPayoutDistribution,
 }
 
@@ -55,16 +56,47 @@ impl Jds {
     }
 
     /// Publish a distribution for `height`; returns its id.
-    pub fn publish(&mut self, height: u32, mut distribution: SetPayoutDistribution) -> u64 {
+    pub fn publish(
+        &mut self,
+        height: u32,
+        revenue: u64,
+        mut distribution: SetPayoutDistribution,
+    ) -> u64 {
         let id = self.next_id();
         distribution.distribution_id = id;
         self.previous = self.current.take();
         self.current = Some(Published {
             id,
             height,
+            revenue,
             distribution,
         });
         id
+    }
+
+    /// Recompute and compare a declaration using the revenue recorded when the
+    /// distribution was published (the pool and JDS share state, PR #203 §10).
+    pub fn validate_declared(
+        &self,
+        id: u64,
+        height: u32,
+        declared: &[spc_ext::TxOut],
+    ) -> Result<(), JdError> {
+        let Some(p) = self.current.as_ref() else {
+            return Err(JdError::Empty);
+        };
+        let revenue = if p.id == id && p.height == height {
+            p.revenue
+        } else if let Some(prev) = &self.previous {
+            if prev.id == id && prev.height == height && p.height == height {
+                prev.revenue
+            } else {
+                return Err(JdError::Stale);
+            }
+        } else {
+            return Err(JdError::Stale);
+        };
+        self.validate(id, height, revenue, declared)
     }
 
     pub fn current(&self) -> Option<&SetPayoutDistribution> {
@@ -203,17 +235,17 @@ mod tests {
     fn validates_current_and_previous_same_height() {
         let mut jds = Jds::new(2);
         let d = dist();
-        let id1 = jds.publish(800_000, d.clone());
+        let id1 = jds.publish(800_000, 1_000, d.clone());
         assert_eq!(id1 >> 56, 2);
         let out = declared(&d);
         jds.validate(id1, 800_000, 1_000, &out).unwrap();
 
-        let id2 = jds.publish(800_000, d.clone());
+        let id2 = jds.publish(800_000, 1_000, d.clone());
         jds.validate(id2, 800_000, 1_000, &declared(&d)).unwrap();
         // Previous id, same height: accepted.
         jds.validate(id1, 800_000, 1_000, &out).unwrap();
         // Previous id after a height change: stale.
-        jds.publish(800_001, d.clone());
+        jds.publish(800_001, 1_000, d.clone());
         assert_eq!(jds.validate(id2, 800_001, 1_000, &out), Err(JdError::Stale));
     }
 
@@ -221,7 +253,7 @@ mod tests {
     fn rejects_mutated_amounts_and_order() {
         let mut jds = Jds::new(0);
         let d = dist();
-        let id = jds.publish(1, d.clone());
+        let id = jds.publish(1, 1_000, d.clone());
         let mut out = declared(&d);
         out[0].value += 1;
         assert_eq!(jds.validate(id, 1, 1_000, &out), Err(JdError::Invalid));
@@ -242,8 +274,8 @@ mod tests {
     fn id_is_strictly_increasing_per_front() {
         let mut jds = Jds::new(1);
         jds.set_clock(100);
-        let a = jds.publish(1, dist());
-        let b = jds.publish(1, dist());
+        let a = jds.publish(1, 1_000, dist());
+        let b = jds.publish(1, 1_000, dist());
         assert!(b > a);
         assert_eq!(a >> 56, 1);
     }
