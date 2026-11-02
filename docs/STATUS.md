@@ -80,6 +80,11 @@ Final fixes: `7a35b30` binds Ark orders to the configured `ark_id` and makes the
 
 Final merge gate (2026-11-02): workspace tests, clippy `-D warnings`, `nix flake check`, front-only regtest and full-stack Postgres/Redis/`front,payout,api` regtest all green.
 
+Final review: **APPROVE** at commit `b2a03c4`. The only residual is a
+non-blocking note that `spc-accounting::route_tiers` still routes
+`registered && !dest_known` to `pending`; `payout`'s settlement re-decision is
+authoritative and overrides it per SPEC §11.1.
+
 ## Review
 
 `docs/reviews/2026-11-02-integrated-review.md` — REQUEST CHANGES. The blockers
