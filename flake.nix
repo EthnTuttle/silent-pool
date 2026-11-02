@@ -71,6 +71,18 @@
               runHook postCheck
             '';
           });
+
+          test-ark = pkgs.rustPlatform.buildRustPackage (common // {
+            pname = "spc-ark-feature-tests";
+            version = "0.1.0";
+            doCheck = true;
+            checkPhase = ''
+              runHook preCheck
+              cargo test -p spc-crypto --features ark --offline
+              cargo test -p spc-pool --features ark --offline
+              runHook postCheck
+            '';
+          });
         };
 
         devShells.default = pkgs.mkShell ({

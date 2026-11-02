@@ -1,0 +1,77 @@
+# Example `spc-pool` configuration (SPEC §6.3). Regtest/dev defaults.
+# Start with: spc-pool --config config/spc-pool.example.toml
+
+[pool]
+network = "regtest"                 # mainnet is refused by v0.1
+roles = ["front", "payout", "api"]
+listen = "127.0.0.1:34254"          # SV2 (Noise)
+authority_public_key = "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+pool_payout_descriptor = "tr(tpubD6NzVbkrYhZ4YTest/0/*)"
+fee_bps = 100
+front_id = 0
+outbox_max = 4096
+tip_divergence_secs = 30
+
+[template]
+source = "sv2-tp"                   # or "ipc" with a patched bitcoin_core_sv2
+extranonce_bytes = 16
+
+[sv1]
+enabled = true
+listen = "127.0.0.1:3333"
+extranonce1_bytes = 4
+extranonce2_bytes = 4
+vardiff = true
+
+[accounting]
+window_n = 8
+slice_fee_delta_sats = 0
+max_slice_shares = 65000
+dust_limit_sats = 330
+coinbase_threshold_sats = 330
+max_payout_slots = 256
+retain_windows = 16
+scrub_after_blocks = 100
+confirmation_depth = 6
+
+[budget]
+floor_wu = 50000
+ceiling_wu = 400000
+up_threshold = 0.85
+down_threshold = 0.50
+step_factor = 1.15
+up_debounce = 3
+down_debounce = 20
+cooldown_secs = 300
+
+[jd]
+distribution_interval_secs = 60
+distribution_rebalance_bps = 100
+grace_same_height_only = true
+
+[extensions]
+share_accounting = true
+window_hot_blocks = 6
+
+[storage]
+postgres = "postgres://spc:spc@127.0.0.1:5432/spc"
+redis = "redis://127.0.0.1:6379"
+front_cursor_heartbeat_secs = 30
+front_cursor_ttl_secs = 120
+
+[api]
+listen = "127.0.0.1:8080"
+
+# [ark]
+# enabled = true
+# server = "https://ark.example.tech"      # MUST NOT be a server the pool runs
+# ark_id = "00000000"
+# float_target_sats = 1000000
+# max_order_sats = 330
+# order_pubkey = "<64 hex chars>"
+# order_key_path = "/run/secrets/spc/ark-order-key"
+# seed_path = "/run/secrets/ark/seed"
+# pool_output_account = "m/86'/1'/1'"
+# min_remaining_blocks = 3024
+# retry_blocks = 6
+# server_is_self = false

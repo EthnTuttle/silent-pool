@@ -1,0 +1,23 @@
+# Example `spc-agent` configuration (SPEC §6.3, §11.10).
+
+[upstream]
+address = "127.0.0.1:34254"
+authority_public_key = "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+sp_address = "tsp1q..."              # must parse at startup or the agent refuses
+require_own_payout = "warn"          # "warn" | "refuse"
+request_share_accounting = true
+
+[downstream]
+listen = "127.0.0.1:34255"
+
+# [jd]
+# enabled = true
+# tp_address = "127.0.0.1:48333"
+
+# [ark]
+# enabled = true
+# mailbox_mode = "epoch_derived"
+# epoch_fallback = "static"
+# signer = "local"
+# refresh_on_receive_above_sats = 0
+# offboard_on_exit = ""
