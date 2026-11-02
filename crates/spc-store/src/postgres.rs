@@ -487,6 +487,30 @@ impl Store {
         }))
     }
 
+    pub async fn block_height(&self, block_hash: &[u8; 32]) -> Result<Option<u32>> {
+        let row = sqlx::query("SELECT height FROM block_found WHERE block_hash = $1")
+            .bind(&block_hash[..])
+            .fetch_optional(&self.pool)
+            .await?;
+        row.map(|r| {
+            let h: i32 = r.try_get("height")?;
+            height_u32(h)
+        })
+        .transpose()
+    }
+
+    pub async fn slices_for_height(&self, height: u32) -> Result<Vec<SliceRow>> {
+        let rows = sqlx::query(
+            "SELECT slice_id, height, prev_hash, ref_job_id, ref_fees, n_shares,
+                    difficulty::text AS difficulty, root, shares
+             FROM slice WHERE height = $1 ORDER BY slice_id",
+        )
+        .bind(height_i32(height)?)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(slice_from_row).collect()
+    }
+
     pub async fn recent_blocks(
         &self,
         limit: i64,

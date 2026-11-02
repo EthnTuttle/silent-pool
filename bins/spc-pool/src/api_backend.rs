@@ -88,9 +88,25 @@ impl ApiBackend for StoreBackend {
         }))
     }
 
-    async fn audit(&self, _sp_id: &[u8; 32], _block_hash: &str) -> Option<Value> {
-        // The type-32 window service is wired in WP11; returning None here
-        // keeps the endpoint honest instead of fabricating a window.
-        None
+    async fn audit(&self, _sp_id: &[u8; 32], block_hash: &str) -> Option<Value> {
+        let bytes = (0..block_hash.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&block_hash[i..i + 2], 16).ok())
+            .collect::<Option<Vec<u8>>>()?;
+        let hash: [u8; 32] = bytes.try_into().ok()?;
+        let height = self.store.block_height(&hash).await.ok()??;
+        let slices = self.store.slices_for_height(height).await.ok()?;
+        Some(json!({
+            "height": height,
+            "slices": slices.into_iter().map(|s| {
+                let shares: Value = serde_json::from_slice(&s.shares).unwrap_or(Value::Null);
+                json!({
+                    "slice_id": s.slice_id,
+                    "difficulty": s.difficulty,
+                    "root": hex(&s.root),
+                    "shares": shares,
+                })
+            }).collect::<Vec<_>>(),
+        }))
     }
 }

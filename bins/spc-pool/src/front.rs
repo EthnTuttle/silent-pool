@@ -394,7 +394,21 @@ impl Front {
                     n_shares: open.shares.len() as u32,
                     difficulty: open.difficulty,
                     root: open.root,
-                    shares_blob: serde_json::to_vec(&open.shares).unwrap_or_default(),
+                    shares_blob: serde_json::to_vec(
+                        &open
+                            .shares
+                            .iter()
+                            .map(|s| spc_share_ext::ShareLeaf {
+                                nonce: s.nonce,
+                                ntime: s.ntime,
+                                version: s.version,
+                                extranonce: s.extranonce.clone(),
+                                job_id: s.job_id,
+                                share_index: s.share_index,
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                    .unwrap_or_default(),
                     credits,
                 }));
                 self.slices.insert(0, open.agg());
