@@ -130,9 +130,7 @@ U32     expiry_height         // 0 if failed
 
 The signing key is the order-signing key of SPEC §11.3 (secp256k1, BIP340; `order_pubkey` is the 32-byte x-only key). No `sp_id`, `B_scan`, `B_spend`, `P_i` or block hash appears in either message (SPEC §11.3, schema-tested in §11.9).
 
-### 3.5 Bootstrap RPC (front → payout)
-
-Transport: length-prefixed (`U32 LE`) JSON over TCP to the `payout` role's internal listener, TLS with per-front credentials (the same trust level as the front's Redis ACL, MULTI-REGION §6). It returns attribution data, so it MUST NOT be exposed beyond the fronts. A front is not ready (no channel opens) until the RPC completes.
+### 3.5 Bootstrap RPC (front → payout)Transport: length-prefixed (`U32 LE`) JSON over TCP to the `payout` role's internal listener, TLS with per-front credentials (the same trust level as the front's Redis ACL, MULTI-REGION §6). It returns attribution data, so it MUST NOT be exposed beyond the fronts. A front is not ready (no channel opens) until the RPC completes.
 
 **Request**
 ```json
@@ -156,6 +154,38 @@ Transport: length-prefixed (`U32 LE`) JSON over TCP to the `payout` role's inter
 ```
 
 The response is a consistent snapshot as of `rev`; the front then subscribes from `resume_cursors`, so there is no gap between the read and the live tail. A front whose cursor has fallen behind the trim horizon (SPEC §5.2) repeats this call.
+
+### 3.6 `spc:slices` entry (front → payout)
+
+Added 2026-11-02 to make the sealed-slice stream byte-exact. One `XADD` per
+sealed slice, one field `d`:
+
+```
+U64    slice_id
+U32    height
+U256   prev_hash
+U64    ref_job_id
+U64    ref_fees
+U32    n_shares
+U128   difficulty                  // LE, 16 bytes; stored as NUMERIC(40,0)
+B032   root                        // identity-free merkle root
+B4     shares_blob                 // U32 length + the compact share blob (SPEC §4.2)
+SEQ0_64K[ Credit ] credits         // per-identity aggregates; the scrub target
+```
+
+`Credit`:
+
+```
+B032   sp_id
+U128   diff_sum                    // Σ d
+U128   diff_fee_sum                // Σ d·f
+```
+
+`U128` and `B4` are project extensions to the type vocabulary in §1: `U128` is
+little-endian 16 bytes, `B4` is a `U32` little-endian length followed by that
+many bytes. The share blob's internal layout belongs to `spc-accounting`; only
+the front and payout read it.
+
 
 ## 4. Where this file is linked from
 
