@@ -8,6 +8,7 @@ pub mod coinbase;
 pub mod config;
 pub mod front;
 pub mod identity;
+pub mod jds;
 pub mod payout;
 pub mod sv1;
 pub mod sv1_server;
