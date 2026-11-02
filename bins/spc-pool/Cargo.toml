@@ -23,6 +23,10 @@ spc-scan.workspace = true
 spc-share-ext.workspace = true
 spc-store.workspace = true
 anyhow.workspace = true
+# Ark order verification parses `ark_address` with ark-lib (SPEC §11.3
+# step 4); the crate is `ark`, the package `ark-lib` (same version as
+# spc-crypto's optional `ark` feature).
+ark-lib = "0.7.1"
 async-trait = "0.1"
 bitcoincore-rpc = { version = "0.19", optional = true }
 axum = "0.8"

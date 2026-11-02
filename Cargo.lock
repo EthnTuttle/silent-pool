@@ -3005,6 +3005,7 @@ name = "spc-pool"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ark-lib",
  "async-trait",
  "axum",
  "bitcoin",

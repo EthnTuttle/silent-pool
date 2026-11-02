@@ -162,7 +162,15 @@ async fn main() -> anyhow::Result<()> {
         let (addr, _handle) = server.bind(&config.sv1.listen).await?;
         tracing::info!(%addr, "native SV1 listener ready");
     }
-    let sv2 = Sv2Server::new(network, tx, type32.clone());
+    // The front builds the coinbase for `extranonce1 + extranonce2` bytes;
+    // every SV2 channel must offer exactly that total (SPEC §2.4.1,
+    // review 2.1).
+    let sv2 = Sv2Server::new(
+        network,
+        tx,
+        type32.clone(),
+        config.sv1.extranonce1_bytes + config.sv1.extranonce2_bytes,
+    );
     let (sv2_addr, _sv2_handle) = sv2.bind(&config.pool.listen).await?;
     tracing::info!(%sv2_addr, "native SV2 listener ready");
 

@@ -68,6 +68,7 @@ async fn sv1_miner_reaches_the_pool_through_the_translator() {
         std::sync::Arc::new(std::sync::Mutex::new(
             spc_pool::type32::Type32Store::default(),
         )),
+        8,
     );
     let (pool_addr, _ph) = server.bind("127.0.0.1:0").await.unwrap();
     server.publish(job).await;

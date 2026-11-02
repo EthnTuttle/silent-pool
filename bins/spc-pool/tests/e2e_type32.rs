@@ -30,7 +30,9 @@ async fn audit_client_verifies_sampled_shares() {
 
     let type32 = Arc::new(Mutex::new(store));
     let (tx, _rx) = mpsc::channel(8);
-    let server = Sv2Server::new(Network::Regtest, tx, type32);
+    // The audit client opens no channels; the extranonce invariant (8, the
+    // front's layout) only gates `OpenExtendedMiningChannel`.
+    let server = Sv2Server::new(Network::Regtest, tx, type32, 8);
     let (addr, _h) = server.bind("127.0.0.1:0").await.unwrap();
     let report = spc_scan::audit::run(addr, [9; 32], 1, 4).await.unwrap().0;
     assert_eq!(report.slices, 1);

@@ -42,6 +42,11 @@ pub struct Sv2Server {
     jobs: broadcast::Sender<Job>,
     shares: mpsc::Sender<Share>,
     type32: Arc<std::sync::Mutex<Type32Store>>,
+    /// Total extranonce length the coinbase is built for (SPEC §2.4.1):
+    /// SV1 `extranonce1 + extranonce2`, here `extranonce_prefix` +
+    /// miner-chosen `extranonce_size`. Every channel must offer exactly
+    /// this total (review 2.1).
+    expected_extranonce_len: usize,
 }
 
 struct Channel {
@@ -55,6 +60,7 @@ impl Sv2Server {
         network: spc_crypto::Network,
         shares: mpsc::Sender<Share>,
         type32: Arc<std::sync::Mutex<Type32Store>>,
+        expected_extranonce_len: usize,
     ) -> Self {
         let secp = secp256k1_legacy::Secp256k1::new();
         let mut rng = rand::thread_rng();
@@ -70,6 +76,7 @@ impl Sv2Server {
             jobs,
             shares,
             type32,
+            expected_extranonce_len,
         }
     }
 
@@ -159,9 +166,26 @@ impl Sv2Server {
                                 write_msg(&mut write, err, MESSAGE_TYPE_OPEN_MINING_CHANNEL_ERROR, false).await?;
                                 continue;
                             }
+                            let miner_extranonce_size: u16 = 4;
                             let mut prefix = vec![0u8; 4];
                             use rand::RngCore;
                             rand::rngs::OsRng.fill_bytes(&mut prefix);
+                            // SPEC §2.4.1 invariant, made explicit (review
+                            // 2.1): every ingress rolls the same total
+                            // extranonce length — SV1 4+4, here prefix +
+                            // miner-chosen — because the front builds the
+                            // coinbase scriptSig for exactly that total. A
+                            // channel that cannot offer it must not open.
+                            if prefix.len() + usize::from(miner_extranonce_size)
+                                != self.expected_extranonce_len
+                            {
+                                let err = open_channel_error(
+                                    msg.request_id,
+                                    "min-extranonce-size-too-large",
+                                );
+                                write_msg(&mut write, err, MESSAGE_TYPE_OPEN_MINING_CHANNEL_ERROR, false).await?;
+                                continue;
+                            }
                             let ch = Channel {
                                 channel_id: 1,
                                 identity,
@@ -173,7 +197,7 @@ impl Sv2Server {
                                 request_id: msg.request_id,
                                 channel_id: ch.channel_id,
                                 target,
-                                extranonce_size: 4,
+                                extranonce_size: miner_extranonce_size,
                                 extranonce_prefix: B032::new(&prefix).map_err(|e| format!("prefix: {e}"))?,
                                 group_channel_id: 0,
                             };

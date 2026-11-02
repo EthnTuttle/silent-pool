@@ -17,8 +17,9 @@ use stratum_core::common_messages_sv2::{
 };
 use stratum_core::framing_sv2::framing::MessageFrame;
 use stratum_core::mining_sv2::{
-    OpenExtendedMiningChannel, SubmitSharesExtended, MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB,
-    MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL, MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED,
+    OpenExtendedMiningChannel, OpenMiningChannelError, SubmitSharesExtended,
+    MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB, MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+    MESSAGE_TYPE_OPEN_MINING_CHANNEL_ERROR, MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED,
 };
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -82,12 +83,16 @@ async fn sv2_miner_finds_a_block() {
     let job = front.refresh().await.unwrap();
 
     let (tx, mut rx) = mpsc::channel(8);
+    // Review 2.1: the listener must offer exactly the extranonce total the
+    // front's coinbase template is built for (`config().extranonce_len`).
+    let expected_extranonce_len = config().extranonce_len;
     let server = Sv2Server::new(
         Network::Regtest,
         tx,
         std::sync::Arc::new(std::sync::Mutex::new(
             spc_pool::type32::Type32Store::default(),
         )),
+        expected_extranonce_len,
     );
     let (addr, _h) = server.bind("127.0.0.1:0").await.unwrap();
     server.publish(job.clone()).await;
@@ -245,7 +250,82 @@ async fn sv2_miner_finds_a_block() {
         .await
         .unwrap()
         .unwrap();
+    // Review 2.1: the pool must reconstruct exactly the coinbase the miner
+    // rolled: coinbase_prefix ‖ extranonce_prefix ‖ miner extranonce ‖
+    // coinbase_suffix — no silent length drift between ingress and template.
+    let mut expected_extranonce = extranonce_prefix.clone();
+    expected_extranonce.extend_from_slice(&extranonce);
+    assert_eq!(share.extranonce, expected_extranonce);
+    assert_eq!(share.coinbase, coinbase);
     let block = front.on_share(share).unwrap().expect("block");
     source.submit_block(&block.block).await.unwrap();
     assert_eq!(source.submitted().len(), 1);
+}
+
+/// Review 2.1: a listener whose configured extranonce total does not match
+/// the 4+4 layout it offers MUST refuse the channel open — otherwise the
+/// coinbase `coinb1 ‖ extranonce ‖ coinb2` reassembly silently mis-splits.
+#[tokio::test]
+async fn extranonce_layout_mismatch_opens_no_channel() {
+    let (tx, _rx) = mpsc::channel(8);
+    let server = Sv2Server::new(
+        Network::Regtest,
+        tx,
+        std::sync::Arc::new(std::sync::Mutex::new(
+            spc_pool::type32::Type32Store::default(),
+        )),
+        16,
+    );
+    let (addr, _h) = server.bind("127.0.0.1:0").await.unwrap();
+
+    let stream = TcpStream::connect(addr).await.unwrap();
+    let stream = connect_with_noise(stream, None).await.unwrap();
+    let (mut read, mut write) = stream.into_split();
+
+    let setup = SetupConnection {
+        protocol: Protocol::MiningProtocol,
+        min_version: 2,
+        max_version: 2,
+        flags: 0,
+        endpoint_host: Str0255::try_from("127.0.0.1").unwrap(),
+        endpoint_port: 0,
+        vendor: Str0255::try_from("test").unwrap(),
+        hardware_version: Str0255::try_from("1").unwrap(),
+        firmware: Str0255::try_from("1").unwrap(),
+        device_id: Str0255::try_from("1").unwrap(),
+    };
+    write_msg(&mut write, setup, MESSAGE_TYPE_SETUP_CONNECTION, false).await;
+    let _ = read.read_frame().await.unwrap();
+
+    let secp = bitcoin::secp256k1::Secp256k1::new();
+    let scan_sk = bitcoin::secp256k1::SecretKey::from_slice(&[0x11; 32]).unwrap();
+    let spend_sk = bitcoin::secp256k1::SecretKey::from_slice(&[0x12; 32]).unwrap();
+    let scan = bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &scan_sk);
+    let spend = bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &spend_sk);
+    let address = spc_crypto::address::encode_sp_address(Network::Regtest, &scan, &spend).unwrap();
+
+    let max_target_bytes = [0xffu8; 32];
+    let open = OpenExtendedMiningChannel {
+        request_id: 1,
+        user_identity: Str0255::try_from(address.as_str()).unwrap(),
+        nominal_hash_rate: 1.0,
+        max_target: U256::from(&max_target_bytes),
+        min_extranonce_size: 4,
+    };
+    write_msg(
+        &mut write,
+        open,
+        MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+        false,
+    )
+    .await;
+
+    let mut f = read.read_frame().await.unwrap();
+    assert_eq!(
+        f.header().msg_type(),
+        MESSAGE_TYPE_OPEN_MINING_CHANNEL_ERROR
+    );
+    let mut payload = f.payload().to_vec();
+    let err: OpenMiningChannelError = binary_sv2::from_bytes(&mut payload).unwrap();
+    assert_eq!(err.error_code.as_bytes(), b"min-extranonce-size-too-large");
 }

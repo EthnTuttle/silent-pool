@@ -65,6 +65,7 @@ async fn agent_client_gets_a_job_and_submits_a_block() {
         std::sync::Arc::new(std::sync::Mutex::new(
             spc_pool::type32::Type32Store::default(),
         )),
+        8,
     );
     let (addr, _h) = server.bind("127.0.0.1:0").await.unwrap();
     server.publish(job).await;

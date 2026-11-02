@@ -1,6 +1,8 @@
 //! `ark` role: verify signed, capped send orders and execute them from the
 //! pool's float. The role deliberately sees no identity data (SPEC §11.3).
 
+use std::str::FromStr;
+
 use secp256k1::XOnlyPublicKey;
 use spc_ext::{ArkSendOrder, ArkSendReceipt, ReceiptStatus};
 use spc_store::redis::{RedisError, Streams};
@@ -20,6 +22,8 @@ pub enum ArkError {
     DailyCap,
     #[error("bad address")]
     Address,
+    #[error("address commits to a different ark server")]
+    WrongServer,
     #[error("transport: {0}")]
     Transport(String),
     #[error("redis: {0}")]
@@ -34,15 +38,31 @@ pub enum Action {
 
 pub struct OrderVerifier {
     pub order_pubkey: XOnlyPublicKey,
+    /// The configured Ark server the pool pays through (SPEC §6.3 `[ark]
+    /// ark_id`): the first 4 bytes of SHA256(server pubkey).
+    pub ark_id: [u8; 4],
     pub max_order_sats: u64,
     pub max_daily_sats: u64,
     pub daily_sats: u64,
 }
 
+/// Parse the configured `ark_id` (`[ark] ark_id`, SPEC §6.3: 8 hex chars).
+/// Fail closed: wrong length or non-hex input is rejected.
+pub fn parse_ark_id(s: &str) -> Result<[u8; 4], ArkError> {
+    let id = ark::address::ArkId::from_str(s).map_err(|_| ArkError::Address)?;
+    Ok(<[u8; 4]>::from(id))
+}
+
 impl OrderVerifier {
-    pub fn new(order_pubkey: XOnlyPublicKey, max_order_sats: u64, max_daily_sats: u64) -> Self {
+    pub fn new(
+        order_pubkey: XOnlyPublicKey,
+        ark_id: [u8; 4],
+        max_order_sats: u64,
+        max_daily_sats: u64,
+    ) -> Self {
         Self {
             order_pubkey,
+            ark_id,
             max_order_sats,
             max_daily_sats,
             daily_sats: 0,
@@ -58,8 +78,16 @@ impl OrderVerifier {
         if order.sats == 0 || (self.max_order_sats > 0 && order.sats > self.max_order_sats) {
             return Err(ArkError::TooLarge);
         }
+        // Cheap prefix prefilter; the parsed comparison below is
+        // authoritative (SPEC §11.3 step 4: the `ark_id` parsed from
+        // `ark_address` MUST equal the configured `ark_id`). Any parse
+        // failure fails closed.
         if !(order.ark_address.starts_with("ark1") || order.ark_address.starts_with("tark1")) {
             return Err(ArkError::Address);
+        }
+        let address = ark::Address::from_str(&order.ark_address).map_err(|_| ArkError::Address)?;
+        if <[u8; 4]>::from(address.ark_id()) != self.ark_id {
+            return Err(ArkError::WrongServer);
         }
         order
             .verify(&self.order_pubkey)
@@ -258,6 +286,8 @@ impl<T: ArkTransport> ArkService<T, SeenOrders> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ark::address::ArkId;
+    use bitcoin::secp256k1::{PublicKey, Secp256k1 as BitcoinSecp, SecretKey as BitcoinSecretKey};
     use secp256k1::{Keypair, Secp256k1, SecretKey};
     use std::collections::HashSet;
     use std::sync::Arc;
@@ -267,10 +297,33 @@ mod tests {
         Keypair::from_secret_key(&secp, &SecretKey::from_slice(&[seed; 32]).unwrap())
     }
 
-    fn order(kp: &Keypair, sats: u64, due: u32) -> ArkSendOrder {
+    /// A real payable `tark1` address on a throwaway server key (ark-lib
+    /// rejects incomplete builders), so the parse in `check` succeeds.
+    /// Returns the string form and that server's `ark_id`.
+    fn ark_address(server_seed: u8) -> (String, [u8; 4]) {
+        let secp = BitcoinSecp::new();
+        let sk = |seed: u8| BitcoinSecretKey::from_slice(&[seed; 32]).unwrap();
+        let pk = |sk: &BitcoinSecretKey| PublicKey::from_secret_key(&secp, sk);
+        let server_pk = pk(&sk(server_seed));
+        let user_pk = pk(&sk(server_seed.wrapping_add(1)));
+        let blinded_id = ark::mailbox::BlindedMailboxIdentifier::from_pubkey(pk(&sk(
+            server_seed.wrapping_add(2)
+        )));
+        let address = ark::Address::builder()
+            .testnet(true)
+            .server_pubkey(server_pk)
+            .pubkey_policy(user_pk)
+            .delivery(ark::address::VtxoDelivery::ServerMailbox { blinded_id })
+            .into_address()
+            .unwrap();
+        let ark_id = <[u8; 4]>::from(ArkId::from_server_pubkey(server_pk));
+        (address.to_string(), ark_id)
+    }
+
+    fn order(kp: &Keypair, ark_address: &str, sats: u64, due: u32) -> ArkSendOrder {
         let mut o = ArkSendOrder {
             order_id: [7; 16],
-            ark_address: "ark1qqqq".into(),
+            ark_address: ark_address.into(),
             sats,
             not_before_height: due,
             sig: [0; 64],
@@ -279,30 +332,35 @@ mod tests {
         o
     }
 
+    fn verifier(kp: &Keypair, ark_id: [u8; 4], max_order: u64, max_daily: u64) -> OrderVerifier {
+        OrderVerifier::new(kp.x_only_public_key().0, ark_id, max_order, max_daily)
+    }
+
     #[test]
     fn verifies_caps_signature_and_due_height() {
         let kp = key(3);
-        let mut v = OrderVerifier::new(kp.x_only_public_key().0, 330, 0);
-        let o = order(&kp, 330, 800_006);
+        let (addr, ark_id) = ark_address(9);
+        let mut v = verifier(&kp, ark_id, 330, 0);
+        let o = order(&kp, &addr, 330, 800_006);
         assert_eq!(v.check(&o, 800_005).unwrap(), Action::Hold);
         assert_eq!(v.check(&o, 800_006).unwrap(), Action::Send);
         // `check` is pure; duplicate detection lives in `OrderDedupe`.
         assert_eq!(v.check(&o, 800_007).unwrap(), Action::Send);
         v.account(o.sats);
 
-        let big = order(&kp, 331, 800_006);
+        let big = order(&kp, &addr, 331, 800_006);
         assert!(matches!(v.check(&big, 800_006), Err(ArkError::TooLarge)));
 
-        let mut bad = order(&kp, 300, 800_006);
+        let mut bad = order(&kp, &addr, 300, 800_006);
         bad.sats = 301;
         assert!(matches!(v.check(&bad, 800_006), Err(ArkError::Signature)));
 
-        let zero = order(&kp, 0, 800_006);
+        let zero = order(&kp, &addr, 0, 800_006);
         assert!(matches!(v.check(&zero, 800_006), Err(ArkError::TooLarge)));
 
         // Daily cap counts accounted sends only.
-        let mut capped = OrderVerifier::new(kp.x_only_public_key().0, 0, 500);
-        let one = order(&kp, 400, 0);
+        let mut capped = verifier(&kp, ark_id, 0, 500);
+        let one = order(&kp, &addr, 400, 0);
         assert_eq!(capped.check(&one, 0).unwrap(), Action::Send);
         capped.account(one.sats);
         assert!(matches!(capped.check(&one, 0), Err(ArkError::DailyCap)));
@@ -312,11 +370,62 @@ mod tests {
     fn wrong_pubkey_is_rejected() {
         let kp = key(3);
         let other = key(4);
-        let v = OrderVerifier::new(other.x_only_public_key().0, 330, 0);
+        let (addr, ark_id) = ark_address(9);
+        let v = verifier(&other, ark_id, 330, 0);
         assert!(matches!(
-            v.check(&order(&kp, 10, 0), 0),
+            v.check(&order(&kp, &addr, 10, 0), 0),
             Err(ArkError::Signature)
         ));
+    }
+
+    /// SPEC §11.3 step (4): an order addressed to the configured server
+    /// passes; the same order addressed to a foreign `ark_id` is rejected
+    /// before anything is sent.
+    #[test]
+    fn wrong_ark_server_is_rejected() {
+        let kp = key(3);
+        let (ours_addr, ours_id) = ark_address(9);
+        let (foreign_addr, _) = ark_address(10);
+        let v = verifier(&kp, ours_id, 330, 0);
+
+        let ours = order(&kp, &ours_addr, 100, 0);
+        assert_eq!(v.check(&ours, 0).unwrap(), Action::Send);
+
+        let foreign = order(&kp, &foreign_addr, 100, 0);
+        assert!(matches!(v.check(&foreign, 0), Err(ArkError::WrongServer)));
+    }
+
+    /// Fail closed: an address that does not parse is never executed,
+    /// whether the prefix prefilter catches it or the parser does.
+    #[test]
+    fn malformed_address_is_rejected() {
+        let kp = key(3);
+        let (_, ours_id) = ark_address(9);
+        let v = verifier(&kp, ours_id, 330, 0);
+        // Prefix-valid but not bech32m-decodable.
+        let o = order(&kp, "ark1qqqq", 100, 0);
+        assert!(matches!(v.check(&o, 0), Err(ArkError::Address)));
+        // Prefilter: not an ark address at all.
+        let o = order(&kp, "bc1qxyz", 100, 0);
+        assert!(matches!(v.check(&o, 0), Err(ArkError::Address)));
+    }
+
+    #[test]
+    fn parse_ark_id_fails_closed() {
+        // The config string round-trips the real `ArkId` (SPEC §6.3).
+        let (_, ark_id) = ark_address(9);
+        let as_hex = ArkId::from(ark_id).to_string();
+        assert_eq!(parse_ark_id(&as_hex).unwrap(), ark_id);
+        assert!(parse_ark_id(
+            &ark_id
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        )
+        .is_ok());
+        assert!(parse_ark_id("").is_err());
+        assert!(parse_ark_id("0001").is_err());
+        assert!(parse_ark_id("zz0011zz").is_err());
     }
 
     /// Stand-in for the Redis-backed set: state outlives the service, which
@@ -343,11 +452,12 @@ mod tests {
     #[tokio::test]
     async fn duplicate_orders_are_rejected_across_restarts() {
         let kp = key(3);
-        let o = order(&kp, 100, 10);
+        let (addr, ark_id) = ark_address(9);
+        let o = order(&kp, &addr, 100, 10);
         let registry = SharedSet::default();
 
         // First boot: the order verifies, is marked seen, and is sent.
-        let mut v = OrderVerifier::new(kp.x_only_public_key().0, 330, 0);
+        let mut v = verifier(&kp, ark_id, 330, 0);
         let sent = decide_send(&mut v, &registry, &OkTransport, &o, 10)
             .await
             .unwrap()
@@ -357,7 +467,7 @@ mod tests {
 
         // "Restart": fresh verifier, same dedupe registry. The replay is a
         // duplicate and nothing is sent, and the daily cap is untouched.
-        let mut v = OrderVerifier::new(kp.x_only_public_key().0, 330, 500);
+        let mut v = verifier(&kp, ark_id, 330, 500);
         assert!(matches!(
             decide_send(&mut v, &registry, &OkTransport, &o, 11).await,
             Err(ArkError::Duplicate)
@@ -365,7 +475,7 @@ mod tests {
         assert_eq!(v.daily_sats, 0);
 
         // A genuinely new order on the same registry still passes.
-        let mut fresh = order(&kp, 120, 10);
+        let mut fresh = order(&kp, &addr, 120, 10);
         fresh.order_id = [8; 16];
         fresh.sign(&kp).unwrap();
         assert!(decide_send(&mut v, &registry, &OkTransport, &fresh, 11)
@@ -378,9 +488,10 @@ mod tests {
     #[tokio::test]
     async fn held_orders_are_not_marked() {
         let kp = key(3);
-        let o = order(&kp, 100, 800_006);
+        let (addr, ark_id) = ark_address(9);
+        let o = order(&kp, &addr, 100, 800_006);
         let registry = SharedSet::default();
-        let mut v = OrderVerifier::new(kp.x_only_public_key().0, 330, 0);
+        let mut v = verifier(&kp, ark_id, 330, 0);
         assert!(decide_send(&mut v, &registry, &OkTransport, &o, 800_005)
             .await
             .unwrap()
