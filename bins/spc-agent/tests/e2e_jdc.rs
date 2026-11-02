@@ -34,8 +34,24 @@ async fn jds_accepts_a_declaration_with_the_current_id() {
     let id = server.publish(1, 1_000, dist).await.unwrap();
     let mut jdc = spc_agent::jdc::Jdc::connect(addr).await.unwrap();
     let token = jdc.allocate_token("dev").await.unwrap();
-    let (prefix, suffix) =
-        spc_agent::jdc::Jdc::build_coinbase(&dist_for_build(), 1_000, 1, &[7u8; 32], 8).unwrap();
+    let secp = bitcoin::secp256k1::Secp256k1::new();
+    let b_scan = bitcoin::secp256k1::SecretKey::from_slice(&[0x11; 32]).unwrap();
+    let b_spend = bitcoin::secp256k1::SecretKey::from_slice(&[0x12; 32]).unwrap();
+    let own_keys = spc_agent::jdc::OwnKeys::new(
+        b_scan,
+        bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &b_spend),
+    );
+    let send = spc_crypto::SendKey::generate(1).unwrap();
+    let (prefix, suffix) = spc_agent::jdc::Jdc::build_coinbase(
+        &dist_for_build(),
+        1_000,
+        1,
+        send.x_only(),
+        8,
+        &own_keys,
+        spc_agent::verify::Policy::Warn,
+    )
+    .unwrap();
     jdc.declare_job(&token, id, &prefix, &suffix).await.unwrap();
 
     for _ in 0..50 {

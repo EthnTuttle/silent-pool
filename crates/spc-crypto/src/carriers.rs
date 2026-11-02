@@ -193,10 +193,16 @@ pub struct TxOut<'a> {
 /// Scans `vouts` for the first output whose script matches:
 /// `OP_RETURN OP_PUSHBYTES_35 0x53 0x50 0x63 <32 bytes>`.
 ///
+/// Outputs with a non-zero value are ignored (SPEC §2.4.2: "Output value
+/// MUST be 0"); a script-shaped-but-valued output is not an SPc carrier.
+///
 /// Returns `Some(a_x)` on the first match; `None` if no matching output exists.
 /// Rejects wrong lengths or wrong magic silently (not an error).
 pub fn parse_op_return(vouts: &[TxOut<'_>]) -> Option<[u8; 32]> {
     for out in vouts {
+        if out.value != 0 {
+            continue;
+        }
         let s = out.script_pubkey;
         if s.len() != 37 {
             continue;
@@ -383,6 +389,30 @@ mod tests {
             script_pubkey: &s,
         }];
         assert_eq!(parse_op_return(&vouts), None);
+    }
+
+    #[test]
+    fn op_return_nonzero_value_is_ignored() {
+        let a_x = [0x42u8; 32];
+        let script = emit_op_return(&a_x);
+        // A matching script carrying a non-zero value is not a carrier.
+        let vouts = vec![TxOut {
+            value: 1_000,
+            script_pubkey: script.as_bytes(),
+        }];
+        assert_eq!(parse_op_return(&vouts), None);
+        // A later zero-valued carrier is still found.
+        let vouts = vec![
+            TxOut {
+                value: 1_000,
+                script_pubkey: script.as_bytes(),
+            },
+            TxOut {
+                value: 0,
+                script_pubkey: script.as_bytes(),
+            },
+        ];
+        assert_eq!(parse_op_return(&vouts), Some(a_x));
     }
 
     #[test]

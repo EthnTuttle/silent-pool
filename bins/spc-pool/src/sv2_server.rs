@@ -138,14 +138,27 @@ impl Sv2Server {
                             let identity = match parse_identity(&raw, self.network()) {
                                 Ok(id) => id,
                                 Err(_) => {
-                                    let err = OpenMiningChannelError {
-                                        request_id: msg.request_id,
-                                        error_code: Str0255::try_from("invalid-user-identity").unwrap(),
-                                    };
+                                    let err = open_channel_error(
+                                        msg.request_id,
+                                        "invalid-user-identity",
+                                    );
                                     write_msg(&mut write, err, MESSAGE_TYPE_OPEN_MINING_CHANNEL_ERROR, false).await?;
                                     continue;
                                 }
                             };
+                            // One connection is one identity (SPEC §3.1): the
+                            // first accepted open fixes the connection's
+                            // `sp_id`; a later open presenting a different
+                            // address is rejected without creating a channel.
+                            let conn_sp_id = channel.as_ref().map(|c| c.identity.sp_id);
+                            if identity_conflicts(conn_sp_id, identity.sp_id) {
+                                let err = open_channel_error(
+                                    msg.request_id,
+                                    "invalid-user-identity",
+                                );
+                                write_msg(&mut write, err, MESSAGE_TYPE_OPEN_MINING_CHANNEL_ERROR, false).await?;
+                                continue;
+                            }
                             let mut prefix = vec![0u8; 4];
                             use rand::RngCore;
                             rand::rngs::OsRng.fill_bytes(&mut prefix);
@@ -386,6 +399,23 @@ fn parse_job_id(s: &str) -> u32 {
     u32::from_str_radix(s, 16).unwrap_or(0)
 }
 
+/// Build an `OpenMiningChannelError` with a static error code.
+fn open_channel_error(request_id: u32, code: &str) -> OpenMiningChannelError<'_> {
+    OpenMiningChannelError {
+        request_id,
+        error_code: Str0255::try_from(code).expect("static error code fits Str0255"),
+    }
+}
+
+/// SPEC §3.1: extended channels on one connection must present the same
+/// address. `conn` is the connection's first accepted `sp_id` (if any); a
+/// candidate that differs from it conflicts and must be answered with
+/// `invalid-user-identity` without creating a channel. A `.worker` suffix
+/// does not change `sp_id`, so re-opening with a new worker name is allowed.
+fn identity_conflicts(conn: Option<[u8; 32]>, candidate: [u8; 32]) -> bool {
+    conn.is_some_and(|existing| existing != candidate)
+}
+
 /// Target helper for tests.
 pub fn target_from_bits(bits: u32) -> Target {
     Target::from_compact(CompactTarget::from_consensus(bits))
@@ -393,4 +423,65 @@ pub fn target_from_bits(bits: u32) -> Target {
 
 pub fn hash_meets_target(hash: [u8; 32], bits: u32) -> bool {
     target_from_bits(bits).is_met_by(BlockHash::from_byte_array(hash))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::identity::parse_identity;
+    use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
+
+    fn addr(seed: u8) -> String {
+        let secp = Secp256k1::new();
+        let scan = SecretKey::from_slice(&[seed; 32]).unwrap();
+        let spend = SecretKey::from_slice(&[seed.wrapping_add(1); 32]).unwrap();
+        spc_crypto::address::encode_sp_address(
+            spc_crypto::Network::Testnet,
+            &PublicKey::from_secret_key(&secp, &scan),
+            &PublicKey::from_secret_key(&secp, &spend),
+        )
+        .unwrap()
+    }
+
+    fn sp_id(raw: &str) -> [u8; 32] {
+        parse_identity(raw, spc_crypto::Network::Testnet)
+            .unwrap()
+            .sp_id
+    }
+
+    #[test]
+    fn first_open_never_conflicts() {
+        let a = sp_id(&addr(3));
+        assert!(!identity_conflicts(None, a));
+    }
+
+    #[test]
+    fn same_identity_does_not_conflict() {
+        let a = sp_id(&addr(3));
+        assert!(!identity_conflicts(Some(a), a));
+    }
+
+    #[test]
+    fn different_identity_conflicts() {
+        let a = sp_id(&addr(3));
+        let b = sp_id(&addr(4));
+        assert!(identity_conflicts(Some(a), b));
+        assert!(identity_conflicts(Some(b), a));
+    }
+
+    #[test]
+    fn worker_suffix_keeps_the_connection_identity() {
+        let base = addr(3);
+        let plain = sp_id(&base);
+        let suffixed = sp_id(&format!("{base}.rig.1"));
+        assert_eq!(plain, suffixed);
+        assert!(!identity_conflicts(Some(plain), suffixed));
+    }
+
+    #[test]
+    fn channel_error_code_is_invalid_user_identity() {
+        let err = open_channel_error(7, "invalid-user-identity");
+        assert_eq!(err.request_id, 7);
+        assert_eq!(err.error_code.as_bytes(), b"invalid-user-identity");
+    }
 }

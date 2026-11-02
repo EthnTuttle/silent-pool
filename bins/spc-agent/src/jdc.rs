@@ -3,6 +3,7 @@
 
 use std::net::SocketAddr;
 
+use bitcoin::secp256k1::{PublicKey, SecretKey};
 use spc_ext::{DistributionIdTlv, SetPayoutDistribution};
 use stratum_apps::network_helpers::connect_with_noise;
 use stratum_apps::network_helpers::noise_stream::{NoiseTcpReadHalf, NoiseTcpWriteHalf};
@@ -19,7 +20,23 @@ use stratum_core::job_declaration_sv2::{
 use thiserror::Error;
 use tokio::net::TcpStream;
 
+use crate::verify::{self, Policy};
+
 const EXT_PAYOUTS: u16 = 0x0003;
+
+/// Miner-side key material for own-payout verification (SPEC §3.6): the
+/// BIP 352 scan secret key and spend public key.
+#[derive(Clone, Debug)]
+pub struct OwnKeys {
+    pub b_scan: SecretKey,
+    pub b_spend: PublicKey,
+}
+
+impl OwnKeys {
+    pub fn new(b_scan: SecretKey, b_spend: PublicKey) -> Self {
+        Self { b_scan, b_spend }
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum JdcError {
@@ -29,6 +46,12 @@ pub enum JdcError {
     Codec(String),
     #[error("no distribution")]
     Empty,
+    #[error("own payout derivation failed")]
+    OwnDerivation,
+    #[error("own payout absent from the coinbase outputs")]
+    OwnAbsent,
+    #[error("coinbase build: {0}")]
+    Coinbase(String),
 }
 
 pub struct Jdc {
@@ -118,13 +141,19 @@ impl Jdc {
     }
 
     /// Build the coinbase the JDC will declare. `a_send_x` and the height come
-    /// from the template; the carrier is the JD-mode `OP_RETURN`.
+    /// from the template; the carrier is the JD-mode `OP_RETURN` output (the
+    /// scriptSig carries only the BIP34 height push and the extranonce, SPEC
+    /// §2.4.2). Before building, the miner's own `P` is derived for
+    /// `(height, A_send)` and checked against the outputs (SPEC §3.6):
+    /// `Policy::Refuse` fails the build when the payout is absent.
     pub fn build_coinbase(
         distribution: &SetPayoutDistribution,
         template_revenue: u64,
         height: u32,
         a_send_x: &[u8; 32],
         extranonce_len: usize,
+        own_keys: &OwnKeys,
+        policy: Policy,
     ) -> Result<(Vec<u8>, Vec<u8>), JdcError> {
         let fixed = distribution
             .fixed_value()
@@ -158,15 +187,37 @@ impl Jdc {
             ));
         }
         outputs.push((spc_crypto::emit_op_return(a_send_x), 0));
-        let template = spc_pool::coinbase::build_pool_template(
-            2,
-            height,
-            a_send_x,
-            extranonce_len,
-            &outputs,
-            0,
-        );
+
+        Self::verify_own_payout(height, a_send_x, &outputs, own_keys, policy)?;
+
+        let template =
+            spc_pool::coinbase::build_jd_template(2, height, extranonce_len, &outputs, 0)
+                .map_err(|e| JdcError::Coinbase(e.to_string()))?;
         Ok((template.prefix, template.suffix))
+    }
+
+    /// Derive the miner's own `P` for `(height, A_send)` and check that it
+    /// appears among `outputs` (SPEC §3.6). `Policy::Refuse` fails when the
+    /// payout is absent; `Policy::Warn` allows a missing payout (a small
+    /// miner is legitimately below the threshold or trimmed).
+    pub fn verify_own_payout(
+        height: u32,
+        a_send_x: &[u8; 32],
+        outputs: &[(bitcoin::script::ScriptBuf, u64)],
+        own_keys: &OwnKeys,
+        policy: Policy,
+    ) -> Result<(), JdcError> {
+        let own = verify::derive_own(height, a_send_x, &own_keys.b_scan, &own_keys.b_spend)
+            .map_err(|_| JdcError::OwnDerivation)?;
+        let views: Vec<verify::OutputView<'_>> = outputs
+            .iter()
+            .map(|(script, value)| verify::OutputView {
+                script_pubkey: script.as_bytes(),
+                value: *value,
+            })
+            .collect();
+        let found = verify::find_own(&views, &own).is_some();
+        verify::check_policy(policy, found).map_err(|_| JdcError::OwnAbsent)
     }
 
     /// Declare a job with the current distribution id. The caller supplies the
@@ -226,5 +277,102 @@ impl Jdc {
     /// can send the TLV without reconnecting.
     pub fn write_half(&mut self) -> &mut NoiseTcpWriteHalf {
         &mut self.write
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bitcoin::secp256k1::Secp256k1;
+    use spc_ext::TxOut;
+
+    fn keys() -> OwnKeys {
+        let secp = Secp256k1::new();
+        let b_scan = SecretKey::from_slice(&[0x11; 32]).unwrap();
+        let b_spend = SecretKey::from_slice(&[0x12; 32]).unwrap();
+        OwnKeys::new(b_scan, PublicKey::from_secret_key(&secp, &b_spend))
+    }
+
+    fn dist_with_payout(script: Vec<u8>) -> SetPayoutDistribution {
+        SetPayoutDistribution {
+            distribution_id: 0,
+            pool_payout: TxOut {
+                script: vec![0x51, 0x20, 1, 1],
+                value: 100,
+            },
+            payouts: vec![TxOut { script, value: 300 }],
+            dust_limits: vec![0],
+            additional_outputs: vec![],
+        }
+    }
+
+    #[test]
+    fn missing_own_payout_under_refuse_fails() {
+        let own_keys = keys();
+        let send = spc_crypto::SendKey::generate(800_000).unwrap();
+        // The only miner output is not our P.
+        let dist = dist_with_payout_script();
+        let err = Jdc::build_coinbase(
+            &dist,
+            1_000,
+            800_000,
+            send.x_only(),
+            8,
+            &own_keys,
+            Policy::Refuse,
+        )
+        .unwrap_err();
+        assert!(matches!(err, JdcError::OwnAbsent));
+    }
+
+    #[test]
+    fn missing_own_payout_under_warn_succeeds() {
+        let own_keys = keys();
+        let send = spc_crypto::SendKey::generate(800_000).unwrap();
+        let dist = dist_with_payout_script();
+        let (prefix, suffix) = Jdc::build_coinbase(
+            &dist,
+            1_000,
+            800_000,
+            send.x_only(),
+            8,
+            &own_keys,
+            Policy::Warn,
+        )
+        .unwrap();
+        // JD coinbase: the scriptSig is the height push + extranonce only.
+        assert_eq!(prefix[41], 12); // 4-byte height push + 8-byte extranonce
+        assert_eq!(&prefix[42..], &[0x03, 0x00, 0x35, 0x0c]);
+        // A_send rides in the OP_RETURN output, never in the scriptSig.
+        let a_x = send.x_only();
+        assert!(!prefix.windows(32).any(|w| w == a_x));
+        assert!(suffix
+            .windows(37)
+            .any(|w| w == spc_crypto::emit_op_return(a_x).as_bytes()));
+    }
+
+    #[test]
+    fn present_own_payout_under_refuse_succeeds() {
+        let own_keys = keys();
+        let send = spc_crypto::SendKey::generate(800_000).unwrap();
+        let own = verify::derive_own(800_000, send.x_only(), &own_keys.b_scan, &own_keys.b_spend)
+            .unwrap();
+        let mut script = vec![0x51, 0x20];
+        script.extend_from_slice(&own.p_x);
+        let dist = dist_with_payout(script);
+        assert!(Jdc::build_coinbase(
+            &dist,
+            1_000,
+            800_000,
+            send.x_only(),
+            8,
+            &own_keys,
+            Policy::Refuse,
+        )
+        .is_ok());
+    }
+
+    fn dist_with_payout_script() -> SetPayoutDistribution {
+        dist_with_payout(vec![0x51, 0x20, 2, 2])
     }
 }

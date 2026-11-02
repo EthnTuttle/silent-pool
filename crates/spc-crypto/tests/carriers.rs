@@ -127,17 +127,16 @@ fn op_return_wrong_length_rejected() {
 }
 
 #[test]
-fn op_return_nonzero_value_still_parses() {
-    // The parser doesn't enforce value = 0 (that's the builder's job); it just
-    // looks for the script pattern.
+fn op_return_nonzero_value_rejected() {
+    // SPEC §2.4.2: the carrier output's value MUST be 0. A script-shaped
+    // output carrying value is not an SPc carrier.
     let a_x = [0x99u8; 32];
     let script = emit_op_return(&a_x);
     let vouts = vec![TxOut {
         value: 1_000,
         script_pubkey: script.as_bytes(),
     }];
-    let parsed = parse_op_return(&vouts).unwrap();
-    assert_eq!(parsed, a_x);
+    assert_eq!(parse_op_return(&vouts), None);
 }
 
 // ---------------------------------------------------------------------------
