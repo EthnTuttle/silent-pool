@@ -2,6 +2,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod api;
 pub mod config;
 pub mod identity;
 pub mod sv1;
