@@ -71,6 +71,18 @@ impl Jds {
         self.current.as_ref().map(|p| &p.distribution)
     }
 
+    /// Same-front, same-height acceptance check used by the JDP loop before
+    /// the full recompute-and-compare validation.
+    pub fn accepts_id(&self, id: u64) -> bool {
+        let current = self.current.as_ref().map(|p| (p.id, p.height));
+        let previous = self.previous.as_ref().map(|p| (p.id, p.height));
+        match (current, previous) {
+            (Some((cid, _)), _) if cid == id => true,
+            (Some((cid, ch)), Some((pid, ph))) if pid == id && ph == ch && cid != id => true,
+            _ => false,
+        }
+    }
+
     /// Recompute the declared outputs from the distribution and `T`, and
     /// compare. The grace window is same-height-only and same-front.
     pub fn validate(

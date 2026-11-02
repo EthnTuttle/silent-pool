@@ -11,6 +11,7 @@ pub mod config;
 pub mod front;
 pub mod identity;
 pub mod jds;
+pub mod jds_server;
 pub mod payout;
 pub mod sv1;
 pub mod sv1_server;

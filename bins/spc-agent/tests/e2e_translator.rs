@@ -53,10 +53,22 @@ fn front_config() -> FrontConfig {
 #[tokio::test]
 async fn sv1_miner_reaches_the_pool_through_the_translator() {
     let source = Arc::new(MockTemplateSource::new(template()));
-    let mut front = Front::new(front_config(), source.clone());
+    let mut front = Front::new(
+        front_config(),
+        source.clone(),
+        std::sync::Arc::new(std::sync::Mutex::new(
+            spc_pool::type32::Type32Store::default(),
+        )),
+    );
     let job = front.refresh().await.unwrap();
     let (tx, mut rx) = mpsc::channel(8);
-    let server = Sv2Server::new(Network::Regtest, tx);
+    let server = Sv2Server::new(
+        Network::Regtest,
+        tx,
+        std::sync::Arc::new(std::sync::Mutex::new(
+            spc_pool::type32::Type32Store::default(),
+        )),
+    );
     let (pool_addr, _ph) = server.bind("127.0.0.1:0").await.unwrap();
     server.publish(job).await;
 

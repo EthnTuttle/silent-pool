@@ -3,6 +3,7 @@
 #![deny(unsafe_code)]
 
 pub mod config;
+pub mod jdc;
 pub mod sv2_client;
 pub mod translator;
 pub mod verify;
