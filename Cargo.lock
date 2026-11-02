@@ -2518,6 +2518,7 @@ dependencies = [
 name = "spc-accounting"
 version = "0.1.0"
 dependencies = [
+ "bitcoin",
  "hex",
  "proptest",
  "rand 0.8.8",
