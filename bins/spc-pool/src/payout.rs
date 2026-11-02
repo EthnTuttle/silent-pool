@@ -296,6 +296,18 @@ impl PayoutService {
 
     async fn on_slice(&self, payload: &[u8]) -> Result<(), PayoutError> {
         let e = SliceEvent::decode(payload)?;
+        // `slice_credit` references `sp_identity` (SPEC §5.1), but the slice
+        // stream carries only `sp_id` — no keys. A miner that has not
+        // registered Ark delivery yet gets a placeholder identity row here;
+        // the registration upsert replaces it once keys arrive.
+        let mut seen = std::collections::BTreeSet::new();
+        for c in &e.credits {
+            if seen.insert(c.sp_id) {
+                self.store
+                    .insert_identity_if_absent(&placeholder_identity(c.sp_id))
+                    .await?;
+            }
+        }
         let credits = e
             .credits
             .iter()
@@ -627,6 +639,26 @@ fn display_hash(block_hash: &[u8; 32]) -> String {
     let mut bytes = *block_hash;
     bytes.reverse();
     hex::encode(bytes)
+}
+
+/// Placeholder identity for a miner seen in a slice before it registers
+/// Ark delivery (SPEC §5.1). The keys are all-zero 33-byte blobs — a
+/// compressed secp256k1 public key never serializes to all zeros, so no
+/// real registration can collide with or be mistaken for a placeholder.
+/// The real `b_scan`/`b_spend` (and network) arrive later via the
+/// registration path (`on_reg`), whose upsert replaces this row.
+///
+/// The network code is provisional: the slice stream carries no network,
+/// and the value is overwritten at registration. 3 (regtest) keeps the
+/// placeholder distinguishable from the testnet4 code the registration
+/// path currently books.
+fn placeholder_identity(sp_id: [u8; 32]) -> SpIdentityRow {
+    SpIdentityRow {
+        sp_id,
+        b_scan: vec![0u8; 33],
+        b_spend: vec![0u8; 33],
+        network: 3,
+    }
 }
 
 /// Convenience for tests: a pending map as the `LedgerApplied` payload.

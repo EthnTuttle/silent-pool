@@ -79,11 +79,18 @@ impl Store {
         Ok(())
     }
 
+    /// Registration upsert (SPEC §5.1): replaces `b_scan`, `b_spend` and
+    /// `network`, so a real registration overwrites a placeholder row
+    /// booked earlier by `insert_identity_if_absent`.
     pub async fn upsert_identity(&self, row: &SpIdentityRow) -> Result<()> {
         sqlx::query(
             "INSERT INTO sp_identity (sp_id, b_scan, b_spend, network)
              VALUES ($1, $2, $3, $4)
-             ON CONFLICT (sp_id) DO UPDATE SET last_seen = now()",
+             ON CONFLICT (sp_id) DO UPDATE SET
+                b_scan = EXCLUDED.b_scan,
+                b_spend = EXCLUDED.b_spend,
+                network = EXCLUDED.network,
+                last_seen = now()",
         )
         .bind(&row.sp_id[..])
         .bind(&row.b_scan)
@@ -92,6 +99,44 @@ impl Store {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Insert an identity row only when none exists. `payout` books a
+    /// clearly-marked placeholder for a miner that appears in a slice
+    /// before registering Ark delivery (the slice stream carries only
+    /// `sp_id`, but `slice_credit` references `sp_identity`); unlike
+    /// `upsert_identity`, this never overwrites a real registration.
+    pub async fn insert_identity_if_absent(&self, row: &SpIdentityRow) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO sp_identity (sp_id, b_scan, b_spend, network)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (sp_id) DO NOTHING",
+        )
+        .bind(&row.sp_id[..])
+        .bind(&row.b_scan)
+        .bind(&row.b_spend)
+        .bind(row.network)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn identity(&self, sp_id: &[u8; 32]) -> Result<Option<SpIdentityRow>> {
+        let row =
+            sqlx::query("SELECT sp_id, b_scan, b_spend, network FROM sp_identity WHERE sp_id = $1")
+                .bind(&sp_id[..])
+                .fetch_optional(&self.pool)
+                .await?;
+        row.map(|r| {
+            let id: Vec<u8> = r.try_get("sp_id")?;
+            Ok(SpIdentityRow {
+                sp_id: id32(&id)?,
+                b_scan: r.try_get("b_scan")?,
+                b_spend: r.try_get("b_spend")?,
+                network: r.try_get("network")?,
+            })
+        })
+        .transpose()
     }
 
     pub async fn upsert_ark_delivery(&self, row: &ArkDeliveryRow) -> Result<()> {

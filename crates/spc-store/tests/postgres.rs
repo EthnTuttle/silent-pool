@@ -227,6 +227,66 @@ async fn pending_settlement_accepts_null_fingerprint() {
     );
 }
 
+/// SPEC §5.1: a miner appears in a slice before registering Ark delivery.
+/// `payout` books a clearly-marked placeholder identity so the
+/// `slice_credit` FK holds; the later registration upsert replaces the
+/// placeholder keys and network, and a late placeholder never clobbers a
+/// registered identity.
+#[tokio::test]
+async fn placeholder_identity_lets_slices_book_and_registration_replaces_it() {
+    let Some(store) = store().await else { return };
+
+    let sp_id = id();
+    let placeholder = SpIdentityRow {
+        sp_id,
+        b_scan: vec![0u8; 33],
+        b_spend: vec![0u8; 33],
+        network: 3,
+    };
+    store.insert_identity_if_absent(&placeholder).await.unwrap();
+    assert_eq!(
+        store.identity(&sp_id).await.unwrap(),
+        Some(placeholder.clone())
+    );
+
+    // A slice credit for the not-yet-registered miner inserts cleanly.
+    // `slice_id` is a BIGINT, so keep the random id inside i64's range.
+    let slice_id = u64::from_be_bytes(id()[..8].try_into().unwrap()) & 0x7fff_ffff_ffff_ffff;
+    store
+        .insert_slice(&SliceRow {
+            slice_id,
+            height: 800_000,
+            prev_hash: id(),
+            ref_job_id: 1,
+            ref_fees: 0,
+            n_shares: 2,
+            difficulty: "1".into(),
+            root: id(),
+            shares: vec![0u8; 8],
+            credits: vec![SliceCreditRow {
+                sp_id,
+                diff_sum: "12".into(),
+                diff_fee_sum: "6".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    // The registration upsert replaces the placeholder keys and network.
+    let real = SpIdentityRow {
+        sp_id,
+        b_scan: vec![2; 33],
+        b_spend: vec![3; 33],
+        network: 1,
+    };
+    store.upsert_identity(&real).await.unwrap();
+    assert_eq!(store.identity(&sp_id).await.unwrap(), Some(real.clone()));
+
+    // A late placeholder (a later slice before scrub) changes nothing.
+    store.insert_identity_if_absent(&placeholder).await.unwrap();
+    assert_eq!(store.identity(&sp_id).await.unwrap(), Some(real));
+}
+
 #[tokio::test]
 async fn failed_ark_send_becomes_pending_never_forfeit() {
     let Some(store) = store().await else { return };

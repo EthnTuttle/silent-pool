@@ -91,7 +91,9 @@ extranonce2_bytes = 4
 listen = "127.0.0.1:$JD_PORT"
 
 [accounting]
-confirmation_depth = 6
+# Dev-only: depth 1 settles after the single block this harness mines.
+# Production defaults to 6 (see default_confirmation_depth in config.rs).
+confirmation_depth = 1
 
 [storage]
 postgres = "postgres://postgres@127.0.0.1:$PG_PORT/spc"
