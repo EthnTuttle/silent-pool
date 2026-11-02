@@ -9,5 +9,6 @@ pub mod config;
 pub mod identity;
 pub mod sv1;
 pub mod sv1_server;
+pub mod template;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
