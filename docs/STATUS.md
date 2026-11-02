@@ -38,22 +38,23 @@ stock-bark `ark` adapter, and the type-32 network server.
 - End-to-end: mock SV1, mock SV2, SV1 -> translator -> SV2, a real bitcoind
   regtest run, and a full-stack run with Postgres/Redis + `front,payout,api`
   that settles block 102 and serves the API.
-- Live JDS/JDC distribution publication and TLV acceptance; type-32 windows
-  and share proofs served over SV2.
+- Live JDS/JDC: token allocation, `DeclareMiningJob` with the distribution
+  TLV, and JDS recompute-and-compare of the declared coinbase.
+- Type-32 windows and share proofs served over SV2; `spc-scan audit` verifies
+  sampled shares against a live server.
+- `payout` emits signed, capped `ArkSendOrder`s for Ark-rail entries; the `ark`
+  role verifies them.
 - `nix flake check` green.
 
 ## Remaining
 
-1. Complete the JDC coinbase construction: the token allocation and
-   `DeclareMiningJob` TLV path are live, but the declaration currently carries
-   empty outputs; it must build the distribution coinbase and the JDS must
-   recompute it from the mined template. Fallback rules are not wired.
-2. Replace the mock Ark transport with a stock bark wallet adapter. `payout`
-   now emits signed, capped orders; the role verifies them and is ready for a
-   transport.
-3. Add the `spc-scan audit` client (type-32 request loop + sampling verifier)
-   and the seeded cheat-slice test; the SV2 server side is live.
-4. Run the plan's normative and security reviews over the integrated tree.
+1. Replace the mock Ark transport with a stock bark wallet adapter. Order
+   emission and verification are done; only the wallet/server call is missing.
+   This needs a pinned bark checkout and a stock `captaind`.
+2. JD fallback rules (JDS declines, 10 s silence) and the full-template rebuild
+   path in the JDC.
+3. The seeded `--features cheat-slice-difficulty` statistical test.
+4. Normative and security review over the integrated tree.
 5. Testnet soak and third-party `spc-scan` recovery.
 
 ## Blocked
