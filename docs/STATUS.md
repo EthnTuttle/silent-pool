@@ -4,6 +4,14 @@ Live build board. `docs/IMPLEMENTATION-PLAN.md` defines the packets and gates.
 A packet is Done only when its tests exist, `nix flake check` passes, both
 reviews are recorded for risky packets, and the commit is pushed.
 
+## Active sessions
+
+- `ses_e62eb23c2ffe7dadbnVx4zuxun` — integrated normative/security review (`tff/nemotron-3-ultra`), read-only.
+- `ses_e62eb23c0fferiwgs7fbq8NhPu` — OPERATIONS.md + API.md (`tff/glm-5.3`), docs-only.
+- `ses_e62eb23beffe0je1nbzg2cc235` — bark adapter decision record (`tff/kimi-k3`), docs-only.
+
+This thread only dispatches, verifies commits and updates this board.
+
 ## Current state
 
 The pool runs end to end on regtest. Native SV1 and SV2 listeners build the
