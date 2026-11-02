@@ -10,6 +10,10 @@ rust-version.workspace = true
 default = []
 ark = ["spc-crypto/ark"]
 
+[lib]
+name = "spc_agent"
+path = "src/lib.rs"
+
 [dependencies]
 spc-crypto.workspace = true
 spc-ext.workspace = true
