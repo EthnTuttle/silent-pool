@@ -1,23 +1,17 @@
-use clap::{Parser, ValueEnum};
 use std::path::PathBuf;
 
-#[derive(Clone, Copy, Debug, ValueEnum)]
-enum Role {
-    Front,
-    Payout,
-    Api,
-    Ark,
-}
+use clap::Parser;
+use spc_pool::config::Config;
 
 #[derive(Parser)]
-#[command(name = "spc-pool", version = spc_crypto::VERSION)]
+#[command(name = "spc-pool", version = spc_pool::VERSION)]
 struct Cli {
-    /// TOML configuration file.
+    /// TOML configuration file (SPEC §6.3).
     #[arg(short, long, env = "SPC_POOL_CONFIG")]
-    config: Option<PathBuf>,
-    /// Roles to run in this process (default: front,payout,api).
-    #[arg(long, value_delimiter = ',', default_value = "front,payout,api")]
-    roles: Vec<Role>,
+    config: PathBuf,
+    /// Override the configured roles (comma-separated).
+    #[arg(long, value_delimiter = ',')]
+    roles: Vec<String>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -28,11 +22,26 @@ fn main() -> anyhow::Result<()> {
                 .unwrap_or_else(|_| "info,spc_pool=debug".into()),
         )
         .init();
+
+    let config = Config::load(&cli.config)?;
+    let roles = if cli.roles.is_empty() {
+        config.roles().map_err(|e| anyhow::anyhow!(e))?
+    } else {
+        cli.roles
+            .iter()
+            .map(|r| {
+                spc_pool::config::Role::parse(r)
+                    .ok_or_else(|| anyhow::anyhow!("unknown role '{r}'"))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?
+    };
+
     tracing::info!(
-        version = spc_crypto::VERSION,
-        roles = ?cli.roles,
-        config = ?cli.config,
-        "spc-pool starting (WP0 skeleton)"
+        version = spc_pool::VERSION,
+        network = %config.pool.network,
+        front_id = config.pool.front_id,
+        roles = ?roles,
+        "spc-pool starting (WP5 skeleton: config validated, listeners next)"
     );
     Ok(())
 }

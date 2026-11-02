@@ -10,6 +10,10 @@ rust-version.workspace = true
 default = []
 ark = ["spc-crypto/ark"]
 
+[lib]
+name = "spc_pool"
+path = "src/lib.rs"
+
 [dependencies]
 spc-accounting.workspace = true
 spc-crypto.workspace = true
