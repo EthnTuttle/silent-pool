@@ -3,6 +3,7 @@
 #![deny(unsafe_code)]
 
 pub mod api;
+pub mod block;
 pub mod coinbase;
 pub mod config;
 pub mod identity;
