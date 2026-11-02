@@ -3,12 +3,13 @@
 //! Every entry has exactly one field, `d`, whose value is the encoding produced
 //! here. Decoders reject unknown discriminants and trailing bytes.
 
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use crate::codec::{CodecError, Reader, Result, Writer};
 
 /// The rail a distribution entry was built for (SPEC §4.7).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Rail {
     Coinbase = 0,
     Ark = 1,
@@ -33,7 +34,7 @@ impl Rail {
 }
 
 /// One distribution entry (SPEC §4.7).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
     pub sp_id: [u8; 32],
     pub rail: Rail,
@@ -66,12 +67,14 @@ impl Entry {
 }
 
 /// `spc:blocks` payload (WIRE-FORMATS §3.1).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlockEvent {
     pub block_hash: [u8; 32],
     pub height: u32,
     pub front_id: u8,
     pub fingerprint: [u8; 32],
+    /// Public x-only key of the height's `a_send`; the secret is never stored.
+    pub a_send_x: [u8; 32],
     pub high_water: BTreeMap<u8, String>,
     pub entries: Vec<Entry>,
 }
@@ -82,7 +85,7 @@ impl BlockEvent {
         w.bytes(&self.block_hash);
         w.u32(self.height);
         w.u8(self.front_id);
-        w.bytes(&self.fingerprint);
+        w.bytes(&self.fingerprint).bytes(&self.a_send_x);
         write_high_water(&mut w, &self.high_water)?;
         w.u16(u16::try_from(self.entries.len()).map_err(|_| CodecError::Range("entries"))?);
         for e in &self.entries {
@@ -97,6 +100,7 @@ impl BlockEvent {
         let height = r.u32()?;
         let front_id = r.u8()?;
         let fingerprint = r.array()?;
+        let a_send_x = r.array()?;
         let high_water = read_high_water(&mut r)?;
         let n = r.u16()? as usize;
         let mut entries = Vec::with_capacity(n.min(4096));
@@ -109,6 +113,7 @@ impl BlockEvent {
             height,
             front_id,
             fingerprint,
+            a_send_x,
             high_water,
             entries,
         })
@@ -355,7 +360,7 @@ impl ArkRegEvent {
 /// a sealed slice header, its identity-free share blob, and per-identity
 /// aggregates. The share blob is opaque here; `spc-accounting` owns its
 /// contents.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SliceEvent {
     pub slice_id: u64,
     pub height: u32,
@@ -369,7 +374,7 @@ pub struct SliceEvent {
     pub credits: Vec<SliceCredit>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SliceCredit {
     pub sp_id: [u8; 32],
     pub diff_sum: u128,
@@ -447,6 +452,7 @@ mod tests {
             height: 800_000,
             front_id: 3,
             fingerprint: [2; 32],
+            a_send_x: [3; 32],
             high_water: BTreeMap::from([(0u8, "1-1".to_string()), (3, "9-2".to_string())]),
             entries: vec![entry(1), entry(2)],
         };

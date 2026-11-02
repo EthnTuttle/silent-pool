@@ -35,6 +35,7 @@ U256   block_hash
 U32    height
 U8     front_id
 B032   fingerprint            // SPEC §4.7; audit/dedup handle only
+B032   a_send_x               // public x-only key; the secret is never stored
 SEQ0_64K[ {U8 front_id, STR0_255 stream_id} ] high_water  // {front_id: last_slice_stream_id} (§4.3); Redis stream ids are "ms-seq" strings
 SEQ0_64K[ Entry ] entries     // the winning distribution's full entry list (SPEC §3.3 step 5)
 ```

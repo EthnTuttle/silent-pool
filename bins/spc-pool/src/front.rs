@@ -12,7 +12,7 @@ use spc_accounting::{
     MinerKeys, Routing, ShareRec, Slice, SliceAgg, SpId, TierConfig,
 };
 use spc_crypto::{Network, SendKey};
-use spc_store::wire::SliceEvent;
+use spc_store::wire::{BlockEvent, Entry as WireEntry, Rail as WireRail, SliceEvent};
 use thiserror::Error;
 
 use crate::block::{assemble, AssembledBlock};
@@ -71,6 +71,13 @@ pub struct Front {
     pending: BTreeMap<SpId, u64>,
     ark: BTreeMap<SpId, ArkCapability>,
     last_block: Option<AssembledBlock>,
+    events: Vec<FrontEvent>,
+}
+
+#[derive(Clone, Debug)]
+pub enum FrontEvent {
+    Slice(SliceEvent),
+    Block(BlockEvent),
 }
 
 impl FrontConfig {
@@ -116,6 +123,7 @@ impl Front {
             pending: BTreeMap::new(),
             ark: BTreeMap::new(),
             last_block: None,
+            events: Vec::new(),
         }
     }
 
@@ -133,6 +141,10 @@ impl Front {
 
     pub fn pending(&self) -> &BTreeMap<SpId, u64> {
         &self.pending
+    }
+
+    pub fn take_events(&mut self) -> Vec<FrontEvent> {
+        std::mem::take(&mut self.events)
     }
 
     pub fn set_ark(&mut self, sp_id: SpId, cap: ArkCapability) {
@@ -290,6 +302,41 @@ impl Front {
             &share.coinbase,
             &template.transactions,
         );
+        if let Some(dist) = &self.distribution {
+            let block_hash = bitcoin::hashes::sha256d::Hash::hash(&block.header).to_byte_array();
+            let entries = dist
+                .entries
+                .iter()
+                .map(|e| WireEntry {
+                    sp_id: e.sp_id,
+                    rail: match e.rail {
+                        spc_accounting::Rail::Coinbase => WireRail::Coinbase,
+                        spc_accounting::Rail::Ark => WireRail::Ark,
+                        spc_accounting::Rail::Pending => WireRail::Pending,
+                        spc_accounting::Rail::Forfeit => WireRail::Forfeit,
+                    },
+                    p_x: e.p_x.map(|x| x.to_vec()).unwrap_or_default(),
+                    dest_id: e.dest_id.clone().unwrap_or_default(),
+                    sats: e.sats,
+                })
+                .collect();
+            let high_water = BTreeMap::from([(
+                self.cfg.front_id,
+                self.open
+                    .as_ref()
+                    .map(|s| s.slice_id.to_string())
+                    .unwrap_or_default(),
+            )]);
+            self.events.push(FrontEvent::Block(BlockEvent {
+                block_hash,
+                height: template.height,
+                front_id: self.cfg.front_id,
+                fingerprint: dist.fingerprint,
+                a_send_x: dist.a_send_x,
+                high_water,
+                entries,
+            }));
+        }
         self.last_block = Some(block.clone());
         Ok(Some(block))
     }
@@ -328,6 +375,28 @@ impl Front {
         if let Some(mut open) = self.open.take() {
             if !open.shares.is_empty() {
                 open.seal();
+                let credits = open
+                    .agg()
+                    .per_id
+                    .iter()
+                    .map(|(id, (d, df))| spc_store::wire::SliceCredit {
+                        sp_id: *id,
+                        diff_sum: *d,
+                        diff_fee_sum: *df,
+                    })
+                    .collect();
+                self.events.push(FrontEvent::Slice(SliceEvent {
+                    slice_id: open.slice_id,
+                    height: open.height,
+                    prev_hash: open.prev_hash,
+                    ref_job_id: open.ref_job_id,
+                    ref_fees: open.ref_fees,
+                    n_shares: open.shares.len() as u32,
+                    difficulty: open.difficulty,
+                    root: open.root,
+                    shares_blob: serde_json::to_vec(&open.shares).unwrap_or_default(),
+                    credits,
+                }));
                 self.slices.insert(0, open.agg());
                 self.slices.truncate(self.cfg.keep_slices.max(1));
             }

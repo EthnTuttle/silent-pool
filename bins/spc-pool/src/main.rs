@@ -3,9 +3,12 @@ use std::sync::Arc;
 
 use clap::Parser;
 use spc_pool::config::{Config, Role};
-use spc_pool::front::{Front, FrontConfig};
+use spc_pool::front::{Front, FrontConfig, FrontEvent};
 use spc_pool::sv1_server::Sv1Server;
+use spc_pool::sv2_server::Sv2Server;
 use spc_pool::template::{MockTemplateSource, Template, TemplateSource};
+use spc_store::redis::Streams;
+use spc_store::Store;
 use tokio::sync::mpsc;
 
 #[derive(Parser)]
@@ -47,24 +50,46 @@ async fn main() -> anyhow::Result<()> {
         "spc-pool starting"
     );
 
+    let payout_task = if roles.contains(&Role::Payout) {
+        let store = Store::connect(&config.storage.postgres).await?;
+        let streams = Streams::connect(&config.storage.redis).await?;
+        let svc = spc_pool::payout::PayoutService::new(
+            store,
+            streams,
+            config.accounting.confirmation_depth,
+        );
+        Some(tokio::spawn(async move {
+            if let Err(e) = svc.run().await {
+                tracing::error!(error = %e, "payout role stopped");
+            }
+        }))
+    } else {
+        None
+    };
+
     if !roles.contains(&Role::Front) {
-        tracing::warn!("no front role selected; nothing to serve");
+        tracing::warn!("no front role selected; waiting on other roles");
+        if let Some(t) = payout_task {
+            let _ = t.await;
+        }
         return Ok(());
     }
-    if !config.sv1.enabled {
-        anyhow::bail!("this build serves SV1; set [sv1] enabled = true");
-    }
-
+    let network = config.network().map_err(|e| anyhow::anyhow!(e))?;
     let (tx, mut rx) = mpsc::channel(4096);
     let server = Sv1Server::new(
-        config.network().map_err(|e| anyhow::anyhow!(e))?,
+        network,
         config.sv1.extranonce1_bytes,
         config.sv1.extranonce2_bytes,
         1.0,
-        tx,
+        tx.clone(),
     );
-    let (addr, _handle) = server.bind(&config.sv1.listen).await?;
-    tracing::info!(%addr, "native SV1 listener ready");
+    if config.sv1.enabled {
+        let (addr, _handle) = server.bind(&config.sv1.listen).await?;
+        tracing::info!(%addr, "native SV1 listener ready");
+    }
+    let sv2 = Sv2Server::new(network, tx);
+    let (sv2_addr, _sv2_handle) = sv2.bind(&config.pool.listen).await?;
+    tracing::info!(%sv2_addr, "native SV2 listener ready");
 
     let source: Arc<dyn TemplateSource> = match config.template.source.as_str() {
         "rpc" => {
@@ -86,12 +111,22 @@ async fn main() -> anyhow::Result<()> {
         other => anyhow::bail!("template source '{other}' is not implemented in this build"),
     };
 
+    let streams = match Streams::connect(&config.storage.redis).await {
+        Ok(s) => Some(s),
+        Err(e) => {
+            tracing::warn!(error = %e, "redis unavailable; slice/block events will not be published");
+            None
+        }
+    };
+
     let mut front = Front::new(
         FrontConfig::from_config(&config).map_err(|e| anyhow::anyhow!(e))?,
         source.clone(),
     );
     let job = front.refresh().await?;
-    server.publish(job).await;
+    publish_events(&streams, front.take_events()).await;
+    server.publish(job.clone()).await;
+    sv2.publish(job).await;
 
     loop {
         let Some(share) = rx.recv().await else { break };
@@ -101,8 +136,13 @@ async fn main() -> anyhow::Result<()> {
                 if let Err(e) = source.submit_block(&block.block).await {
                     tracing::error!(error = %e, "block submit failed");
                 }
+                publish_events(&streams, front.take_events()).await;
                 match front.refresh().await {
-                    Ok(job) => server.publish(job).await,
+                    Ok(job) => {
+                        publish_events(&streams, front.take_events()).await;
+                        server.publish(job.clone()).await;
+                        sv2.publish(job).await;
+                    }
                     Err(e) => tracing::error!(error = %e, "template refresh failed"),
                 }
             }
@@ -126,5 +166,30 @@ fn demo_template() -> Template {
         transactions: Vec::new(),
         merkle_branches: Vec::new(),
         coinbase_output_max_additional_size: 50_000,
+    }
+}
+
+async fn publish_events(streams: &Option<Streams>, events: Vec<FrontEvent>) {
+    let Some(streams) = streams else { return };
+    for event in events {
+        let (stream, payload) = match event {
+            FrontEvent::Slice(e) => match e.encode() {
+                Ok(p) => ("spc:slices", p),
+                Err(err) => {
+                    tracing::error!(error = %err, "slice encode failed");
+                    continue;
+                }
+            },
+            FrontEvent::Block(e) => match e.encode() {
+                Ok(p) => ("spc:blocks", p),
+                Err(err) => {
+                    tracing::error!(error = %err, "block encode failed");
+                    continue;
+                }
+            },
+        };
+        if let Err(err) = streams.add(stream, &payload).await {
+            tracing::error!(error = %err, stream, "stream publish failed");
+        }
     }
 }

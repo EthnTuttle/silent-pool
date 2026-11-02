@@ -115,7 +115,8 @@ async fn sv1_miner_finds_a_block() {
 
     let target = Target::from_compact(CompactTarget::from_consensus(nbits));
     let mut nonce = 0u32;
-    let hash = loop {
+    let local_hash;
+    loop {
         let mut header = Vec::with_capacity(80);
         header.extend_from_slice(&version.to_le_bytes());
         header.extend_from_slice(&job.prev_hash);
@@ -125,14 +126,14 @@ async fn sv1_miner_finds_a_block() {
         header.extend_from_slice(&nonce.to_le_bytes());
         let h = bitcoin::hashes::sha256d::Hash::hash(&header).to_byte_array();
         if target.is_met_by(BlockHash::from_byte_array(h)) {
-            break h;
+            local_hash = h;
+            break;
         }
         nonce = nonce.wrapping_add(1);
         if nonce > 2_000_000 {
             panic!("no nonce found");
         }
-    };
-    let _ = hash;
+    }
 
     let submit = serde_json::json!({
         "id": 3, "method": "mining.submit",
@@ -151,6 +152,28 @@ async fn sv1_miner_finds_a_block() {
         .await
         .unwrap()
         .unwrap();
+    assert_eq!(share.coinbase, coinbase, "coinbase mismatch");
+    assert_eq!(share.merkle_root, txid, "merkle mismatch");
+    assert_eq!(share.version, version, "version mismatch");
+    assert_eq!(share.ntime, ntime, "ntime mismatch");
+    assert_eq!(share.nonce, nonce, "nonce mismatch");
+    let mut h2 = Vec::with_capacity(80);
+    h2.extend_from_slice(&share.version.to_le_bytes());
+    h2.extend_from_slice(&job.prev_hash);
+    h2.extend_from_slice(&share.merkle_root);
+    h2.extend_from_slice(&share.ntime.to_le_bytes());
+    h2.extend_from_slice(&job.nbits.to_le_bytes());
+    h2.extend_from_slice(&share.nonce.to_le_bytes());
+    assert_eq!(
+        hex(&bitcoin::hashes::sha256d::Hash::hash(&h2).to_byte_array()),
+        hex(&share.share_hash),
+        "server hash is not from its own fields"
+    );
+    assert_eq!(
+        hex(&share.share_hash),
+        hex(&local_hash),
+        "server/local hash mismatch"
+    );
     let block = front.on_share(share).unwrap().expect("block");
     assert_eq!(block.header[4..36], job.prev_hash);
     source.submit_block(&block.block).await.unwrap();

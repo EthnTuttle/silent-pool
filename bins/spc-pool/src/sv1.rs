@@ -289,6 +289,7 @@ impl Session {
         header.extend_from_slice(&merkle_root);
         header.extend_from_slice(&ntime.to_le_bytes());
         header.extend_from_slice(&job.nbits.to_le_bytes());
+        header.extend_from_slice(&nonce.to_le_bytes());
         let share_hash = double_sha256(&header);
 
         let share_index = self.share_index;

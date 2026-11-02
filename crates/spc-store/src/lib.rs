@@ -7,6 +7,7 @@ pub mod bootstrap;
 pub mod codec;
 pub mod models;
 pub mod postgres;
+pub mod redis;
 pub mod wire;
 
 pub use codec::{CodecError, Reader, Writer};
