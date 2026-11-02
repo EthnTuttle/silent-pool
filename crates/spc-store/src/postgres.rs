@@ -186,7 +186,19 @@ impl Store {
     }
 
     /// Apply one settlement transaction. Re-delivery is a no-op.
+    ///
+    /// Fail-closed on the schema invariant (SPEC §5.1/§7.4, review 4.5): a
+    /// block without a distribution fingerprint can never be booked
+    /// `confirmed` — the caller is expected to pass `Pending`, and the store
+    /// coerces a stray `Confirmed`+NULL request to `Pending` here as well.
+    /// Ledger rows are written only for a confirmed booking; `pending` and
+    /// `orphaned` bookings record just the `block_found` row.
     pub async fn settle(&self, s: &Settlement, confirmation_depth: u32) -> Result<()> {
+        let status = match (s.status, s.fingerprint) {
+            (BlockStatus::Confirmed, None) => BlockStatus::Pending,
+            (st, _) => st,
+        };
+        let book_ledger = status == BlockStatus::Confirmed;
         let mut tx = self.pool.begin().await?;
 
         let existing = sqlx::query("SELECT status FROM block_found WHERE block_hash = $1")
@@ -196,8 +208,8 @@ impl Store {
 
         match existing {
             Some(row) => {
-                let status: String = row.try_get("status")?;
-                match status.as_str() {
+                let existing_status: String = row.try_get("status")?;
+                match existing_status.as_str() {
                     "confirmed" => {
                         tx.rollback().await?;
                         return Err(StoreError::AlreadySettled(s.block_hash));
@@ -216,7 +228,7 @@ impl Store {
                         )
                         .bind(&s.block_hash[..])
                         .bind(s.fingerprint.as_ref().map(|f| &f[..]))
-                        .bind(s.status.as_str())
+                        .bind(status.as_str())
                         .execute(&mut *tx)
                         .await?;
                     }
@@ -231,14 +243,14 @@ impl Store {
                 .bind(&s.block_hash[..])
                 .bind(height_i32(s.height)?)
                 .bind(s.fingerprint.as_ref().map(|f| &f[..]))
-                .bind(s.status.as_str())
+                .bind(status.as_str())
                 .execute(&mut *tx)
                 .await?;
             }
         }
 
         let due_height = s.height.saturating_add(confirmation_depth);
-        for row in &s.ledger {
+        for row in if book_ledger { &s.ledger[..] } else { &[][..] } {
             let res = sqlx::query(
                 "INSERT INTO ledger_history
                     (block_hash, sp_id, rail, paid_sats, ark_due_sats, forfeited_sats,
@@ -335,7 +347,9 @@ impl Store {
         Ok(())
     }
 
-    /// Scrub attribution data per SPEC §5.1.
+    /// Scrub attribution data per SPEC §5.1. Snapshot entries are kept while
+    /// any `ark_payout` of the block is `scheduled` or `failed_to_pending`
+    /// (review 4.3: a failed send can still be retried and re-sent).
     pub async fn scrub(
         &self,
         tip_height: u32,
@@ -362,7 +376,8 @@ impl Store {
                AND NOT EXISTS (
                    SELECT 1 FROM block_found bf
                    JOIN ark_payout ap ON ap.block_hash = bf.block_hash
-                   WHERE bf.fingerprint = ds.fingerprint AND ap.status = 'scheduled')",
+                   WHERE bf.fingerprint = ds.fingerprint
+                     AND ap.status IN ('scheduled', 'failed_to_pending'))",
         )
         .bind(height_i32(scrub_below)?)
         .execute(&self.pool)

@@ -136,6 +136,97 @@ async fn ark_rail_is_scheduled_and_leaves_liability_when_sent() {
     assert_eq!(store.liability_sats().await.unwrap(), 0);
 }
 
+/// SPEC §7.4 + review 4.5: a block booked without a distribution
+/// fingerprint is `pending`, never `confirmed` (the CHECK constraint
+/// forbids `confirmed` with NULL); it owes nothing until the event is
+/// reconstructed, after which it confirms and books.
+#[tokio::test]
+async fn pending_settlement_accepts_null_fingerprint() {
+    let Some(store) = store().await else { return };
+
+    let sp_id = id();
+    let fingerprint = id();
+    let block_hash = id();
+    identity(&store, sp_id).await;
+
+    // Lost block event: booked pending with fingerprint NULL, no liability.
+    store
+        .settle(
+            &Settlement {
+                block_hash,
+                height: 800_000,
+                fingerprint: None,
+                status: BlockStatus::Pending,
+                ledger: vec![],
+            },
+            6,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.block_status(&block_hash).await.unwrap(),
+        Some(BlockStatus::Pending)
+    );
+    assert_eq!(store.liability_sats().await.unwrap(), 0);
+
+    // A caller asking for `confirmed` with a NULL fingerprint is coerced to
+    // `pending`, and no ledger rows are written either way.
+    let stray = id();
+    store
+        .settle(
+            &Settlement {
+                block_hash: stray,
+                height: 800_001,
+                fingerprint: None,
+                status: BlockStatus::Confirmed,
+                ledger: vec![LedgerRow {
+                    sp_id,
+                    rail: LedgerRail::Forfeit,
+                    paid_sats: 0,
+                    ark_due_sats: 0,
+                    forfeited_sats: 40,
+                    pending_delta: 0,
+                }],
+            },
+            6,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.block_status(&stray).await.unwrap(),
+        Some(BlockStatus::Pending)
+    );
+    let rows = store.ledger_for(&sp_id, 10).await.unwrap();
+    assert!(rows.iter().all(|(hash, ..)| *hash != stray));
+
+    // Reconstruction sets the fingerprint; the block then confirms and books.
+    snapshot(&store, fingerprint).await;
+    store
+        .settle(
+            &Settlement {
+                block_hash,
+                height: 800_000,
+                fingerprint: Some(fingerprint),
+                status: BlockStatus::Confirmed,
+                ledger: vec![LedgerRow {
+                    sp_id,
+                    rail: LedgerRail::Coinbase,
+                    paid_sats: 1_000,
+                    ark_due_sats: 0,
+                    forfeited_sats: 0,
+                    pending_delta: 0,
+                }],
+            },
+            6,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.block_status(&block_hash).await.unwrap(),
+        Some(BlockStatus::Confirmed)
+    );
+}
+
 #[tokio::test]
 async fn failed_ark_send_becomes_pending_never_forfeit() {
     let Some(store) = store().await else { return };

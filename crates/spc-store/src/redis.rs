@@ -74,6 +74,52 @@ impl Streams {
         Ok(())
     }
 
+    /// Re-read this consumer's pending (unacknowledged) entries. This is the
+    /// retry surface for held settlements: entries that were not acked are
+    /// returned here, oldest first, without blocking (SPEC §7.4).
+    pub async fn read_pending(
+        &self,
+        stream: &str,
+        group: &str,
+        consumer: &str,
+        count: usize,
+    ) -> Result<Vec<(String, Vec<u8>)>> {
+        let mut conn = self.conn.clone();
+        let value: Value = redis::cmd("XREADGROUP")
+            .arg("GROUP")
+            .arg(group)
+            .arg(consumer)
+            .arg("COUNT")
+            .arg(count)
+            .arg("STREAMS")
+            .arg(stream)
+            .arg("0")
+            .query_async(&mut conn)
+            .await?;
+        parse_xread(value)
+    }
+
+    /// Add `member` to the set at `key`, returning true when it was not
+    /// already present (atomic mark-if-absent).
+    pub async fn sadd(&self, key: &str, member: &[u8]) -> Result<bool> {
+        let mut conn = self.conn.clone();
+        let added: i64 = conn.sadd(key, member).await?;
+        Ok(added > 0)
+    }
+
+    pub async fn sismember(&self, key: &str, member: &[u8]) -> Result<bool> {
+        let mut conn = self.conn.clone();
+        Ok(conn.sismember(key, member).await?)
+    }
+
+    /// Refresh `key`'s TTL to `secs`; a missing key is a no-op.
+    pub async fn expire(&self, key: &str, secs: u64) -> Result<()> {
+        let mut conn = self.conn.clone();
+        let secs = i64::try_from(secs).unwrap_or(i64::MAX);
+        let _: bool = conn.expire(key, secs).await?;
+        Ok(())
+    }
+
     /// Trim behind the slowest live reader. The caller owns the policy
     /// (SPEC §5.2); this is the mechanical `XTRIM MINID`.
     pub async fn trim_minid(&self, stream: &str, min_id: &str) -> Result<()> {

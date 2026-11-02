@@ -68,10 +68,38 @@ async fn main() -> anyhow::Result<()> {
     let payout_task = if roles.contains(&Role::Payout) {
         let store = Store::connect(&config.storage.postgres).await?;
         let streams = Streams::connect(&config.storage.redis).await?;
+        // Settlement gates on the active chain (SPEC §7.4, review 4.1). The
+        // only chain view in-tree is the bitcoin-core RPC; any other
+        // template source leaves the gate open, which is dev-only.
+        let chain: Arc<dyn spc_pool::payout::ChainView> = match config.template.source.as_str() {
+            "rpc" => {
+                #[cfg(feature = "rpc")]
+                {
+                    Arc::new(spc_pool::payout::RpcChainView::new(
+                        &config.template.rpc_url,
+                        &config.template.rpc_user,
+                        &config.template.rpc_pass,
+                    )?)
+                }
+                #[cfg(not(feature = "rpc"))]
+                {
+                    anyhow::bail!("template source 'rpc' requires the `rpc` feature");
+                }
+            }
+            other => {
+                tracing::warn!(
+                    source = other,
+                    "payout has no chain view: settlement books without an active-chain check"
+                );
+                Arc::new(spc_pool::payout::AlwaysConfirm)
+            }
+        };
         let svc = spc_pool::payout::PayoutService::new(
             store,
             streams,
             config.accounting.confirmation_depth,
+            config.accounting.coinbase_threshold_sats,
+            chain,
             order_key,
             max_order_sats,
         );
