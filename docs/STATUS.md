@@ -35,22 +35,24 @@ stock-bark `ark` adapter, and the type-32 network server.
   BIP340 signing, Ark order/receipt codecs.
 - `spc-share-ext`: identity-free leaf, merkle proofs, sampling verifier.
 - `spc-agent`: SV2 client, translator role, own-payout verifier, config.
-- End-to-end: mock SV1, mock SV2, SV1 -> translator -> SV2, and a real
-  bitcoind regtest run that submits two blocks and scans the miner output.
+- End-to-end: mock SV1, mock SV2, SV1 -> translator -> SV2, a real bitcoind
+  regtest run, and a full-stack run with Postgres/Redis + `front,payout,api`
+  that settles block 102 and serves the API.
+- Live JDS/JDC distribution publication and TLV acceptance; type-32 windows
+  and share proofs served over SV2.
 - `nix flake check` green.
 
 ## Remaining
 
-1. Wire the JD network loop: JDP listener in `front`, `SetPayoutDistribution`
-   publication, `distribution_id` TLV extraction from declarations, and the
-   JDC role in `spc-agent` (state machine and codecs are done).
+1. Complete the JDC declaration path: token allocation, template -> coinbase
+   construction, `DeclareMiningJob`/`SetCustomMiningJob` with the TLV, and the
+   fallback rules. Distribution receipt and JDS acceptance are tested.
 2. Replace the mock Ark transport with a stock bark wallet adapter, and emit
-   `spc:ark:orders` from `payout` at `H_f + 6`.
-3. Serve type-32 messages over SV2 from the stored slices and add the seeded
-   cheat-slice test.
-4. Add the Postgres/Redis services and the payout/API roles to the regtest
-   harness (the front path already passes without them).
-5. Run the plan's normative and security reviews over the integrated tree.
+   `spc:ark:orders` from `payout` when an Ark-rail entry settles.
+3. Add the `spc-scan audit` client (sampling verifier + type-32 request loop)
+   and the seeded cheat-slice test; the SV2 server side is live.
+4. Run the plan's normative and security reviews over the integrated tree.
+5. Testnet soak and third-party `spc-scan` recovery.
 
 ## Blocked
 
