@@ -487,6 +487,73 @@ impl Store {
         }))
     }
 
+    pub async fn recent_blocks(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<(Vec<u8>, i32, String, Option<chrono::DateTime<chrono::Utc>>)>> {
+        let rows = sqlx::query(
+            "SELECT block_hash, height, status, settled_at
+             FROM block_found ORDER BY height DESC LIMIT $1",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|r| {
+                Ok((
+                    r.try_get("block_hash")?,
+                    r.try_get("height")?,
+                    r.try_get("status")?,
+                    r.try_get("settled_at")?,
+                ))
+            })
+            .collect()
+    }
+
+    pub async fn pending_for(&self, sp_id: &[u8; 32]) -> Result<u64> {
+        let row = sqlx::query("SELECT sats FROM pending_balance WHERE sp_id = $1")
+            .bind(&sp_id[..])
+            .fetch_optional(&self.pool)
+            .await?;
+        match row {
+            Some(r) => {
+                let sats: i64 = r.try_get("sats")?;
+                sats_u64(sats)
+            }
+            None => Ok(0),
+        }
+    }
+
+    pub async fn ledger_for(
+        &self,
+        sp_id: &[u8; 32],
+        limit: i64,
+    ) -> Result<Vec<(Vec<u8>, i32, String, i64, i64, i64, i64)>> {
+        let rows = sqlx::query(
+            "SELECT l.block_hash, b.height, l.rail, l.paid_sats, l.ark_due_sats,
+                    l.forfeited_sats, l.pending_delta
+             FROM ledger_history l JOIN block_found b ON b.block_hash = l.block_hash
+             WHERE l.sp_id = $1 ORDER BY b.height DESC LIMIT $2",
+        )
+        .bind(&sp_id[..])
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|r| {
+                Ok((
+                    r.try_get("block_hash")?,
+                    r.try_get("height")?,
+                    r.try_get("rail")?,
+                    r.try_get("paid_sats")?,
+                    r.try_get("ark_due_sats")?,
+                    r.try_get("forfeited_sats")?,
+                    r.try_get("pending_delta")?,
+                ))
+            })
+            .collect()
+    }
+
     /// Recent sealed slices for the live window tail and type-32 service.
     pub async fn window_tail(&self, limit: i64) -> Result<Vec<SliceRow>> {
         let rows = sqlx::query(

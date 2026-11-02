@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::Parser;
+use spc_pool::api_backend::StoreBackend;
 use spc_pool::config::{Config, Role};
 use spc_pool::front::{Front, FrontConfig, FrontEvent};
 use spc_pool::sv1_server::Sv1Server;
@@ -67,6 +68,33 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
+    let network = config.network().map_err(|e| anyhow::anyhow!(e))?;
+    if roles.contains(&Role::Api) {
+        let store = Store::connect(&config.storage.postgres).await?;
+        let backend = std::sync::Arc::new(StoreBackend::new(
+            store,
+            serde_json::json!({
+                "network": config.pool.network,
+                "window_n": config.accounting.window_n,
+                "coinbase_threshold_sats": config.accounting.coinbase_threshold_sats,
+                "extensions": ["0x0001", "0x0003", "0x0020", "0x5350"],
+            }),
+            serde_json::json!({
+                "budget_wu": config.budget.floor_wu,
+                "ceiling_wu": config.budget.ceiling_wu,
+                "max_payout_slots": config.accounting.max_payout_slots,
+            }),
+        ));
+        let app = spc_pool::api::router(backend, network);
+        let listener = tokio::net::TcpListener::bind(&config.api.listen).await?;
+        tracing::info!(addr = %config.api.listen, "api listener ready");
+        tokio::spawn(async move {
+            if let Err(e) = axum::serve(listener, app).await {
+                tracing::error!(error = %e, "api server stopped");
+            }
+        });
+    }
+
     if !roles.contains(&Role::Front) {
         tracing::warn!("no front role selected; waiting on other roles");
         if let Some(t) = payout_task {
@@ -74,7 +102,6 @@ async fn main() -> anyhow::Result<()> {
         }
         return Ok(());
     }
-    let network = config.network().map_err(|e| anyhow::anyhow!(e))?;
     let (tx, mut rx) = mpsc::channel(4096);
     let server = Sv1Server::new(
         network,
