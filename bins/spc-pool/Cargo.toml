@@ -34,6 +34,8 @@ secp256k1.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 stratum-core = { version = "0.6.0", features = ["sv1"] }
+stratum-apps = { version = "0.8", default-features = false, features = ["network", "core"] }
+secp256k1_legacy = { package = "secp256k1", version = "0.28" }
 thiserror.workspace = true
 tokio.workspace = true
 toml.workspace = true

@@ -1,0 +1,316 @@
+//! Native SV2 listener: Noise handshake, SetupConnection, extended channel
+//! open, jobs and extended shares. The identity rule is the same one the SV1
+//! listener uses (SPEC §3.1, decision 2026-11-02).
+
+use std::net::SocketAddr;
+use std::sync::Arc;
+
+use bitcoin::hashes::{sha256d, Hash};
+use bitcoin::pow::{CompactTarget, Target};
+use bitcoin::BlockHash;
+use stratum_apps::key_utils::{Secp256k1PublicKey, Secp256k1SecretKey};
+use stratum_core::binary_sv2::{self, Seq0255, Str0255, Sv2Option, B032, B064K, U256};
+use stratum_core::common_messages_sv2::{
+    SetupConnection, SetupConnectionSuccess, MESSAGE_TYPE_SETUP_CONNECTION,
+    MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
+};
+use stratum_core::framing_sv2::framing::MessageFrame;
+use stratum_core::mining_sv2::NewExtendedMiningJob;
+use stratum_core::mining_sv2::{
+    OpenExtendedMiningChannel, OpenExtendedMiningChannelSuccess, OpenMiningChannelError,
+    SetNewPrevHash, SubmitSharesExtended, SubmitSharesSuccess,
+    CHANNEL_BIT_MINING_SET_NEW_PREV_HASH, CHANNEL_BIT_NEW_EXTENDED_MINING_JOB,
+    CHANNEL_BIT_SUBMIT_SHARES_SUCCESS, MESSAGE_TYPE_MINING_SET_NEW_PREV_HASH,
+    MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB, MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+    MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL_SUCCESS, MESSAGE_TYPE_OPEN_MINING_CHANNEL_ERROR,
+    MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED, MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS,
+};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{broadcast, mpsc, Mutex};
+
+use crate::identity::{parse_identity, ChannelIdentity};
+use crate::sv1::{Job, Share};
+
+#[derive(Clone)]
+pub struct Sv2Server {
+    network: spc_crypto::Network,
+    authority_pk: Secp256k1PublicKey,
+    authority_sk: Secp256k1SecretKey,
+    current: Arc<Mutex<Option<Job>>>,
+    jobs: broadcast::Sender<Job>,
+    shares: mpsc::Sender<Share>,
+}
+
+struct Channel {
+    channel_id: u32,
+    identity: ChannelIdentity,
+    extranonce_prefix: Vec<u8>,
+}
+
+impl Sv2Server {
+    pub fn new(network: spc_crypto::Network, shares: mpsc::Sender<Share>) -> Self {
+        let secp = secp256k1_legacy::Secp256k1::new();
+        let mut rng = rand::thread_rng();
+        let kp = secp256k1_legacy::Keypair::new(&secp, &mut rng);
+        let pk = Secp256k1PublicKey(kp.x_only_public_key().0);
+        let sk = Secp256k1SecretKey(kp.secret_key());
+        let (jobs, _) = broadcast::channel(16);
+        Self {
+            network,
+            authority_pk: pk,
+            authority_sk: sk,
+            current: Arc::new(Mutex::new(None)),
+            jobs,
+            shares,
+        }
+    }
+
+    pub async fn publish(&self, job: Job) {
+        *self.current.lock().await = Some(job.clone());
+        let _ = self.jobs.send(job);
+    }
+
+    pub async fn bind(
+        &self,
+        addr: &str,
+    ) -> std::io::Result<(SocketAddr, tokio::task::JoinHandle<()>)> {
+        let listener = TcpListener::bind(addr).await?;
+        let local = listener.local_addr()?;
+        let server = self.clone();
+        let handle = tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                let server = server.clone();
+                tokio::spawn(async move {
+                    let _ = server.handle(socket).await;
+                });
+            }
+        });
+        Ok((local, handle))
+    }
+
+    async fn handle(&self, socket: TcpStream) -> Result<(), String> {
+        let stream = stratum_apps::network_helpers::accept_noise_connection(
+            socket,
+            self.authority_pk,
+            self.authority_sk,
+            3600,
+        )
+        .await
+        .map_err(|e| format!("noise: {e}"))?;
+        let (mut read, mut write) = stream.into_split();
+        let mut jobs = self.jobs.subscribe();
+        let mut channel: Option<Channel> = None;
+        let mut setup_done = false;
+
+        loop {
+            tokio::select! {
+                frame = read.read_frame() => {
+                    let mut frame = frame.map_err(|e| format!("read: {e}"))?;
+                    let msg_type = frame.header().msg_type();
+                    let mut payload = frame.payload().to_vec();
+                    match msg_type {
+                        MESSAGE_TYPE_SETUP_CONNECTION => {
+                            let _msg: SetupConnection = binary_sv2::from_bytes(&mut payload)
+                                .map_err(|e| format!("setup: {e}"))?;
+                            write_msg(&mut write, SetupConnectionSuccess { used_version: 2, flags: 0 }, MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS, false).await?;
+                            setup_done = true;
+                        }
+                        MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL => {
+                            if !setup_done {
+                                return Err("open before setup".into());
+                            }
+                            let msg: OpenExtendedMiningChannel = binary_sv2::from_bytes(&mut payload)
+                                .map_err(|e| format!("open: {e}"))?;
+                            let raw = String::from_utf8_lossy(msg.user_identity.as_bytes()).to_string();
+                            let identity = match parse_identity(&raw, self.network()) {
+                                Ok(id) => id,
+                                Err(_) => {
+                                    let err = OpenMiningChannelError {
+                                        request_id: msg.request_id,
+                                        error_code: Str0255::try_from("invalid-user-identity").unwrap(),
+                                    };
+                                    write_msg(&mut write, err, MESSAGE_TYPE_OPEN_MINING_CHANNEL_ERROR, false).await?;
+                                    continue;
+                                }
+                            };
+                            let mut prefix = vec![0u8; 4];
+                            use rand::RngCore;
+                            rand::rngs::OsRng.fill_bytes(&mut prefix);
+                            let ch = Channel {
+                                channel_id: 1,
+                                identity,
+                                extranonce_prefix: prefix.clone(),
+                            };
+                            let target_bytes = [0xffu8; 32];
+                            let target = U256::from(&target_bytes);
+                            let success = OpenExtendedMiningChannelSuccess {
+                                request_id: msg.request_id,
+                                channel_id: ch.channel_id,
+                                target,
+                                extranonce_size: 4,
+                                extranonce_prefix: B032::new(&prefix).map_err(|e| format!("prefix: {e}"))?,
+                                group_channel_id: 0,
+                            };
+                            write_msg(&mut write, success, MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL_SUCCESS, false).await?;
+                            if let Some(job) = self.current.lock().await.clone() {
+                                send_job(&mut write, &ch, &job).await?;
+                            }
+                            channel = Some(ch);
+                        }
+                        MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED => {
+                            let msg: SubmitSharesExtended = binary_sv2::from_bytes(&mut payload)
+                                .map_err(|e| format!("submit: {e}"))?;
+                            let Some(ch) = &channel else { continue };
+                            if msg.channel_id != ch.channel_id || msg.job_id != self.current_job_id().await {
+                                continue;
+                            }
+                            let job = match self.current.lock().await.clone() {
+                                Some(j) => j,
+                                None => continue,
+                            };
+                            let mut extranonce = ch.extranonce_prefix.clone();
+                            extranonce.extend_from_slice(msg.extranonce.as_bytes());
+                            let mut coinbase = job.coinb1.clone();
+                            coinbase.extend_from_slice(&extranonce);
+                            coinbase.extend_from_slice(&job.coinb2);
+                            let mut merkle_root = sha256d::Hash::hash(&coinbase).to_byte_array();
+                            for branch in job.merkle_branches.iter().rev() {
+                                let mut buf = Vec::with_capacity(64);
+                                buf.extend_from_slice(&merkle_root);
+                                buf.extend_from_slice(branch);
+                                merkle_root = sha256d::Hash::hash(&buf).to_byte_array();
+                            }
+                            let mut header = Vec::with_capacity(80);
+                            header.extend_from_slice(&msg.version.to_le_bytes());
+                            header.extend_from_slice(&job.prev_hash);
+                            header.extend_from_slice(&merkle_root);
+                            header.extend_from_slice(&msg.ntime.to_le_bytes());
+                            header.extend_from_slice(&job.nbits.to_le_bytes());
+                            header.extend_from_slice(&msg.nonce.to_le_bytes());
+                            let share_hash = sha256d::Hash::hash(&header).to_byte_array();
+                            let share = Share {
+                                sp_id: ch.identity.sp_id,
+                                b_scan: ch.identity.b_scan,
+                                b_spend: ch.identity.b_spend,
+                                job_id: format!("{:08x}", msg.job_id),
+                                nonce: msg.nonce,
+                                ntime: msg.ntime,
+                                version: msg.version,
+                                extranonce,
+                                share_index: msg.sequence_number,
+                                job_fees: 0,
+                                coinbase,
+                                merkle_root,
+                                share_hash,
+                            };
+                            let _ = self.shares.send(share).await;
+                            let ok = SubmitSharesSuccess {
+                                channel_id: ch.channel_id,
+                                last_sequence_number: msg.sequence_number,
+                                new_submits_accepted_count: 1,
+                                new_shares_sum: 1,
+                            };
+                            write_msg(&mut write, ok, MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS, CHANNEL_BIT_SUBMIT_SHARES_SUCCESS).await?;
+                        }
+                        _ => {}
+                    }
+                }
+                job = jobs.recv() => {
+                    match job {
+                        Ok(job) => {
+                            if let Some(ch) = &channel {
+                                send_job(&mut write, ch, &job).await?;
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => {}
+                        Err(_) => break,
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn network(&self) -> spc_crypto::Network {
+        self.network
+    }
+
+    async fn current_job_id(&self) -> u32 {
+        self.current
+            .lock()
+            .await
+            .as_ref()
+            .map(|j| parse_job_id(&j.job_id))
+            .unwrap_or(0)
+    }
+}
+
+async fn send_job(
+    write: &mut stratum_apps::network_helpers::noise_stream::NoiseTcpWriteHalf,
+    ch: &Channel,
+    job: &Job,
+) -> Result<(), String> {
+    let prev = SetNewPrevHash {
+        channel_id: ch.channel_id,
+        job_id: parse_job_id(&job.job_id),
+        prev_hash: U256::from(&job.prev_hash),
+        min_ntime: job.ntime,
+        nbits: job.nbits,
+    };
+    write_msg(
+        write,
+        prev,
+        MESSAGE_TYPE_MINING_SET_NEW_PREV_HASH,
+        CHANNEL_BIT_MINING_SET_NEW_PREV_HASH,
+    )
+    .await?;
+
+    let merkle_path: Vec<U256> = job.merkle_branches.iter().map(U256::from).collect();
+    let job_msg = NewExtendedMiningJob {
+        channel_id: ch.channel_id,
+        job_id: parse_job_id(&job.job_id),
+        min_ntime: Sv2Option::new(Some(job.ntime)),
+        version: job.version,
+        version_rolling_allowed: true,
+        merkle_path: Seq0255::try_from(merkle_path).map_err(|e| format!("merkle path: {e}"))?,
+        coinbase_tx_prefix: B064K::new(&job.coinb1).map_err(|e| format!("prefix: {e}"))?,
+        coinbase_tx_suffix: B064K::new(&job.coinb2).map_err(|e| format!("suffix: {e}"))?,
+    };
+    write_msg(
+        write,
+        job_msg,
+        MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB,
+        CHANNEL_BIT_NEW_EXTENDED_MINING_JOB,
+    )
+    .await
+}
+
+async fn write_msg<T>(
+    write: &mut stratum_apps::network_helpers::noise_stream::NoiseTcpWriteHalf,
+    msg: T,
+    msg_type: u8,
+    channel_msg: bool,
+) -> Result<(), String>
+where
+    T: stratum_core::binary_sv2::Serialize + stratum_core::binary_sv2::GetSize,
+{
+    let frame = MessageFrame::from_message(msg, msg_type, 0, channel_msg)
+        .map_err(|e| format!("frame: {e}"))?;
+    write
+        .write_frame(frame)
+        .await
+        .map_err(|e| format!("write: {e}"))
+}
+
+fn parse_job_id(s: &str) -> u32 {
+    u32::from_str_radix(s, 16).unwrap_or(0)
+}
+
+/// Target helper for tests.
+pub fn target_from_bits(bits: u32) -> Target {
+    Target::from_compact(CompactTarget::from_consensus(bits))
+}
+
+pub fn hash_meets_target(hash: [u8; 32], bits: u32) -> bool {
+    target_from_bits(bits).is_met_by(BlockHash::from_byte_array(hash))
+}

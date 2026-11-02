@@ -10,6 +10,7 @@ pub mod front;
 pub mod identity;
 pub mod sv1;
 pub mod sv1_server;
+pub mod sv2_server;
 pub mod template;
 #[cfg(feature = "rpc")]
 pub mod template_rpc;
