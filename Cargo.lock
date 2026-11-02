@@ -2583,10 +2583,12 @@ name = "spc-pool"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "bitcoin",
  "clap",
  "hex",
+ "http-body-util",
  "proptest",
  "rand 0.8.8",
  "secp256k1 0.29.1",
@@ -2602,6 +2604,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "toml",
+ "tower",
  "tracing",
  "tracing-subscriber",
 ]
