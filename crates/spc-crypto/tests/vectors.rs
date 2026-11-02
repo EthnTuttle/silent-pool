@@ -279,7 +279,7 @@ fn frozen_vector_ark_address() {
     let mailbox_id = ark::mailbox::MailboxIdentifier::from_pubkey(f.mailbox_pub);
     let blinded =
         pool_blinded_mailbox_id(&mailbox_id, &d, &tweaks.t_ark, &f.server_mailbox).unwrap();
-    let addr = build_bark_address(&f.server_pk, &u, blinded, false);
+    let addr = build_bark_address(&f.server_pk, &u, blinded, false).unwrap();
     assert_eq!(
         addr.to_string(),
         "ark1pw4zjupfzqqpgwa8ay9vc42v5pq6gs7ydgty86dztz9hz25kjydkrv39agl6njdezqyprdqnynftx9g0p6lj4jqpnykkjlczlfxl8526956r88l8tn5qfggqlrm0es"

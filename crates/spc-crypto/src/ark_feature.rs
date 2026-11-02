@@ -47,7 +47,7 @@ pub fn build_bark_address(
     ark_user_pubkey: &PublicKey,
     blinded_id: BlindedMailboxIdentifier,
     testnet: bool,
-) -> ark::Address {
+) -> Result<ark::Address, Error> {
     use ark::address::VtxoDelivery;
 
     ark::Address::builder()
@@ -56,6 +56,5 @@ pub fn build_bark_address(
         .pubkey_policy(*ark_user_pubkey)
         .delivery(VtxoDelivery::ServerMailbox { blinded_id })
         .into_address()
-        // Safety: all required fields (server_pubkey, policy, delivery) are set.
-        .expect("all required fields set")
+        .map_err(|_| Error::Carrier("bark address builder rejected complete fields".into()))
 }

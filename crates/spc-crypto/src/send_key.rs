@@ -23,6 +23,9 @@ pub struct SendKey {
     secret: Zeroizing<[u8; 32]>,
     /// `ser_x(A_send)`: 32-byte x-coordinate, always even-Y.
     pub a_x: [u8; 32],
+    /// Full compressed `A_send` (always 0x02 prefix). Stored so `public_key`
+    /// cannot fail on a corrupted secret.
+    public: PublicKey,
 }
 
 impl fmt::Debug for SendKey {
@@ -75,16 +78,17 @@ impl SendKey {
         let mut a_x = [0u8; 32];
         a_x.copy_from_slice(&pub_bytes[1..]);
 
-        Ok(SendKey { h, secret, a_x })
+        Ok(SendKey {
+            h,
+            secret,
+            a_x,
+            public: pk,
+        })
     }
 
     /// Return the full compressed public key `A_send` (always even-Y, `0x02` prefix).
     pub fn public_key(&self) -> PublicKey {
-        let secp = Secp256k1::new();
-        let sk = SecretKey::from_slice(&*self.secret)
-            // Safety: we stored a valid secret scalar.
-            .expect("SendKey always holds a valid scalar");
-        PublicKey::from_secret_key(&secp, &sk)
+        self.public
     }
 
     /// Return `ser_x(A_send)`: the 32-byte x-coordinate.
@@ -94,7 +98,7 @@ impl SendKey {
 
     /// Compute the pool-side ECDH shared secret for miner `b_scan` at height `self.h`.
     pub fn derive_pool_side(&self, b_scan: &PublicKey) -> Result<SharedSecret, Error> {
-        let sk = SecretKey::from_slice(&*self.secret).expect("SendKey always holds a valid scalar");
+        let sk = SecretKey::from_slice(&*self.secret).map_err(|_| Error::InvalidScalar)?;
         SharedSecret::pool_side(self.h, &sk, b_scan)
     }
 }
