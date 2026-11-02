@@ -162,6 +162,9 @@ pub struct Jd {
     /// MUST stay true (SPEC §3.5). Validation rejects false.
     #[serde(default = "default_true")]
     pub grace_same_height_only: bool,
+    /// JDP listener (always on, matching the bundled JDS decision).
+    #[serde(default = "default_jd_listen")]
+    pub listen: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -311,6 +314,9 @@ fn default_dist_interval() -> u64 {
 fn default_rebalance_bps() -> u16 {
     100
 }
+fn default_jd_listen() -> String {
+    "0.0.0.0:34264".into()
+}
 fn default_window_hot_blocks() -> u32 {
     6
 }
@@ -403,6 +409,7 @@ impl Default for Jd {
             distribution_interval_secs: default_dist_interval(),
             distribution_rebalance_bps: default_rebalance_bps(),
             grace_same_height_only: true,
+            listen: default_jd_listen(),
         }
     }
 }
@@ -562,6 +569,7 @@ impl Config {
             parse_listen(&self.sv1.listen)?;
         }
         parse_listen(&self.api.listen)?;
+        parse_listen(&self.jd.listen)?;
 
         if let Some(ark) = &self.ark {
             if ark.enabled {

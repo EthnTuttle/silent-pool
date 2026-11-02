@@ -51,6 +51,7 @@ down_debounce = 20
 cooldown_secs = 300
 
 [jd]
+listen = "127.0.0.1:34264"
 distribution_interval_secs = 60
 distribution_rebalance_bps = 100
 grace_same_height_only = true

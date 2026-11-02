@@ -5,6 +5,7 @@ use clap::Parser;
 use spc_pool::api_backend::StoreBackend;
 use spc_pool::config::{Config, Role};
 use spc_pool::front::{Front, FrontConfig, FrontEvent};
+use spc_pool::jds_server::JdsServer;
 use spc_pool::sv1_server::Sv1Server;
 use spc_pool::sv2_server::Sv2Server;
 use spc_pool::template::{MockTemplateSource, Template, TemplateSource};
@@ -71,6 +72,7 @@ async fn main() -> anyhow::Result<()> {
     let network = config.network().map_err(|e| anyhow::anyhow!(e))?;
     if roles.contains(&Role::Api) {
         let store = Store::connect(&config.storage.postgres).await?;
+        store.migrate().await?;
         let backend = std::sync::Arc::new(StoreBackend::new(
             store,
             serde_json::json!({
@@ -121,6 +123,10 @@ async fn main() -> anyhow::Result<()> {
     let (sv2_addr, _sv2_handle) = sv2.bind(&config.pool.listen).await?;
     tracing::info!(%sv2_addr, "native SV2 listener ready");
 
+    let jds = JdsServer::new(config.pool.front_id);
+    let (jds_addr, _jds_handle) = jds.bind(&config.jd.listen).await?;
+    tracing::info!(%jds_addr, "JDS listener ready");
+
     let source: Arc<dyn TemplateSource> = match config.template.source.as_str() {
         "rpc" => {
             #[cfg(feature = "rpc")]
@@ -156,6 +162,9 @@ async fn main() -> anyhow::Result<()> {
     );
     let job = front.refresh().await?;
     publish_events(&streams, front.take_events()).await;
+    if let Some(dist) = front.distribution() {
+        let _ = jds.publish(dist.height, jd_distribution(dist)).await;
+    }
     server.publish(job.clone()).await;
     sv2.publish(job).await;
 
@@ -171,6 +180,9 @@ async fn main() -> anyhow::Result<()> {
                 match front.refresh().await {
                     Ok(job) => {
                         publish_events(&streams, front.take_events()).await;
+                        if let Some(dist) = front.distribution() {
+                            let _ = jds.publish(dist.height, jd_distribution(dist)).await;
+                        }
                         server.publish(job.clone()).await;
                         sv2.publish(job).await;
                     }
@@ -222,5 +234,31 @@ async fn publish_events(streams: &Option<Streams>, events: Vec<FrontEvent>) {
         if let Err(err) = streams.add(stream, &payload).await {
             tracing::error!(error = %err, stream, "stream publish failed");
         }
+    }
+}
+
+fn jd_distribution(dist: &spc_accounting::Distribution) -> spc_ext::SetPayoutDistribution {
+    use spc_ext::TxOut;
+    let mut outputs = dist.outputs.iter();
+    let (pool_script, pool_value) = outputs.next().cloned().unwrap_or_default();
+    let payouts: Vec<TxOut> = outputs
+        .map(|(script, value)| TxOut {
+            script: script.clone(),
+            value: *value,
+        })
+        .collect();
+    let additional = vec![TxOut {
+        script: spc_crypto::emit_op_return(&dist.a_send_x).to_bytes(),
+        value: 0,
+    }];
+    spc_ext::SetPayoutDistribution {
+        distribution_id: 0,
+        pool_payout: TxOut {
+            script: pool_script,
+            value: pool_value.max(1),
+        },
+        dust_limits: vec![330; payouts.len()],
+        payouts,
+        additional_outputs: additional,
     }
 }
