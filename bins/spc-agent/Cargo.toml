@@ -26,6 +26,7 @@ hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 stratum-core = { version = "0.6.0", features = ["sv1"] }
+stratum-apps = { version = "0.8", default-features = false, features = ["network", "core"] }
 thiserror.workspace = true
 tokio.workspace = true
 toml.workspace = true
@@ -34,3 +35,4 @@ tracing-subscriber.workspace = true
 
 [dev-dependencies]
 rand.workspace = true
+spc-pool = { path = "../spc-pool" }
