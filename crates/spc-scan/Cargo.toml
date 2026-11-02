@@ -12,6 +12,7 @@ rpc = ["dep:bitcoincore-rpc"]
 
 [dependencies]
 spc-crypto.workspace = true
+spc-share-ext.workspace = true
 anyhow.workspace = true
 bitcoin.workspace = true
 clap.workspace = true
@@ -21,6 +22,9 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 bitcoincore-rpc = { version = "0.19", optional = true }
+stratum-core = { version = "0.6.0" }
+stratum-apps = { version = "0.8", default-features = false, features = ["network", "core"] }
+tokio.workspace = true
 
 [dev-dependencies]
 rand.workspace = true

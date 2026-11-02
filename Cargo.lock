@@ -3047,7 +3047,11 @@ dependencies = [
  "serde",
  "serde_json",
  "spc-crypto",
+ "spc-share-ext",
+ "stratum-apps",
+ "stratum-core",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]

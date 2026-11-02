@@ -3,8 +3,8 @@ use std::str::FromStr;
 
 use clap::{Parser, Subcommand};
 use spc_scan::{
-    export_tweaks, parse_scan_key, scan_block, scan_light, BlockSource, FileSource, LightProof,
-    TweakFormat,
+    export_tweaks, hex_decode, parse_scan_key, scan_block, scan_light, BlockSource, FileSource,
+    LightProof, TweakFormat,
 };
 
 #[derive(Parser)]
@@ -62,11 +62,23 @@ enum Command {
         #[arg(long, default_value = "regtest")]
         network: String,
     },
+    /// Audit a pool block's type-32 window with sampled shares.
+    Audit {
+        #[arg(long)]
+        pool: String,
+        #[arg(long)]
+        block: String,
+        #[arg(long, default_value_t = 4)]
+        slices: usize,
+        #[arg(long, default_value_t = 8)]
+        shares: usize,
+    },
     /// Run the embedded vector checks.
     Vectors,
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::GenAddress { network } => {
@@ -90,6 +102,30 @@ fn main() -> anyhow::Result<()> {
                     "b_spend": spc_scan::hex(&b_spend.serialize()),
                     "scan_key": spc_scan::hex(&scan.secret_bytes()),
                     "spend_key": spc_scan::hex(&spend.secret_bytes()),
+                })
+            );
+        }
+        Command::Audit {
+            pool,
+            block,
+            slices,
+            shares,
+        } => {
+            let addr = pool
+                .parse()
+                .map_err(|e| anyhow::anyhow!("pool address: {e}"))?;
+            let bytes =
+                hex_decode(&block).ok_or_else(|| anyhow::anyhow!("block hash is not hex"))?;
+            let hash: [u8; 32] = bytes
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("block hash must be 32 bytes"))?;
+            let (report, _) = spc_scan::audit::run(addr, hash, slices, shares).await?;
+            println!(
+                "{}",
+                serde_json::json!({
+                    "slices": report.slices,
+                    "shares": report.shares,
+                    "verified": report.verified,
                 })
             );
         }

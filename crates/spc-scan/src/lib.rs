@@ -16,6 +16,8 @@ use thiserror::Error;
 
 use spc_crypto::{input_hash, tier_tweaks, SharedSecret};
 
+pub mod audit;
+
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Error)]
