@@ -245,11 +245,12 @@ The one unifying trick that keeps this tractable: in pool-template mode every sh
 
 ### Phase 7: Ark tier — `ark` role, SPc extension, SP-aware agent wallet (≈ 4 weeks, estimate)
 **Goal**: a sub-threshold miner running `spc-agent` is paid over Ark at 6 confirmations from the pool's float, against a stock third-party `captaind`, and the agent claims and refreshes the VTXO.
+**Note (2026-11-02)**: the transport is designed and spec O13 is resolved - stock `bark-wallet` pool adapter (send-only, plus a separate board/maturity loop) and an in-tree thin agent wallet over `ark-lib` + `bark-server-rpc`, with bark pinned at `c419159` (`docs/decisions/2026-11-02-bark-adapter.md`, UPSTREAM_DEPS.md). No upstream patch or fork for v0.1. The remaining external `captaind` integration - running the stock third-party server on regtest per §11.9 and against live production parameters - is still open implementation work, not design.
 **Tasks**:
 - [ ] `ark` role (spec §11.3): own seed and secret store; pool output keychain `m/86'/coin'/1'`, xpub exported as `pool_payout_descriptor`; per-block discovery of the height-indexed pool output; float sends from signed `ArkSendOrder`s; at maturity board only `float_target_sats − float_balance` via `board_funding_address` + `board_psbt`, rest left as operator surplus.
 - [ ] `payout` side: `ark_payout` scheduling at booking, order signing, receipts, `failed_to_pending` after `retry_blocks`, forfeiture booking.
 - [ ] `spc-ext` (`0x5350`): `SetArkIdentity` (signed by `b_scan`), `RegisterEpochMailboxes`, `ArkPayoutNotice` (spec §11.4).
-- [ ] `spc-agent`: mandatory registration before submitting shares; SP-aware bark keystore (extra-keys source for `pubkey_keypair` / `find_vtxo_keypairs` / `get_vtxo_key` / `find_signable_clause`, RESULTS.md ~150–300 lines; patch vs fork is spec O13); mailbox reads per mode (MAILBOX.md, `PAYOUT_DELAY = 6`); refresh and offboard-on-exit.
+- [ ] `spc-agent`: mandatory registration before submitting shares; SP-aware keystore built in-tree over `ark-lib` + `bark-server-rpc` (O13 resolved 2026-11-02: no upstream patch or fork for v0.1 - `docs/decisions/2026-11-02-bark-adapter.md`); mailbox reads per mode (MAILBOX.md, `PAYOUT_DELAY = 6`); refresh and offboard-on-exit.
 **Dependencies**: Phases 1–3; `spc_ark`, `spc_ark_mailbox`, `spc_ark_client` prototypes (frozen vectors).
 **Validation**:
 - validates: spec §11.9 integration test on regtest with stock `captaind` in third-party role

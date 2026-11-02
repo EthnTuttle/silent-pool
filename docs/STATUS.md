@@ -7,9 +7,8 @@ reviews are recorded for risky packets, and the commit is pushed.
 ## Active sessions
 
 - `ses_e62e807b6ffeSH7wErs28rvi6Z` — settlement/Ark fixes: pending status, chain view, forfeiture, Redis dedupe (`tff/kimi-k3`).
-- `ses_e62eb23beffe0je1nbzg2cc235` — bark adapter decision record (`tff/kimi-k3`).
 
-The integrated review returned REQUEST CHANGES (11 blockers); the three fix sessions above own disjoint files. This thread only dispatches, verifies commits and updates this board.
+The integrated review returned REQUEST CHANGES (11 blockers); the fix session above owns its files. This thread only dispatches, verifies commits and updates this board.
 
 ## Current state
 
@@ -20,6 +19,9 @@ stock-bark `ark` adapter, and the type-32 network server.
 
 ## Done
 
+- Bark adapter decision record (commit `25f0a01`): stock `bark-wallet` pool
+  transport, in-tree agent keystore, O13 resolved; follow-up doc edits applied
+  (UPSTREAM_DEPS bark pin, SPEC §10 O13 row, ROADMAP Phase 7 note).
 - `docs/OPERATIONS.md` and `docs/API.md` (commit `7fcbd64`).
 - Protocol fixes: SV2 one-identity-per-connection, JD-only carrier,
   own-payout verification, `OP_RETURN` value guard, build-time budget check
