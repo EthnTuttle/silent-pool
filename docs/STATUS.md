@@ -44,12 +44,14 @@ stock-bark `ark` adapter, and the type-32 network server.
 
 ## Remaining
 
-1. Complete the JDC declaration path: token allocation, template -> coinbase
-   construction, `DeclareMiningJob`/`SetCustomMiningJob` with the TLV, and the
-   fallback rules. Distribution receipt and JDS acceptance are tested.
-2. Replace the mock Ark transport with a stock bark wallet adapter, and emit
-   `spc:ark:orders` from `payout` when an Ark-rail entry settles.
-3. Add the `spc-scan audit` client (sampling verifier + type-32 request loop)
+1. Complete the JDC coinbase construction: the token allocation and
+   `DeclareMiningJob` TLV path are live, but the declaration currently carries
+   empty outputs; it must build the distribution coinbase and the JDS must
+   recompute it from the mined template. Fallback rules are not wired.
+2. Replace the mock Ark transport with a stock bark wallet adapter. `payout`
+   now emits signed, capped orders; the role verifies them and is ready for a
+   transport.
+3. Add the `spc-scan audit` client (type-32 request loop + sampling verifier)
    and the seeded cheat-slice test; the SV2 server side is live.
 4. Run the plan's normative and security reviews over the integrated tree.
 5. Testnet soak and third-party `spc-scan` recovery.
