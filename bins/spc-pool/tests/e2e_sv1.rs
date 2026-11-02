@@ -55,7 +55,13 @@ fn config() -> FrontConfig {
 #[tokio::test]
 async fn sv1_miner_finds_a_block() {
     let source = Arc::new(MockTemplateSource::new(template()));
-    let mut front = Front::new(config(), source.clone());
+    let mut front = Front::new(
+        config(),
+        source.clone(),
+        std::sync::Arc::new(std::sync::Mutex::new(
+            spc_pool::type32::Type32Store::default(),
+        )),
+    );
     let job = front.refresh().await.unwrap();
 
     let (tx, mut rx) = mpsc::channel(8);

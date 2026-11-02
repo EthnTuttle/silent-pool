@@ -30,6 +30,8 @@ use tokio::sync::{broadcast, mpsc, Mutex};
 
 use crate::identity::{parse_identity, ChannelIdentity};
 use crate::sv1::{Job, Share};
+use crate::type32::Type32Store;
+use spc_share_ext::{Message as Type32Message, EXTENSION_TYPE};
 
 #[derive(Clone)]
 pub struct Sv2Server {
@@ -39,6 +41,7 @@ pub struct Sv2Server {
     current: Arc<Mutex<Option<Job>>>,
     jobs: broadcast::Sender<Job>,
     shares: mpsc::Sender<Share>,
+    type32: Arc<std::sync::Mutex<Type32Store>>,
 }
 
 struct Channel {
@@ -48,7 +51,11 @@ struct Channel {
 }
 
 impl Sv2Server {
-    pub fn new(network: spc_crypto::Network, shares: mpsc::Sender<Share>) -> Self {
+    pub fn new(
+        network: spc_crypto::Network,
+        shares: mpsc::Sender<Share>,
+        type32: Arc<std::sync::Mutex<Type32Store>>,
+    ) -> Self {
         let secp = secp256k1_legacy::Secp256k1::new();
         let mut rng = rand::thread_rng();
         let kp = secp256k1_legacy::Keypair::new(&secp, &mut rng);
@@ -62,6 +69,7 @@ impl Sv2Server {
             current: Arc::new(Mutex::new(None)),
             jobs,
             shares,
+            type32,
         }
     }
 
@@ -107,7 +115,12 @@ impl Sv2Server {
                 frame = read.read_frame() => {
                     let mut frame = frame.map_err(|e| format!("read: {e}"))?;
                     let msg_type = frame.header().msg_type();
+                    let ext_type = frame.header().ext_type_without_channel_msg();
                     let mut payload = frame.payload().to_vec();
+                    if ext_type == EXTENSION_TYPE {
+                        self.handle_type32(&mut write, msg_type, &payload).await?;
+                        continue;
+                    }
                     match msg_type {
                         MESSAGE_TYPE_SETUP_CONNECTION => {
                             let _msg: SetupConnection = binary_sv2::from_bytes(&mut payload)
@@ -235,6 +248,54 @@ impl Sv2Server {
         self.network
     }
 
+    async fn handle_type32(
+        &self,
+        write: &mut stratum_apps::network_helpers::noise_stream::NoiseTcpWriteHalf,
+        msg_type: u8,
+        payload: &[u8],
+    ) -> Result<(), String> {
+        let message = match Type32Message::decode(msg_type, payload) {
+            Ok(m) => m,
+            Err(_) => {
+                let err = Type32Message::Error {
+                    request_id: 0,
+                    code: "invalid-message".into(),
+                };
+                return write_type32(write, &err).await;
+            }
+        };
+        let response = match message {
+            Type32Message::GetWindow { request_id, .. } => {
+                let slices = self.type32.lock().map(|s| s.window()).unwrap_or_default();
+                Type32Message::GetWindowSuccess { request_id, slices }
+            }
+            Type32Message::GetShares {
+                request_id,
+                slice_id,
+                indices,
+            } => {
+                let shares = self
+                    .type32
+                    .lock()
+                    .map(|s| s.shares(slice_id, &indices))
+                    .unwrap_or_default();
+                Type32Message::GetSharesSuccess { request_id, shares }
+            }
+            Type32Message::GetTransactionsInJob { request_id, .. } => {
+                Type32Message::GetTransactionsInJobSuccess {
+                    request_id,
+                    txids: Vec::new(),
+                }
+            }
+            Type32Message::NewBlockFound { .. } => return Ok(()),
+            other => Type32Message::Error {
+                request_id: 0,
+                code: format!("unexpected message {}", other.message_type()),
+            },
+        };
+        write_type32(write, &response).await
+    }
+
     async fn current_job_id(&self) -> u32 {
         self.current
             .lock()
@@ -300,6 +361,25 @@ where
         .write_frame(frame)
         .await
         .map_err(|e| format!("write: {e}"))
+}
+
+async fn write_type32(
+    write: &mut stratum_apps::network_helpers::noise_stream::NoiseTcpWriteHalf,
+    msg: &Type32Message,
+) -> Result<(), String> {
+    let payload = msg.encode().map_err(|e| format!("type32 encode: {e}"))?;
+    let mut bytes = Vec::with_capacity(6 + payload.len());
+    bytes.extend_from_slice(&EXTENSION_TYPE.to_le_bytes());
+    bytes.push(msg.message_type());
+    let len = u32::try_from(payload.len()).map_err(|_| "type32 too long")?;
+    bytes.extend_from_slice(&len.to_le_bytes()[..3]);
+    bytes.extend_from_slice(&payload);
+    let frame = stratum_core::codec_sv2::SerializedFrame::from_bytes(bytes)
+        .map_err(|e| format!("type32 frame: {e:?}"))?;
+    write
+        .write_frame(frame)
+        .await
+        .map_err(|e| format!("type32 write: {e}"))
 }
 
 fn parse_job_id(s: &str) -> u32 {

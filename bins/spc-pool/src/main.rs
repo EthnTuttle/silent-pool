@@ -102,6 +102,9 @@ async fn main() -> anyhow::Result<()> {
         }
         return Ok(());
     }
+    let type32 = std::sync::Arc::new(std::sync::Mutex::new(
+        spc_pool::type32::Type32Store::default(),
+    ));
     let (tx, mut rx) = mpsc::channel(4096);
     let server = Sv1Server::new(
         network,
@@ -114,7 +117,7 @@ async fn main() -> anyhow::Result<()> {
         let (addr, _handle) = server.bind(&config.sv1.listen).await?;
         tracing::info!(%addr, "native SV1 listener ready");
     }
-    let sv2 = Sv2Server::new(network, tx);
+    let sv2 = Sv2Server::new(network, tx, type32.clone());
     let (sv2_addr, _sv2_handle) = sv2.bind(&config.pool.listen).await?;
     tracing::info!(%sv2_addr, "native SV2 listener ready");
 
@@ -149,6 +152,7 @@ async fn main() -> anyhow::Result<()> {
     let mut front = Front::new(
         FrontConfig::from_config(&config).map_err(|e| anyhow::anyhow!(e))?,
         source.clone(),
+        type32.clone(),
     );
     let job = front.refresh().await?;
     publish_events(&streams, front.take_events()).await;

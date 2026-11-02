@@ -72,11 +72,23 @@ where
 #[allow(unused_assignments)]
 async fn sv2_miner_finds_a_block() {
     let source = Arc::new(MockTemplateSource::new(template()));
-    let mut front = Front::new(config(), source.clone());
+    let mut front = Front::new(
+        config(),
+        source.clone(),
+        std::sync::Arc::new(std::sync::Mutex::new(
+            spc_pool::type32::Type32Store::default(),
+        )),
+    );
     let job = front.refresh().await.unwrap();
 
     let (tx, mut rx) = mpsc::channel(8);
-    let server = Sv2Server::new(Network::Regtest, tx);
+    let server = Sv2Server::new(
+        Network::Regtest,
+        tx,
+        std::sync::Arc::new(std::sync::Mutex::new(
+            spc_pool::type32::Type32Store::default(),
+        )),
+    );
     let (addr, _h) = server.bind("127.0.0.1:0").await.unwrap();
     server.publish(job.clone()).await;
 

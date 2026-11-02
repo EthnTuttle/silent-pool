@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub const EXTENSION_TYPE: u16 = 0x0020;
+pub mod messages;
+pub use messages::Message;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum Error {
@@ -20,6 +22,8 @@ pub enum Error {
     Trailing,
     #[error("unknown message type {0}")]
     MessageType(u8),
+    #[error("invalid length")]
+    Length,
     #[error("merkle path does not verify")]
     Merkle,
     #[error("slice difficulty is understated")]

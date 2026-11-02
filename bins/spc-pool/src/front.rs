@@ -2,7 +2,7 @@
 //! distribution and the job the miners are hashing (SPEC §2.2, §3.3, §4.7).
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use bitcoin::hashes::Hash;
 use bitcoin::pow::{CompactTarget, Target};
@@ -19,6 +19,7 @@ use crate::block::{assemble, AssembledBlock};
 use crate::coinbase::{build_pool_template, CoinbaseTemplate};
 use crate::sv1::{Job, Share};
 use crate::template::{Template, TemplateError, TemplateSource};
+use crate::type32::Type32Store;
 
 #[derive(Debug, Error)]
 pub enum FrontError {
@@ -72,6 +73,7 @@ pub struct Front {
     ark: BTreeMap<SpId, ArkCapability>,
     last_block: Option<AssembledBlock>,
     events: Vec<FrontEvent>,
+    type32: Arc<Mutex<Type32Store>>,
 }
 
 #[derive(Clone, Debug)]
@@ -107,7 +109,11 @@ impl FrontConfig {
 }
 
 impl Front {
-    pub fn new(cfg: FrontConfig, source: Arc<dyn TemplateSource>) -> Self {
+    pub fn new(
+        cfg: FrontConfig,
+        source: Arc<dyn TemplateSource>,
+        type32: Arc<Mutex<Type32Store>>,
+    ) -> Self {
         Self {
             cfg,
             source,
@@ -124,6 +130,7 @@ impl Front {
             ark: BTreeMap::new(),
             last_block: None,
             events: Vec::new(),
+            type32,
         }
     }
 
@@ -385,6 +392,9 @@ impl Front {
                         diff_fee_sum: *df,
                     })
                     .collect();
+                if let Ok(mut store) = self.type32.lock() {
+                    store.add(&open);
+                }
                 self.events.push(FrontEvent::Slice(SliceEvent {
                     slice_id: open.slice_id,
                     height: open.height,
@@ -509,7 +519,11 @@ mod tests {
     #[tokio::test]
     async fn refresh_builds_a_job_with_the_carrier() {
         let source = Arc::new(MockTemplateSource::new(template()));
-        let mut front = Front::new(cfg(), source);
+        let mut front = Front::new(
+            cfg(),
+            source,
+            std::sync::Arc::new(std::sync::Mutex::new(crate::type32::Type32Store::default())),
+        );
         let job = front.refresh().await.unwrap();
         assert_eq!(job.height, 800_000);
         // coinb1 ends with the 32-byte key; coinb2 starts with the sequence.
@@ -523,7 +537,11 @@ mod tests {
     #[tokio::test]
     async fn a_share_rolls_into_the_slice_and_can_find_a_block() {
         let source = Arc::new(MockTemplateSource::new(template()));
-        let mut front = Front::new(cfg(), source.clone());
+        let mut front = Front::new(
+            cfg(),
+            source.clone(),
+            std::sync::Arc::new(std::sync::Mutex::new(crate::type32::Type32Store::default())),
+        );
         front.refresh().await.unwrap();
 
         // A valid identity derived from a scan/spend key pair.

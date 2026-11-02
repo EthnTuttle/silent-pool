@@ -18,5 +18,6 @@ pub mod sv2_server;
 pub mod template;
 #[cfg(feature = "rpc")]
 pub mod template_rpc;
+pub mod type32;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
