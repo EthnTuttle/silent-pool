@@ -76,6 +76,8 @@ stock-bark `ark` adapter, and the type-32 network server.
 
 The earlier parallel run of the two harnesses collided on bitcoind's port; run them sequentially.
 
+Re-review: 10/12 blockers resolved; 2.1 (make the extranonce invariant explicit) and 7.7 (parse `ark_id` from the address) remain. Session `ses_e622c1a94ffeuyMOeltiNimQUL` owns the final fix.
+
 ## Review
 
 `docs/reviews/2026-11-02-integrated-review.md` — REQUEST CHANGES. The blockers
