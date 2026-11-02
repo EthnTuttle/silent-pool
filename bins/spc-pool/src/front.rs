@@ -180,8 +180,8 @@ impl Front {
                 self.height,
                 template.prev_hash,
                 self.cfg.front_id,
-                0,
-                0,
+                template.height as u64,
+                template.fees,
             ));
         }
 
@@ -279,10 +279,11 @@ impl Front {
             },
         );
 
+        let d = difficulty_from_bits(template.bits);
         let rec = ShareRec {
             sp_id: share.sp_id,
-            d: 1,
-            job_fees: share.job_fees,
+            d: u64::try_from(d).unwrap_or(u64::MAX),
+            job_fees: template.fees,
             job_id: parse_job_id(&share.job_id),
             nonce: share.nonce,
             ntime: share.ntime,
@@ -442,8 +443,8 @@ impl Front {
                 self.height,
                 self.job.as_ref().map(|j| j.prev_hash).unwrap_or([0u8; 32]),
                 self.cfg.front_id,
-                0,
-                0,
+                self.height as u64,
+                self.template.as_ref().map(|t| t.fees).unwrap_or(0),
             ));
         }
     }
@@ -582,5 +583,183 @@ mod tests {
         let block = front.on_share(share).unwrap().expect("block");
         assert_eq!(block.header.len(), 80);
         assert_eq!(front.sealed_slices().len(), 0);
+    }
+
+    /// Template with explicit bits and fees for the accounting tests.
+    fn template_with(bits: u32, fees: u64) -> Template {
+        Template {
+            height: 800_000,
+            prev_hash: [0x11; 32],
+            version: 0x2000_0000,
+            bits,
+            curtime: 1_700_000_000,
+            subsidy: 312_500_000,
+            fees,
+            coinbase_value: 312_500_000 + fees,
+            transactions: vec![],
+            merkle_branches: vec![],
+            coinbase_output_max_additional_size: 50_000,
+        }
+    }
+
+    /// A source whose template the test can change between refreshes.
+    struct MutableSource {
+        t: std::sync::Mutex<Template>,
+    }
+
+    impl MutableSource {
+        fn new(t: Template) -> Self {
+            Self {
+                t: std::sync::Mutex::new(t),
+            }
+        }
+        fn set(&self, t: Template) {
+            *self.t.lock().expect("poisoned") = t;
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl TemplateSource for MutableSource {
+        async fn get_template(&self) -> Result<Template, TemplateError> {
+            Ok(self.t.lock().expect("poisoned").clone())
+        }
+        async fn submit_block(&self, _block: &[u8]) -> Result<(), TemplateError> {
+            Ok(())
+        }
+    }
+
+    /// Build a share against the front's current job. `share_hash` does not
+    /// meet the network target, so no block is assembled.
+    fn share(front: &Front, nonce: u32) -> crate::sv1::Share {
+        let secp = bitcoin::secp256k1::Secp256k1::new();
+        let scan_sk = bitcoin::secp256k1::SecretKey::from_slice(&[0x11; 32]).unwrap();
+        let spend_sk = bitcoin::secp256k1::SecretKey::from_slice(&[0x12; 32]).unwrap();
+        let scan = bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &scan_sk);
+        let spend = bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &spend_sk);
+        crate::sv1::Share {
+            sp_id: spc_crypto::sp_id(&scan, &spend),
+            b_scan: scan.serialize(),
+            b_spend: spend.serialize(),
+            job_id: front.job().unwrap().job_id.clone(),
+            nonce,
+            ntime: 1_700_000_000,
+            version: 0x2000_0000,
+            extranonce: vec![0xaa; 8],
+            share_index: 0,
+            // The listeners leave this at 0; the front substitutes the
+            // template's fees (REVIEW 8.5/8.6).
+            job_fees: 0,
+            coinbase: front.job().unwrap().coinb1.clone(),
+            merkle_root: [0u8; 32],
+            share_hash: [0xff; 32],
+        }
+    }
+
+    fn cfg_with(mut c: FrontConfig, f: impl Fn(&mut FrontConfig)) -> FrontConfig {
+        f(&mut c);
+        c
+    }
+
+    fn slice_events(front: &mut Front) -> Vec<SliceEvent> {
+        front
+            .take_events()
+            .into_iter()
+            .filter_map(|e| match e {
+                FrontEvent::Slice(s) => Some(s),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_share_carries_template_difficulty_and_fees() {
+        // 0x1c00ffff is 8 difficulty doublings below the genesis target.
+        let bits = 0x1c00_ffff;
+        let fees = 12_345;
+        let source = Arc::new(MockTemplateSource::new(template_with(bits, fees)));
+        // Seal on the second share so the first share's record is observable.
+        let cfg = cfg_with(cfg(), |c| c.max_slice_shares = 1);
+        let mut front = Front::new(
+            cfg,
+            source,
+            std::sync::Arc::new(std::sync::Mutex::new(crate::type32::Type32Store::default())),
+        );
+        front.refresh().await.unwrap();
+
+        let expected_d = difficulty_from_bits(bits);
+        assert!(expected_d > 1, "test bits must yield difficulty > 1");
+        assert!(expected_d <= u64::MAX as u128);
+
+        front.on_share(share(&front, 1)).unwrap();
+        front.on_share(share(&front, 2)).unwrap();
+
+        let events = slice_events(&mut front);
+        assert_eq!(events.len(), 1);
+        let sealed = &events[0];
+        // The slice references the template it was opened from (REVIEW 8.7).
+        assert_eq!(sealed.ref_job_id, 800_000);
+        assert_eq!(sealed.ref_fees, fees);
+        assert_eq!(sealed.n_shares, 1);
+        let credit = sealed
+            .credits
+            .iter()
+            .find(|c| c.sp_id == share(&front, 1).sp_id)
+            .expect("credit for the share's identity");
+        // d comes from the template bits, not hardcoded to 1 (REVIEW 8.4).
+        assert_eq!(credit.diff_sum, expected_d);
+        // job_fees comes from the template, not the share's 0 (REVIEW 8.5).
+        assert_eq!(credit.diff_fee_sum, expected_d * fees as u128);
+    }
+
+    #[tokio::test]
+    async fn fee_band_seals_on_job_fee_increase() {
+        let source = Arc::new(MutableSource::new(template_with(0x207f_ffff, 100)));
+        let cfg = cfg_with(cfg(), |c| {
+            c.slice_fee_delta_sats = 50;
+            c.max_slice_shares = 65_000;
+        });
+        let mut front = Front::new(
+            cfg,
+            source.clone(),
+            std::sync::Arc::new(std::sync::Mutex::new(crate::type32::Type32Store::default())),
+        );
+        front.refresh().await.unwrap();
+
+        front.on_share(share(&front, 1)).unwrap();
+        assert_eq!(slice_events(&mut front).len(), 0);
+
+        // JD-style fee increase on the same height: the open slice keeps
+        // ref_fees = 100, so the share at 200 seals it.
+        source.set(template_with(0x207f_ffff, 200));
+        front.refresh().await.unwrap();
+        assert!(slice_events(&mut front).is_empty());
+
+        front.on_share(share(&front, 2)).unwrap();
+        let events = slice_events(&mut front);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].ref_fees, 100);
+
+        // The successor slice pinned the new fee level: another share at 200
+        // stays within the band and does not re-seal.
+        front.on_share(share(&front, 3)).unwrap();
+        assert!(slice_events(&mut front).is_empty());
+    }
+
+    #[tokio::test]
+    async fn pool_template_delta_zero_never_seals_on_fee_band() {
+        let source = Arc::new(MutableSource::new(template_with(0x207f_ffff, 100)));
+        let mut front = Front::new(
+            cfg(), // slice_fee_delta_sats = 0: pool-template mode
+            source.clone(),
+            std::sync::Arc::new(std::sync::Mutex::new(crate::type32::Type32Store::default())),
+        );
+        front.refresh().await.unwrap();
+
+        front.on_share(share(&front, 1)).unwrap();
+        source.set(template_with(0x207f_ffff, 10_000));
+        front.refresh().await.unwrap();
+        front.on_share(share(&front, 2)).unwrap();
+
+        assert!(slice_events(&mut front).is_empty());
     }
 }
