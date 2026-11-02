@@ -65,7 +65,16 @@ stock-bark `ark` adapter, and the type-32 network server.
 
 ## Active sessions (continued)
 
-- `ses_e6244a39bffe4tzubdnupgzJ90` — merge-gate fixes: slice-credit FK placeholder, identity upsert, harness confirmation depth.
+
+## Merge gate (2026-11-02)
+
+- `cargo test --workspace`: pass.
+- `cargo clippy --workspace --all-targets --features rpc -- -D warnings`: clean.
+- `nix flake check`: pass.
+- `testing/regtest-e2e.sh`: pass (front-only).
+- `testing/regtest-services-e2e.sh`: pass (Postgres/Redis, front+payout+api, both blocks confirmed).
+
+The earlier parallel run of the two harnesses collided on bitcoind's port; run them sequentially.
 
 ## Review
 
