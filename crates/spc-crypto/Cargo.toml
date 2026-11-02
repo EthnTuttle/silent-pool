@@ -17,6 +17,7 @@ secp256k1.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 zeroize.workspace = true
+rand.workspace = true
 ark-lib = { version = "0.7.1", optional = true }
 
 [dev-dependencies]

@@ -50,15 +50,15 @@ review). Models are chosen for the task, not for uniformity.
 | Session role | Model | Context it gets | Output |
 |---|---|---|---|
 | Orchestrator (this) | `tff/deepseek-v4.1-flash-1017` | `AGENTS.md`, this plan, `STATUS.md`, diffs | dispatch, verification, status, commits |
-| Spec architect | `ppq/claude-opus-4.6` | `DESIGN.md`, `SPEC.md`, `ROADMAP.md`, relevant decision records | decision records, spec edits, ambiguity rulings |
-| Core implementer A | `ppq/gpt-5.3-codex` | one work packet + cited spec sections + frozen vectors | `spc-crypto`, `spc-accounting`, `spc-scan` |
-| Core implementer B | `ppq/claude-sonnet-4.6` | same, disjoint paths | `spc-store`, `spc-pool` roles, `spc-agent` |
-| Protocol implementer | `ppq/gpt-5.3-codex` | SPEC §3, PR #203 text, `WIRE-FORMATS.md`, `stratum-core` API | SV1/SV2 listeners, 0x0003, 0x0020, 0x5350 |
-| Nix/CI engineer | `ppq/claude-sonnet-4.6` | this plan §7, `UPSTREAM_DEPS.md`, repo tree | `flake.nix`, modules, CI workflows |
-| Code reviewer (normative) | `ppq/claude-opus-4.6` | packet diff, cited spec sections, test list | blocking review findings or approval |
-| Code reviewer (security) | `ppq/gpt-5.4` | diff plus `SPEC.md` §1/§2.2/§11.3/§11.9 | adversarial findings |
-| Docs writer | `ppq/gemini-3.1-pro-preview` | code + spec + decision records | `docs/spc-spec.md`, deltas docs, operator docs |
-| E2E engineer | `ppq/gpt-5.3-codex` | §8.4, regtest harness, built binaries | harness, CI job, soak scripts |
+| Spec architect | `tff/kimi-k3` | `DESIGN.md`, `SPEC.md`, `ROADMAP.md`, relevant decision records | decision records, spec edits, ambiguity rulings |
+| Core implementer A | `tff/kimi-k3` | one work packet + cited spec sections + frozen vectors | `spc-crypto`, `spc-accounting`, `spc-scan` |
+| Core implementer B | `tff/glm-5.3` | same, disjoint paths | `spc-store`, `spc-pool` roles, `spc-agent` |
+| Protocol implementer | `tff/kimi-k3` | SPEC §3, PR #203 text, `WIRE-FORMATS.md`, `stratum-core` API | SV1/SV2 listeners, 0x0003, 0x0020, 0x5350 |
+| Nix/CI engineer | `tff/glm-5.3-flash` | this plan §7, `UPSTREAM_DEPS.md`, repo tree | `flake.nix`, modules, CI workflows |
+| Code reviewer (normative) | `tff/nemotron-3-ultra` | packet diff, cited spec sections, test list | blocking review findings or approval |
+| Code reviewer (security) | `tff/nemotron-3-ultra` | diff plus `SPEC.md` §1/§2.2/§11.3/§11.9 | adversarial findings |
+| Docs writer | `tff/glm-5.3` | code + spec + decision records | `docs/spc-spec.md`, deltas docs, operator docs |
+| E2E engineer | `tff/kimi-k3` | §8.4, regtest harness, built binaries | harness, CI job, soak scripts |
 
 Rules for every child session:
 
