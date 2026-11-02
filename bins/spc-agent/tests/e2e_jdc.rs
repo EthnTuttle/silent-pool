@@ -43,7 +43,9 @@ async fn jds_accepts_a_declaration_with_the_current_id() {
     let id = server.publish(1, dist).await.unwrap();
     let mut jdc = spc_agent::jdc::Jdc::connect(addr).await.unwrap();
     let token = jdc.allocate_token("dev").await.unwrap();
-    jdc.declare(&token, id).await.unwrap();
+    let (prefix, suffix) =
+        spc_agent::jdc::Jdc::build_coinbase(&dist_for_build(), 1_000, 1, &[7u8; 32], 8).unwrap();
+    jdc.declare_job(&token, id, &prefix, &suffix).await.unwrap();
 
     for _ in 0..50 {
         if server.accepted().await == Some(id) {
@@ -52,4 +54,20 @@ async fn jds_accepts_a_declaration_with_the_current_id() {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     panic!("JDS did not accept the declaration");
+}
+
+fn dist_for_build() -> SetPayoutDistribution {
+    SetPayoutDistribution {
+        distribution_id: 0,
+        pool_payout: TxOut {
+            script: vec![0x51, 0x20, 1, 1],
+            value: 100,
+        },
+        payouts: vec![TxOut {
+            script: vec![0x51, 0x20, 2, 2],
+            value: 300,
+        }],
+        dust_limits: vec![0],
+        additional_outputs: vec![],
+    }
 }

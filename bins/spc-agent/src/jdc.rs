@@ -117,16 +117,76 @@ impl Jdc {
         }
     }
 
+    /// Build the coinbase the JDC will declare. `a_send_x` and the height come
+    /// from the template; the carrier is the JD-mode `OP_RETURN`.
+    pub fn build_coinbase(
+        distribution: &SetPayoutDistribution,
+        template_revenue: u64,
+        height: u32,
+        a_send_x: &[u8; 32],
+        extranonce_len: usize,
+    ) -> Result<(Vec<u8>, Vec<u8>), JdcError> {
+        let fixed = distribution
+            .fixed_value()
+            .map_err(|e| JdcError::Codec(e.to_string()))?;
+        let weights: Vec<u64> = distribution.payouts.iter().map(|p| p.value).collect();
+        let amounts = spc_ext::compute_payout_amounts(
+            template_revenue,
+            distribution.pool_payout.value,
+            &weights,
+            &distribution.dust_limits,
+            fixed,
+        )
+        .map_err(|e| JdcError::Codec(e.to_string()))?;
+        let mut outputs: Vec<(bitcoin::script::ScriptBuf, u64)> = Vec::new();
+        outputs.push((
+            bitcoin::script::ScriptBuf::from_bytes(distribution.pool_payout.script.clone()),
+            amounts.pay_p,
+        ));
+        for (out, pay) in distribution.payouts.iter().zip(&amounts.pays) {
+            if let Some(v) = pay {
+                outputs.push((
+                    bitcoin::script::ScriptBuf::from_bytes(out.script.clone()),
+                    *v,
+                ));
+            }
+        }
+        for out in &distribution.additional_outputs {
+            outputs.push((
+                bitcoin::script::ScriptBuf::from_bytes(out.script.clone()),
+                out.value,
+            ));
+        }
+        outputs.push((spc_crypto::emit_op_return(a_send_x), 0));
+        let template = spc_pool::coinbase::build_pool_template(
+            2,
+            height,
+            a_send_x,
+            extranonce_len,
+            &outputs,
+            0,
+        );
+        Ok((template.prefix, template.suffix))
+    }
+
     /// Declare a job with the current distribution id. The caller supplies the
-    /// token from `allocate_token`; the TLV is appended to `excess_data`.
-    pub async fn declare(&mut self, token: &[u8], id: u64) -> Result<(), JdcError> {
+    /// token from `allocate_token` and the prefix/suffix from `build_coinbase`.
+    pub async fn declare_job(
+        &mut self,
+        token: &[u8],
+        id: u64,
+        coinbase_prefix: &[u8],
+        coinbase_suffix: &[u8],
+    ) -> Result<(), JdcError> {
         let tlv = DistributionIdTlv { id }.encode();
         let msg = DeclareMiningJob {
             request_id: 2,
             mining_job_token: B0255::new(token).map_err(|e| JdcError::Codec(e.to_string()))?,
             version: 0x2000_0000,
-            coinbase_tx_prefix: B064K::new(&[]).map_err(|e| JdcError::Codec(e.to_string()))?,
-            coinbase_tx_suffix: B064K::new(&[]).map_err(|e| JdcError::Codec(e.to_string()))?,
+            coinbase_tx_prefix: B064K::new(coinbase_prefix)
+                .map_err(|e| JdcError::Codec(e.to_string()))?,
+            coinbase_tx_suffix: B064K::new(coinbase_suffix)
+                .map_err(|e| JdcError::Codec(e.to_string()))?,
             wtxid_list: Seq064K::try_from(Vec::<U256>::new())
                 .map_err(|e| JdcError::Codec(e.to_string()))?,
             excess_data: B064K::new(&tlv).map_err(|e| JdcError::Codec(e.to_string()))?,
