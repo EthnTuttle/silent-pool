@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::json;
+use spc_ext::ArkSendOrder;
 use spc_store::models::*;
 use spc_store::redis::{RedisError, Streams};
 use spc_store::wire::{ArkRegEvent, BlockEvent, FrontEvent, SliceEvent};
@@ -31,14 +32,24 @@ pub struct PayoutService {
     store: Store,
     streams: Streams,
     confirmation_depth: u32,
+    order_key: Option<secp256k1::Keypair>,
+    max_order_sats: u64,
 }
 
 impl PayoutService {
-    pub fn new(store: Store, streams: Streams, confirmation_depth: u32) -> Self {
+    pub fn new(
+        store: Store,
+        streams: Streams,
+        confirmation_depth: u32,
+        order_key: Option<secp256k1::Keypair>,
+        max_order_sats: u64,
+    ) -> Self {
         Self {
             store,
             streams,
             confirmation_depth,
+            order_key,
+            max_order_sats,
         }
     }
 
@@ -188,6 +199,38 @@ impl PayoutService {
         };
         if let Ok(bytes) = event.encode() {
             let _ = self.streams.add("spc:front:events", &bytes).await;
+        }
+        if let Some(key) = &self.order_key {
+            for entry in &e.entries {
+                if entry.rail != spc_store::wire::Rail::Ark || entry.dest_id.is_empty() {
+                    continue;
+                }
+                if self.max_order_sats > 0 && entry.sats > self.max_order_sats {
+                    tracing::warn!(
+                        sats = entry.sats,
+                        "Ark order exceeds max_order_sats; not emitted"
+                    );
+                    continue;
+                }
+                let Ok(address) = String::from_utf8(entry.dest_id.clone()) else {
+                    tracing::warn!("Ark destination is not UTF-8; not emitted");
+                    continue;
+                };
+                let mut order_id = [0u8; 16];
+                rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut order_id);
+                let mut order = ArkSendOrder {
+                    order_id,
+                    ark_address: address,
+                    sats: entry.sats,
+                    not_before_height: e.height.saturating_add(self.confirmation_depth),
+                    sig: [0u8; 64],
+                };
+                if order.sign(key).is_ok() {
+                    if let Ok(bytes) = order.encode() {
+                        let _ = self.streams.add("spc:ark:orders", &bytes).await;
+                    }
+                }
+            }
         }
         Ok(())
     }

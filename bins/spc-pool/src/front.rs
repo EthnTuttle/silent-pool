@@ -71,6 +71,7 @@ pub struct Front {
     miners: BTreeMap<SpId, MinerKeys>,
     pending: BTreeMap<SpId, u64>,
     ark: BTreeMap<SpId, ArkCapability>,
+    ark_dest: BTreeMap<SpId, Vec<u8>>,
     last_block: Option<AssembledBlock>,
     events: Vec<FrontEvent>,
     type32: Arc<Mutex<Type32Store>>,
@@ -128,6 +129,7 @@ impl Front {
             miners: BTreeMap::new(),
             pending: BTreeMap::new(),
             ark: BTreeMap::new(),
+            ark_dest: BTreeMap::new(),
             last_block: None,
             events: Vec::new(),
             type32,
@@ -156,6 +158,10 @@ impl Front {
 
     pub fn set_ark(&mut self, sp_id: SpId, cap: ArkCapability) {
         self.ark.insert(sp_id, cap);
+    }
+
+    pub fn set_ark_dest(&mut self, sp_id: SpId, dest: Vec<u8>) {
+        self.ark_dest.insert(sp_id, dest);
     }
 
     /// Fetch a template and build the job miners will hash.
@@ -215,7 +221,7 @@ impl Front {
             &routing,
             &self.miners,
             &self.cfg.pool_payout_script,
-            &BTreeMap::new(),
+            &self.ark_dest,
         )?;
 
         let outputs: Vec<(bitcoin::script::ScriptBuf, u64)> = distribution

@@ -52,6 +52,19 @@ async fn main() -> anyhow::Result<()> {
         "spc-pool starting"
     );
 
+    let order_key = config.ark.as_ref().and_then(load_order_key);
+    let max_order_sats = config
+        .ark
+        .as_ref()
+        .map(|a| {
+            if a.max_order_sats == 0 {
+                config.accounting.coinbase_threshold_sats
+            } else {
+                a.max_order_sats
+            }
+        })
+        .unwrap_or(0);
+
     let payout_task = if roles.contains(&Role::Payout) {
         let store = Store::connect(&config.storage.postgres).await?;
         let streams = Streams::connect(&config.storage.redis).await?;
@@ -59,6 +72,8 @@ async fn main() -> anyhow::Result<()> {
             store,
             streams,
             config.accounting.confirmation_depth,
+            order_key,
+            max_order_sats,
         );
         Some(tokio::spawn(async move {
             if let Err(e) = svc.run().await {
@@ -261,4 +276,15 @@ fn jd_distribution(dist: &spc_accounting::Distribution) -> spc_ext::SetPayoutDis
         payouts,
         additional_outputs: additional,
     }
+}
+
+fn load_order_key(ark: &spc_pool::config::Ark) -> Option<bitcoin::secp256k1::Keypair> {
+    let hex_key = std::fs::read_to_string(&ark.order_key_path).ok()?;
+    let bytes = (0..hex_key.trim().len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex_key.trim()[i..i + 2], 16).ok())
+        .collect::<Option<Vec<u8>>>()?;
+    let sk = bitcoin::secp256k1::SecretKey::from_slice(&bytes).ok()?;
+    let secp = bitcoin::secp256k1::Secp256k1::new();
+    Some(bitcoin::secp256k1::Keypair::from_secret_key(&secp, &sk))
 }
