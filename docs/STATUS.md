@@ -108,6 +108,12 @@ Both harnesses bind bitcoind on 18443, so they must be run sequentially.
 ## Review
 
 - Integrated review (2026-11-02): **APPROVE** at `b2a03c4`.
+- Wave 2 normative review (`kimi-k3`, diff `5f36190..HEAD`): **APPROVE** with
+  partial coverage. Verified: share target and credited `d`, `N x d` window,
+  slice ids, sealed `high_water`, bootstrap restore and the `LedgerApplied`
+  watermark, JD weights from the routing. Its two doc nits (the §3.4/§4.1/§4.3
+  prose still stated the old share policy; the changelog named an internal
+  field instead of `[accounting] retain_windows`) are fixed in `5cd79b4`.
 - Wave 2 security review (`nemotron-3-ultra`, diff `5f36190..HEAD`):
   REQUEST CHANGES with 2 blockers. Both were challenged and resolved without
   code change: (B1) the Ark order's destination is what the Ark server must
