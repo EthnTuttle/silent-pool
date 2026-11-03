@@ -45,6 +45,17 @@ struct Cli {
 
 /// A chain view that periodically refreshes the tip from an RPC client.
 /// Used by the `ark` role to enforce `not_before_height` against a live tip.
+/// spc `Network` -> `bitcoin::Network` for the bark wallet.
+#[cfg(feature = "ark")]
+fn bitcoin_network(n: spc_crypto::Network) -> bitcoin::Network {
+    match n {
+        spc_crypto::Network::Mainnet => bitcoin::Network::Bitcoin,
+        spc_crypto::Network::Testnet => bitcoin::Network::Testnet,
+        spc_crypto::Network::Signet => bitcoin::Network::Signet,
+        spc_crypto::Network::Regtest => bitcoin::Network::Regtest,
+    }
+}
+
 #[cfg(feature = "rpc")]
 struct RpcTipSource {
     client: bitcoincore_rpc::Client,
@@ -474,16 +485,115 @@ async fn main() -> anyhow::Result<()> {
         let mut ark_id = [0u8; 4];
         ark_id.copy_from_slice(&ark_id_bytes);
 
-        // Verify send_command is configured
-        let send_command = ark_cfg
-            .send_command
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("ark send_command is required"))?;
-
-        // Connect to Redis
+        // Connect to Redis (both transports emit receipts through it, and
+        // the board loop keeps its durable state in it).
         let streams = Streams::connect(&config.storage.redis)
             .await
             .map_err(|e| anyhow::anyhow!("ark role requires Redis: {e}"))?;
+
+        // Transport selection (SPEC §11.10; config validation already
+        // refused unknown values and "command" outside regtest/signet).
+        // Both transports re-verify the order's address at the boundary:
+        // fail closed on any parse or binding error.
+        let transport: Box<dyn ArkTransport> = match ark_cfg.transport.as_str() {
+            "command" => {
+                let send_command = ark_cfg.send_command.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("ark transport 'command' requires send_command")
+                })?;
+                Box::new(ExternalCommandTransport::new(
+                    send_command.clone(),
+                    30, // 30 second timeout for the external command
+                ))
+            }
+            #[cfg(feature = "ark")]
+            "bark" => {
+                use spc_pool::ark::bark_stock::{load_seed, open_bark_wallet, BarkWalletOptions};
+                use spc_pool::ark::bark_transport::BarkClient as _;
+                use spc_pool::ark::bark_transport::BarkTransport;
+                use spc_pool::ark::board::{
+                    descriptor_account_xpub, BoardingLoop, BoardingPolicy, PoolOutputKeychain,
+                    RedisBoardRegistry, RpcBoardChain,
+                };
+                // Fail-closed startup (decision record, clause 7): the
+                // seed is hex, 64 bytes, owner-only, and must not resolve
+                // under the SPc-side secret store.
+                let seed = load_seed(&ark_cfg.seed_path).map_err(|e| anyhow::anyhow!("{e}"))?;
+                // The pool output keychain under the same seed, and the
+                // cross-check that its account xpub is what
+                // [pool] pool_payout_descriptor commits to: a mismatch
+                // would board outputs the SPc side cannot see.
+                let keychain = PoolOutputKeychain::from_seed(
+                    bitcoin_network(network),
+                    &seed,
+                    &ark_cfg.pool_output_account,
+                )
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+                let descriptor_xpub = descriptor_account_xpub(&config.pool.pool_payout_descriptor)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                if descriptor_xpub != keychain.account_xpub() {
+                    anyhow::bail!(
+                        "the ark seed's {} xpub does not match [pool] pool_payout_descriptor; refusing to board outputs the SPc side cannot see",
+                        ark_cfg.pool_output_account
+                    );
+                }
+                let client = open_bark_wallet(BarkWalletOptions {
+                    network: bitcoin_network(network),
+                    seed,
+                    datadir: ark_cfg.datadir.clone(),
+                    server_address: ark_cfg.server.clone(),
+                    bitcoind_url: config.template.rpc_url.clone(),
+                    bitcoind_user: config.template.rpc_user.clone(),
+                    bitcoind_pass: config.template.rpc_pass.clone(),
+                    // bark's own mainnet default; the feerate floor only
+                    // bites before the first chain estimate.
+                    fallback_fee_sat_vb: 2,
+                })
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+                // One full sync before the service starts consuming
+                // orders: a send against a never-synced wallet would fail
+                // on missing inputs, and an unreachable server must be a
+                // startup error, not a stream of Failed receipts.
+                client
+                    .maintenance()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("initial ark wallet sync: {e}"))?;
+                // Boarding: the separate refill surface (SPEC §11.3
+                // "Refilling (H_f + 100)"), on the same wallet but never
+                // reachable from the order stream.
+                let board_chain = RpcBoardChain::new(
+                    &config.template.rpc_url,
+                    &config.template.rpc_user,
+                    &config.template.rpc_pass,
+                )?;
+                let boarding = BoardingLoop::new(
+                    board_chain,
+                    client.clone(),
+                    RedisBoardRegistry::new(streams.clone()),
+                    keychain,
+                    BoardingPolicy::new(ark_cfg.float_target_sats, ark_cfg.min_remaining_blocks),
+                );
+                tokio::spawn(async move {
+                    boarding.run(Duration::from_secs(60)).await;
+                });
+                Box::new(BarkTransport::new(
+                    client,
+                    ark_id,
+                    network != spc_crypto::Network::Mainnet,
+                ))
+            }
+            #[cfg(not(feature = "ark"))]
+            "bark" => {
+                anyhow::bail!(
+                    "ark transport 'bark' requires the build feature 'ark' (stock bark-wallet at the UPSTREAM_DEPS.md pin)"
+                )
+            }
+            other => {
+                anyhow::bail!(
+                    "unknown ark transport '{other}' (config validation should have caught this)"
+                )
+            }
+        };
 
         // Build RPC tip source for live chain tip
         let rpc_client = bitcoincore_rpc::Client::new(
@@ -505,10 +615,6 @@ async fn main() -> anyhow::Result<()> {
         let verifier =
             OrderVerifier::new(order_pubkey, ark_id, max_order_sats, ark_cfg.max_daily_sats);
         let dedupe = SeenOrders::new(streams.clone(), ark_cfg.retry_blocks);
-        let transport: Box<dyn ArkTransport> = Box::new(ExternalCommandTransport::new(
-            send_command.clone(),
-            30, // 30 second timeout for the external command
-        ));
         let service = Arc::new(tokio::sync::Mutex::new(ArkService::new(
             verifier,
             dedupe,
