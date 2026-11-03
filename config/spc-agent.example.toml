@@ -10,9 +10,10 @@ request_share_accounting = true
 [downstream]
 listen = "127.0.0.1:34255"           # stays plain TCP: ASIC firmware does not speak Tor
 
-[net]                                # SPEC §3.8; covers upstream SV2, JDP and Ark/mailbox traffic
-proxy = ""                           # e.g. "socks5h://127.0.0.1:9050"; a .onion upstream with no proxy is a startup error
-stream_isolation = true
+# STATUS: SPEC §3.8 - parser support lands with the Tor transport packet; this build rejects these keys.
+# [net]                              # SPEC §3.8; covers upstream SV2, JDP and Ark/mailbox traffic
+# proxy = ""                         # e.g. "socks5h://127.0.0.1:9050"; a .onion upstream with no proxy is a startup error
+# stream_isolation = true
 
 # [jd]                               # JDC role (SPEC §3.2, §3.5, §3.6)
 # enabled = true

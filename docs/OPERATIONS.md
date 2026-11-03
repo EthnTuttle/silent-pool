@@ -97,6 +97,11 @@ configs: `config/spc-pool.example.toml`, `config/spc-agent.example.toml`.
 
 ### Tor reach (optional)
 
+**Status: the requirement is SPEC §3.8, but the current binary does not accept
+`[reach]` or `[net]` yet - parser support lands with the Tor transport packet.
+This build rejects those keys, so a deployment MUST NOT rely on this section
+yet; the procedure below is the target.**
+
 Tor is a transport option, not a deployment mode (SPEC §3.8). The pool does
 not create or manage onion keys - the Tor daemon does, and forwards to the
 listener the pool already binds.
