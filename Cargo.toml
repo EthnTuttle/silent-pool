@@ -45,3 +45,10 @@ toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 zeroize = { version = "1", features = ["derive"] }
+
+# The bark pin (UPSTREAM_DEPS.md): crates.io `ark-lib` 0.7.1 and the git
+# crate at c419159 are the same package, so `Address`, `Vtxo` and `Keypair`
+# types cross between spc-crypto, the pool's ark adapter and bark's own
+# RPC bindings (decision 2026-11-02-bark-adapter.md, clause 1).
+[patch.crates-io]
+ark-lib = { git = "https://gitlab.com/ark-bitcoin/bark.git", rev = "c419159fa54085572f8ca72d2ba1716556a9d3eb" }

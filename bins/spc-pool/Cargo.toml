@@ -8,7 +8,7 @@ rust-version.workspace = true
 
 [features]
 default = []
-ark = ["spc-crypto/ark"]
+ark = ["spc-crypto/ark", "dep:bark-wallet", "dep:server_rpc", "rpc"]
 rpc = ["dep:bitcoincore-rpc"]
 
 [lib]
@@ -27,6 +27,19 @@ anyhow.workspace = true
 # step 4); the crate is `ark`, the package `ark-lib` (same version as
 # spc-crypto's optional `ark` feature).
 ark-lib = "0.7.1"
+# Stock bark wallet at the UPSTREAM_DEPS.md pin: the `ark` role's
+# production transport (decision 2026-11-02-bark-adapter.md, clause 2).
+# Optional so builds without the `ark` feature do not compile the bark
+# tree; same rev as the workspace `[patch.crates-io] ark-lib` mapping.
+# Default features give sqlite persistence and bitcoind-rpc chain;
+# onchain-bdk is the BDK on-chain wallet board change goes to.
+bark-wallet = { git = "https://gitlab.com/ark-bitcoin/bark.git", rev = "c419159fa54085572f8ca72d2ba1716556a9d3eb", features = ["onchain-bdk"], optional = true }
+# The server RPC client at the same pin. The thin arkoor send drives the
+# cosign and mailbox RPCs itself (stock bark's send path is pub(crate)
+# and returns no receipt); `bark-wallet` already unifies the transport
+# and TLS features this crate needs, so defaults stay off here. The
+# package is `bark-server-rpc`, its library crate `server_rpc`.
+server_rpc = { git = "https://gitlab.com/ark-bitcoin/bark.git", rev = "c419159fa54085572f8ca72d2ba1716556a9d3eb", package = "bark-server-rpc", default-features = false, optional = true }
 async-trait = "0.1"
 bitcoincore-rpc = { version = "0.19", optional = true }
 axum = "0.8"
