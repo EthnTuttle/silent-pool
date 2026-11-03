@@ -138,10 +138,16 @@ Both harnesses bind bitcoind on 18443, so they must be run sequentially.
    path in the JDC.
 4. Persist the window target in `distribution_snapshot` so settlement survives
    a difficulty retarget between the reference slice and the find.
-5. The seeded `--features cheat-slice-difficulty` statistical test.
-6. Testnet soak and third-party `spc-scan` recovery.
-7. rbitcoin as the node backend (separate repository, testnet4 fork); the
-   template source interface is the integration point.
+5. Template sources: `[template] source` accepts `ipc` and `sv2-tp` in config
+   but this build refuses to start on anything but `rpc` (and dev-only `mock`).
+   They land with the rbitcoin/TP packet.
+6. Role-sourced metric families (front `a_send` age, `ark` float, JD rejection
+   codes, stream lag) are listed as planned in OPERATIONS §7; only the
+   exporter's current families are served today.
+7. The seeded `--features cheat-slice-difficulty` statistical test.
+8. Testnet soak and third-party `spc-scan` recovery.
+9. rbitcoin as the node backend (separate repository, testnet4 fork); the
+   template source interface (item 5) is the integration point.
 
 ## Considered, not adopted
 
