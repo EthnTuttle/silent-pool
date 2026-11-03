@@ -22,9 +22,13 @@ pub async fn run(config: AgentConfig) -> anyhow::Result<()> {
 pub async fn bind_and_run(
     config: AgentConfig,
 ) -> anyhow::Result<(SocketAddr, tokio::task::JoinHandle<anyhow::Result<()>>)> {
-    let upstream: SocketAddr = config.upstream.address.parse()?;
+    let upstream = config.upstream_target()?;
+    // Validated at startup; re-checked here because a proxied `.onion` dial
+    // must fail, never fall back to direct (SPEC §3.8).
+    let egress = config.net.egress().map_err(|e| anyhow::anyhow!(e))?;
     let network = config.network();
-    let client = Sv2Client::connect(upstream, &config.upstream.sp_address, network).await?;
+    let client =
+        Sv2Client::connect(&upstream, &egress, &config.upstream.sp_address, network).await?;
     let (mut reader, writer) = client.split();
     let extranonce_size = reader.extranonce_size;
 

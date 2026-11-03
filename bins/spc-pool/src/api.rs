@@ -283,12 +283,22 @@ mod tests {
     use bitcoin::secp256k1::{Keypair, SecretKey};
     use spc_crypto::address::encode_sp_address;
 
-    struct Memory;
+    struct Memory {
+        pool: Value,
+    }
+
+    impl Memory {
+        fn bare() -> Self {
+            Self {
+                pool: json!({"network":"regtest"}),
+            }
+        }
+    }
 
     #[async_trait]
     impl ApiBackend for Memory {
         async fn pool(&self) -> Value {
-            json!({"network":"regtest"})
+            self.pool.clone()
         }
         async fn window(&self) -> Value {
             json!({"t":0})
@@ -341,7 +351,7 @@ mod tests {
 
     #[tokio::test]
     async fn auth_requires_a_fresh_challenge_and_a_good_signature() {
-        let state = ApiState::new(Arc::new(Memory), Network::Testnet);
+        let state = ApiState::new(Arc::new(Memory::bare()), Network::Testnet);
         let (scan, _) = keys(3);
         let addr = address(3);
         let nonce = state.issue_challenge().await;
@@ -373,6 +383,38 @@ mod tests {
         ));
     }
 
+    /// Router-level: `/api/pool` serves the backend's endpoints field
+    /// verbatim - onion and clearnet alike (SPEC §3.8, §6.1).
+    #[tokio::test]
+    async fn pool_route_serves_endpoints_verbatim() {
+        use axum::body::Body;
+        use http_body_util::BodyExt;
+        use tower::ServiceExt;
+
+        let app = router(
+            Arc::new(Memory {
+                pool: json!({"endpoints": ["sv2://abc.onion:34254", "sv2://pool.example:34254"]}),
+            }),
+            Network::Testnet,
+        );
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/pool")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            body["endpoints"],
+            json!(["sv2://abc.onion:34254", "sv2://pool.example:34254"])
+        );
+    }
+
     #[test]
     fn api_message_is_stable() {
         // A regression here would silently break every agent's signature.
@@ -391,7 +433,7 @@ mod tests {
         use http_body_util::BodyExt;
         use tower::ServiceExt;
 
-        let app = router(Arc::new(Memory), Network::Testnet);
+        let app = router(Arc::new(Memory::bare()), Network::Testnet);
         let response = app
             .oneshot(
                 axum::http::Request::builder()

@@ -6,12 +6,15 @@ use std::path::PathBuf;
 use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
 use serde::Deserialize;
 use spc_crypto::{parse_sp_address, Network};
+use spc_pool::net::{Net, Target};
 use thiserror::Error;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentConfig {
     pub upstream: Upstream,
+    #[serde(default)]
+    pub net: Net,
     #[serde(default)]
     pub downstream: Downstream,
     #[serde(default)]
@@ -149,6 +152,12 @@ pub enum ConfigError {
     Signer(String),
     #[error("invalid listen address: {0}")]
     Listen(String),
+    #[error("invalid upstream address: {0} (expected host:port or IP:port)")]
+    UpstreamAddress(String),
+    #[error("invalid [net] proxy: {0}")]
+    Proxy(String),
+    #[error("[{0}] resolves to a .onion host but [net] proxy is not set; there is no direct route (SPEC §3.8)")]
+    OnionWithoutProxy(&'static str),
     #[error("invalid jds_address: {0}")]
     JdsAddress(String),
     #[error("invalid tp_address: {0}")]
@@ -162,10 +171,11 @@ pub enum ConfigError {
 }
 
 impl Jd {
-    pub fn jds_addr(&self) -> Result<SocketAddr, ConfigError> {
-        self.jds_address
-            .parse()
-            .map_err(|_| ConfigError::JdsAddress(self.jds_address.clone()))
+    /// The JDS dial target. Names stay unresolved so a proxied dial never
+    /// resolves locally (SPEC §3.8).
+    pub fn jds_target(&self) -> Result<Target, ConfigError> {
+        Target::parse(&self.jds_address)
+            .ok_or_else(|| ConfigError::JdsAddress(self.jds_address.clone()))
     }
 
     pub fn scan_secret(&self) -> Result<SecretKey, ConfigError> {
@@ -209,16 +219,25 @@ impl AgentConfig {
         OwnPayoutPolicy::parse(&self.upstream.require_own_payout).ok_or(ConfigError::Policy)
     }
 
+    /// The upstream SV2 dial target; a hostname stays unresolved so the
+    /// SOCKS proxy can resolve it remotely (SPEC §3.8).
+    pub fn upstream_target(&self) -> Result<Target, ConfigError> {
+        Target::parse(&self.upstream.address)
+            .ok_or_else(|| ConfigError::UpstreamAddress(self.upstream.address.clone()))
+    }
+
     pub fn validate(&self) -> Result<(), ConfigError> {
         let network = self.network();
         let parsed = parse_sp_address(&self.upstream.sp_address, network)
             .map_err(|_| ConfigError::InvalidAddress)?;
         let _ = self.own_payout_policy()?;
-        self.upstream
-            .address
-            .parse::<std::net::SocketAddr>()
-            .map(|_| ())
-            .map_err(|_| ConfigError::Listen(self.upstream.address.clone()))?;
+        let egress = self
+            .net
+            .egress()
+            .map_err(|e| ConfigError::Proxy(e.to_string()))?;
+        if self.upstream_target()?.is_onion() && egress.proxy().is_none() {
+            return Err(ConfigError::OnionWithoutProxy("upstream.address"));
+        }
         self.downstream
             .listen
             .parse::<std::net::SocketAddr>()
@@ -226,7 +245,13 @@ impl AgentConfig {
             .map_err(|_| ConfigError::Listen(self.downstream.listen.clone()))?;
         if let Some(jd) = &self.jd {
             if jd.enabled {
-                jd.jds_addr()?;
+                let jds = jd.jds_target()?;
+                if jds.is_onion() && egress.proxy().is_none() {
+                    return Err(ConfigError::OnionWithoutProxy("jd.jds_address"));
+                }
+                // The miner's own Template Provider is on the trusted side of
+                // the boundary (like the pool's template source): never proxied,
+                // and stays an IP literal.
                 if !jd.tp_address.is_empty() {
                     jd.tp_address
                         .parse::<SocketAddr>()
@@ -349,7 +374,10 @@ mailbox_mode = "epoch_derived"
         cfg.validate().unwrap();
         let jd = cfg.jd.as_ref().unwrap();
         assert_eq!(jd.template().unwrap(), (800_000, 5_000_000_000, 8));
-        assert_eq!(jd.jds_addr().unwrap().port(), 34264);
+        assert!(matches!(
+            jd.jds_target().unwrap(),
+            Target::Addr(a) if a.port() == 34264
+        ));
     }
 
     #[test]
@@ -371,5 +399,72 @@ mailbox_mode = "epoch_derived"
             cfg.validate(),
             Err(ConfigError::JdsAddress("not-an-address".into()))
         );
+    }
+
+    #[test]
+    fn upstream_accepts_hostnames_and_onion_targets() {
+        // Hostnames and .onion names are dial targets, not listen addresses.
+        let mut cfg = sample();
+        cfg.upstream.address = "pool.example:34254".into();
+        cfg.validate().unwrap();
+        assert!(matches!(
+            cfg.upstream_target().unwrap(),
+            Target::Name { ref host, .. } if host == "pool.example"
+        ));
+        let mut cfg = sample();
+        cfg.upstream.address = "abc.onion:34254".into();
+        cfg.net.proxy = "socks5h://127.0.0.1:9050".into();
+        cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn onion_upstream_or_jds_without_proxy_is_a_startup_error() {
+        let mut cfg = sample();
+        cfg.upstream.address = "abc.onion:34254".into();
+        assert_eq!(
+            cfg.validate(),
+            Err(ConfigError::OnionWithoutProxy("upstream.address"))
+        );
+
+        let mut cfg = with_jd();
+        cfg.jd.as_mut().unwrap().jds_address = "abc.onion:34264".into();
+        assert_eq!(
+            cfg.validate(),
+            Err(ConfigError::OnionWithoutProxy("jd.jds_address"))
+        );
+
+        // ...and both pass with a socks5h proxy set.
+        let mut cfg = with_jd();
+        cfg.jd.as_mut().unwrap().jds_address = "abc.onion:34264".into();
+        cfg.net.proxy = "socks5h://127.0.0.1:9050".into();
+        cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn proxy_schemes_other_than_socks5h_are_rejected() {
+        for scheme in ["socks5", "http", "https"] {
+            let mut cfg = sample();
+            cfg.net.proxy = format!("{scheme}://127.0.0.1:9050");
+            assert!(
+                matches!(cfg.validate(), Err(ConfigError::Proxy(_))),
+                "{scheme}"
+            );
+        }
+    }
+
+    #[test]
+    fn stream_isolation_defaults_true_only_when_proxied() {
+        let mut cfg = sample();
+        cfg.net.proxy = "socks5h://127.0.0.1:9050".into();
+        cfg.validate().unwrap();
+        let egress = cfg.net.egress().unwrap();
+        assert!(egress.proxy().is_some());
+
+        // Isolation explicitly off is honoured (operator's explicit choice).
+        let mut cfg = sample();
+        cfg.net.proxy = "socks5h://127.0.0.1:9050".into();
+        cfg.net.stream_isolation = Some(false);
+        cfg.validate().unwrap();
+        assert_eq!(cfg.net.stream_isolation, Some(false));
     }
 }

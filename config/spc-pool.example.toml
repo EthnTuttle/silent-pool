@@ -17,14 +17,28 @@ front_id = 0
 outbox_max = 4096
 tip_divergence_secs = 30
 
-# STATUS: SPEC §3.8 - parser support lands with the Tor transport packet; this build rejects these keys.
-# [reach]                           # SPEC §3.8; the Tor daemon owns onion keys, not this binary
-# advertise = []                    # e.g. ["sv2://pool.example:34254", "sv2://abc...onion:34254"]
-# onion = { sv2 = "", sv1 = "", jd = "", api = "" }   # non-empty ⇒ that listener MUST bind loopback
-#
-# [net]                             # SPEC §3.8; outbound traffic only, never Postgres/Redis
-# proxy = ""                        # e.g. "socks5h://127.0.0.1:9050" (remote resolution required)
-# stream_isolation = true
+# Tor reach (SPEC §3.8). The Tor daemon owns onion keys and forwards to the
+# listeners below; this binary never creates or manages onion services.
+[reach]
+# Published verbatim as `endpoints` at GET /api/pool. List every public
+# endpoint, clearnet and onion alike:
+# advertise = ["sv2://pool.example:34254", "sv2://<id>.onion:34254"]
+advertise = []
+# Per-listener advertised onion address. A non-empty entry REQUIRES that
+# listener to bind a loopback address; spc-pool refuses to start otherwise
+# (an onion service on a clearnet interface silently bypasses its privacy).
+onion = { sv2 = "", sv1 = "", jd = "", api = "" }   # "<id>.onion:<port>"
+
+# Outbound proxy for the ark role's Ark-server traffic only - never
+# [storage] (Postgres/Redis) and never [template] (SPEC §3.8 scope rule).
+[net]
+# e.g. "socks5h://127.0.0.1:9050". Only socks5h:// is accepted: remote name
+# resolution is mandatory (socks5:// resolves locally and leaks the query).
+# A .onion [ark] server with no proxy is a startup error.
+proxy = ""
+# Distinct SOCKS credentials per connection (Tor IsolateSOCKSAuth); each
+# connection gets its own circuit. Default true when proxy is set.
+stream_isolation = true
 
 [template]
 source = "rpc"                      # "ipc" | "sv2-tp" | "rpc" | "mock"

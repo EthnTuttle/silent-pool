@@ -37,7 +37,8 @@ path parameter as `:block_hash`; the router spells it `{block_hash}`).
 Specified fields (SPEC §6.1): hashrate estimate, connected channels, `N`
 (window size), `D`, current `H`, `A_send_x`, `coinbase_threshold_sats`, the
 configured Ark `ark_id`, the forfeiture policy (§11.1: unregistered below
-`C` is forfeited), mode flags, and the extensions advertised.
+`C` is forfeited), mode flags, the extensions advertised, and `endpoints`
+(SPEC §3.8: `[reach] advertise`, clearnet and onion, verbatim).
 
 Current build (a subset; config-sourced):
 
@@ -46,7 +47,8 @@ Current build (a subset; config-sourced):
   "network": "regtest",
   "window_n": 8,
   "coinbase_threshold_sats": 330,
-  "extensions": ["0x0001", "0x0003", "0x0020", "0x5350"]
+  "extensions": ["0x0001", "0x0003", "0x0020", "0x5350"],
+  "endpoints": ["sv2://pool.example:34254", "sv2://<id>.onion:34254"]
 }
 ```
 

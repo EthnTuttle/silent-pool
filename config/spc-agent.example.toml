@@ -3,17 +3,26 @@
 [upstream]
 address = "127.0.0.1:34254"
 authority_public_key = "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-sp_address = "tsp1q..."              # must parse at startup or the agent refuses
+# Throwaway regtest address (scan key 0x07..07, spend 0x08..08): replace it.
+sp_address = "tsp1qq2vfczmkedtrju0aexl0x8kqds6kpueyn4hwnewc83tky4vkup0k7qlej8u5f50pj498lj9eha3wp4u0q905cpmk94g9ug8xc3fxpgmxrvw7g7cm"
 require_own_payout = "warn"          # "warn" | "refuse"
 request_share_accounting = true
 
 [downstream]
 listen = "127.0.0.1:34255"           # stays plain TCP: ASIC firmware does not speak Tor
 
-# STATUS: SPEC §3.8 - parser support lands with the Tor transport packet; this build rejects these keys.
-# [net]                              # SPEC §3.8; covers upstream SV2, JDP and Ark/mailbox traffic
-# proxy = ""                         # e.g. "socks5h://127.0.0.1:9050"; a .onion upstream with no proxy is a startup error
-# stream_isolation = true
+# Tor egress (SPEC §3.8); covers upstream SV2, JDP and Ark/mailbox traffic.
+# The [downstream] SV1 listener stays plain TCP - ASIC firmware does not
+# speak Tor - and the miner's own Template Provider is never proxied.
+[net]
+# e.g. "socks5h://127.0.0.1:9050". Only socks5h:// is accepted: remote name
+# resolution is mandatory. A .onion upstream address (host:port form) or JDS
+# with no proxy is a startup error, never a silent direct connection.
+proxy = ""
+# Distinct SOCKS credentials per connection (Tor IsolateSOCKSAuth); mailbox
+# reads additionally open a new connection per epoch (SPEC §11.7).
+# Default true when proxy is set.
+stream_isolation = true
 
 # [jd]                               # JDC role (SPEC §3.2, §3.5, §3.6)
 # enabled = true

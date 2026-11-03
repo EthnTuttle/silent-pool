@@ -1,10 +1,13 @@
 //! `spc-pool` configuration and startup invariants (SPEC §6.3, §9, §11.10).
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use spc_crypto::Network;
 use thiserror::Error;
+
+use crate::net::{host_is_onion, url_host, Net};
 
 pub const MAX_FRONT_ID: u8 = 127;
 
@@ -34,6 +37,10 @@ impl Role {
 pub struct Config {
     pub pool: Pool,
     #[serde(default)]
+    pub reach: Reach,
+    #[serde(default)]
+    pub net: Net,
+    #[serde(default)]
     pub template: Template,
     #[serde(default)]
     pub sv1: Sv1,
@@ -51,6 +58,34 @@ pub struct Config {
     pub ark: Option<Ark>,
     #[serde(default)]
     pub api: Api,
+}
+
+/// `[reach]` (SPEC §3.8): how the pool is found. The Tor daemon owns onion
+/// keys and forwards to the loopback listeners; this binary only advertises.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Reach {
+    /// Published verbatim as `endpoints` at `GET /api/pool` (§6.1).
+    #[serde(default)]
+    pub advertise: Vec<String>,
+    /// Per-listener advertised "<id>.onion:<port>".
+    #[serde(default)]
+    pub onion: Onion,
+}
+
+/// A non-empty entry means the matching listener is published as a Tor
+/// onion service and therefore MUST bind a loopback address (§3.8).
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Onion {
+    #[serde(default)]
+    pub sv2: String,
+    #[serde(default)]
+    pub sv1: String,
+    #[serde(default)]
+    pub jd: String,
+    #[serde(default)]
+    pub api: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -522,6 +557,14 @@ pub enum ConfigError {
     Sv1Budget,
     #[error("invalid listen address: {0}")]
     Listen(String),
+    #[error("invalid [net] proxy: {0}")]
+    Proxy(String),
+    #[error("invalid [reach] onion.{0} entry '{1}' (expected \"<id>.onion:<port>\")")]
+    OnionAdvertised(&'static str, String),
+    #[error("[reach] onion.{0} is advertised but [{1}] listen = {2} is not a loopback address (SPEC §3.8)")]
+    OnionNotLoopback(&'static str, &'static str, String),
+    #[error("[{0}] targets a .onion address but [net] proxy is not set; there is no direct route (SPEC §3.8)")]
+    OnionWithoutProxy(&'static str),
     #[error("ark enabled without {0}")]
     ArkMissing(&'static str),
     #[error("ark must not be self-hosted on mainnet")]
@@ -613,6 +656,37 @@ impl Config {
         parse_listen(&self.api.listen)?;
         parse_listen(&self.jd.listen)?;
 
+        // SPEC §3.8: the egress proxy must do remote name resolution
+        // (validated here so a bad scheme is a startup error, not a first-use
+        // surprise), and an onion-published listener must bind loopback - an
+        // onion service on a clearnet interface silently bypasses the privacy
+        // it is published for.
+        let egress = self
+            .net
+            .egress()
+            .map_err(|e| ConfigError::Proxy(e.to_string()))?;
+        for (name, section, listen, entry) in [
+            ("sv2", "pool", &self.pool.listen, &self.reach.onion.sv2),
+            ("sv1", "sv1", &self.sv1.listen, &self.reach.onion.sv1),
+            ("jd", "jd", &self.jd.listen, &self.reach.onion.jd),
+            ("api", "api", &self.api.listen, &self.reach.onion.api),
+        ] {
+            validate_onion_entry(name, entry)?;
+            if entry.is_empty() {
+                continue;
+            }
+            let addr = listen
+                .parse::<SocketAddr>()
+                .map_err(|_| ConfigError::Listen(listen.clone()))?;
+            if !addr.ip().is_loopback() {
+                return Err(ConfigError::OnionNotLoopback(
+                    name,
+                    section,
+                    addr.to_string(),
+                ));
+            }
+        }
+
         if let Some(ark) = &self.ark {
             if ark.enabled {
                 if ark.server.is_empty() {
@@ -641,6 +715,13 @@ impl Config {
                 {
                     return Err(ConfigError::ArkSelfMainnet);
                 }
+                // SPEC §3.8/§11.3: a .onion Ark server must be reached through
+                // [net] proxy; a direct dial has no route and no fallback.
+                if let Some(host) = url_host(&ark.server) {
+                    if host_is_onion(&host) && egress.proxy().is_none() {
+                        return Err(ConfigError::OnionWithoutProxy("ark.server"));
+                    }
+                }
             }
         }
 
@@ -668,6 +749,22 @@ fn parse_listen(s: &str) -> Result<(), ConfigError> {
     s.parse::<std::net::SocketAddr>()
         .map(|_| ())
         .map_err(|_| ConfigError::Listen(s.to_string()))
+}
+
+/// `[reach] onion` entries are advertised "<id>.onion:<port>" strings;
+/// anything else is rejected at startup (fail closed, §3.8).
+fn validate_onion_entry(name: &'static str, entry: &str) -> Result<(), ConfigError> {
+    if entry.is_empty() {
+        return Ok(());
+    }
+    let ok = entry
+        .rsplit_once(':')
+        .filter(|(host, port)| host_is_onion(host) && port.parse::<u16>().is_ok())
+        .is_some();
+    if !ok {
+        return Err(ConfigError::OnionAdvertised(name, entry.to_string()));
+    }
+    Ok(())
 }
 
 /// The three assertions from the xpub spec (SPEC §6.3):
@@ -821,5 +918,122 @@ listen = "127.0.0.1:8080"
         let mut cfg = sample();
         cfg.jd.grace_same_height_only = false;
         assert_eq!(cfg.validate(), Err(ConfigError::Grace));
+    }
+
+    fn with_extra(extra: &str) -> Config {
+        toml::from_str(&format!("{SAMPLE}\n{extra}")).unwrap()
+    }
+
+    #[test]
+    fn reach_and_net_default_to_empty_and_validate() {
+        let cfg = sample();
+        cfg.validate().unwrap();
+        assert!(cfg.reach.advertise.is_empty());
+        assert_eq!(cfg.net.egress().unwrap(), crate::net::Egress::DIRECT);
+    }
+
+    #[test]
+    fn onion_listeners_validate_when_all_loopback() {
+        // jd.listen defaults to 0.0.0.0:34264, so pin it loopback here.
+        let cfg = with_extra(
+            r#"
+[reach]
+advertise = ["sv2://pool.example:34254", "sv2://abc.onion:34254"]
+onion = { sv2 = "abc.onion:34254", sv1 = "def.onion:3333", jd = "ghi.onion:34264", api = "jkl.onion:8080" }
+
+[jd]
+listen = "127.0.0.1:34264"
+"#,
+        );
+        cfg.validate().unwrap();
+        assert_eq!(cfg.reach.advertise.len(), 2);
+    }
+
+    #[test]
+    fn onion_listeners_off_loopback_are_refused_by_name() {
+        for name in ["sv2", "sv1", "jd", "api"] {
+            let mut cfg = sample();
+            match name {
+                "sv2" => {
+                    cfg.reach.onion.sv2 = "abc.onion:34254".into();
+                    cfg.pool.listen = "0.0.0.0:34254".into();
+                }
+                "sv1" => {
+                    cfg.reach.onion.sv1 = "abc.onion:3333".into();
+                    cfg.sv1.listen = "0.0.0.0:3333".into();
+                }
+                "jd" => {
+                    cfg.reach.onion.jd = "abc.onion:34264".into();
+                    cfg.jd.listen = "0.0.0.0:34264".into();
+                }
+                _ => {
+                    cfg.reach.onion.api = "abc.onion:8080".into();
+                    cfg.api.listen = "0.0.0.0:8080".into();
+                }
+            }
+            let err = cfg.validate().unwrap_err();
+            assert!(
+                matches!(err, ConfigError::OnionNotLoopback(n, _, _) if n == name),
+                "{name}: {err:?}"
+            );
+            assert!(err.to_string().contains("loopback"), "{err}");
+        }
+    }
+
+    #[test]
+    fn onion_entries_must_be_id_dot_onion_colon_port() {
+        for bad in [
+            "not-an-address",
+            "abc.example:1",
+            "abc.onion",
+            "abc.onion:notaport",
+        ] {
+            let mut cfg = sample();
+            cfg.reach.onion.sv2 = bad.into();
+            assert!(
+                matches!(cfg.validate(), Err(ConfigError::OnionAdvertised("sv2", _))),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn net_proxy_must_be_socks5h() {
+        for scheme in ["socks5", "http", "https"] {
+            let mut cfg = sample();
+            cfg.net.proxy = format!("{scheme}://127.0.0.1:9050");
+            assert!(
+                matches!(cfg.validate(), Err(ConfigError::Proxy(_))),
+                "{scheme}"
+            );
+        }
+        let mut cfg = sample();
+        cfg.net.proxy = "socks5h://127.0.0.1:9050".into();
+        cfg.validate().unwrap();
+        assert!(cfg.net.egress().unwrap().proxy().is_some());
+    }
+
+    const ARK_ONION: &str = r#"
+[ark]
+enabled = true
+server = "https://def.onion"
+ark_id = "00000000"
+float_target_sats = 1000000
+order_pubkey = "0000000000000000000000000000000000000000000000000000000000000000"
+retry_blocks = 6
+send_command = "/bin/true"
+"#;
+
+    #[test]
+    fn onion_ark_server_without_proxy_is_a_startup_error() {
+        let cfg = with_extra(ARK_ONION);
+        assert_eq!(
+            cfg.validate(),
+            Err(ConfigError::OnionWithoutProxy("ark.server"))
+        );
+        let cfg = with_extra(&format!(
+            "{ARK_ONION}\n[net]\nproxy = \"socks5h://127.0.0.1:9050\"\n"
+        ));
+        cfg.validate().unwrap();
     }
 }

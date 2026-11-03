@@ -13,6 +13,7 @@ pub mod identity;
 pub mod jds;
 pub mod jds_server;
 pub mod metrics;
+pub mod net;
 pub mod payout;
 pub mod sv1;
 pub mod sv1_server;

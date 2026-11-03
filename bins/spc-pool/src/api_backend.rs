@@ -5,7 +5,21 @@ use serde_json::{json, Value};
 use spc_store::Store;
 
 use crate::api::ApiBackend;
+use crate::config::Config;
 use crate::metrics::{render, MetricsSnapshot};
+
+/// The static, config-sourced part of `GET /api/pool` (SPEC §6.1).
+/// `endpoints` republishes `[reach] advertise` verbatim (SPEC §3.8), so a
+/// miner can learn the pool's onion addresses from its clearnet API.
+pub fn pool_info(config: &Config) -> Value {
+    json!({
+        "network": config.pool.network,
+        "window_n": config.accounting.window_n,
+        "coinbase_threshold_sats": config.accounting.coinbase_threshold_sats,
+        "extensions": ["0x0001", "0x0003", "0x0020", "0x5350"],
+        "endpoints": config.reach.advertise,
+    })
+}
 
 /// Config-sourced constants for the `/metrics` config families (SPEC §9).
 #[derive(Clone, Copy, Debug, Default)]
@@ -188,5 +202,51 @@ impl ApiBackend for StoreBackend {
         }
         snap.scrape_errors = failed;
         render(&snap)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `GET /api/pool` carries `[reach] advertise` verbatim (SPEC §3.8, §6.1):
+    /// order preserved, no filtering, no rewriting.
+    #[test]
+    fn pool_info_publishes_advertise_verbatim_as_endpoints() {
+        let text = r#"
+[pool]
+network = "regtest"
+listen = "127.0.0.1:34254"
+authority_public_key = "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+pool_payout_descriptor = "tr(tpubD6NzVbkrYhZ4YTest/0/*)"
+
+[reach]
+advertise = ["sv2://pool.example:34254", "sv2://abc.onion:34254", "sv1://abc.onion:3333"]
+"#;
+        let config: Config = toml::from_str(text).unwrap();
+        config.validate().unwrap();
+        let info = pool_info(&config);
+        assert_eq!(
+            info["endpoints"],
+            json!([
+                "sv2://pool.example:34254",
+                "sv2://abc.onion:34254",
+                "sv1://abc.onion:3333"
+            ])
+        );
+    }
+
+    #[test]
+    fn pool_info_defaults_endpoints_to_empty() {
+        let text = r#"
+[pool]
+network = "regtest"
+listen = "127.0.0.1:34254"
+authority_public_key = "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+pool_payout_descriptor = "tr(tpubD6NzVbkrYhZ4YTest/0/*)"
+"#;
+        let config: Config = toml::from_str(text).unwrap();
+        config.validate().unwrap();
+        assert_eq!(pool_info(&config)["endpoints"], json!([]));
     }
 }

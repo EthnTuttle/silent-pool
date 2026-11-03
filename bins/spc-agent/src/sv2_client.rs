@@ -1,9 +1,8 @@
 //! Minimal SV2 miner-side client used by the translator and JDC roles.
 
-use std::net::SocketAddr;
-
 use bitcoin::hashes::Hash;
 use spc_crypto::Network;
+use spc_pool::net::{Egress, Target};
 use stratum_apps::network_helpers::connect_with_noise;
 use stratum_apps::network_helpers::noise_stream::{NoiseTcpReadHalf, NoiseTcpWriteHalf};
 use stratum_core::binary_sv2::{self, Str0255, B032, U256};
@@ -19,7 +18,6 @@ use stratum_core::mining_sv2::{
     MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL_SUCCESS, MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED,
 };
 use thiserror::Error;
-use tokio::net::TcpStream;
 
 #[derive(Debug, Error)]
 pub enum ClientError {
@@ -65,12 +63,17 @@ pub struct Sv2Client {
 }
 
 impl Sv2Client {
+    /// Dial the pool: directly, or through the `[net]` proxy (SPEC §3.8).
+    /// `target` names stay unresolved until the proxy sees them; with stream
+    /// isolation this connection presents its own SOCKS credentials.
     pub async fn connect(
-        addr: SocketAddr,
+        target: &Target,
+        egress: &Egress,
         sp_address: &str,
         _network: Network,
     ) -> Result<Self, ClientError> {
-        let stream = TcpStream::connect(addr)
+        let stream = egress
+            .connect(target)
             .await
             .map_err(|e| ClientError::Network(e.to_string()))?;
         let stream = connect_with_noise(stream, None)
