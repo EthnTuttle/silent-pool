@@ -1072,3 +1072,49 @@ async fn settle_bumps_the_front_rev_atomically() {
         "pending bookings publish no LedgerApplied"
     );
 }
+
+/// The read-only `/metrics` queries (SPEC §9) agree with what settlement
+/// wrote: one confirmed block with an Ark payout and a forfeit.
+#[tokio::test]
+async fn metrics_queries_read_back_settlement() {
+    let Some(store) = store().await else { return };
+
+    let sp_id = id();
+    let fingerprint = id();
+    let block_hash = id();
+    identity(&store, sp_id).await;
+    snapshot(&store, fingerprint).await;
+
+    store
+        .settle(
+            &Settlement {
+                block_hash,
+                height: 800_000,
+                fingerprint: Some(fingerprint),
+                status: BlockStatus::Confirmed,
+                ledger: vec![LedgerRow {
+                    sp_id,
+                    rail: LedgerRail::Ark,
+                    paid_sats: 0,
+                    ark_due_sats: 250,
+                    forfeited_sats: 40,
+                    pending_delta: 0,
+                }],
+            },
+            6,
+        )
+        .await
+        .unwrap();
+
+    let blocks = store.blocks_by_status().await.unwrap();
+    assert!(blocks.contains(&("confirmed".to_string(), 1)), "{blocks:?}");
+
+    let payouts = store.ark_payouts_by_status().await.unwrap();
+    assert!(
+        payouts.contains(&("scheduled".to_string(), 1)),
+        "{payouts:?}"
+    );
+
+    assert!(store.ark_due_sats().await.unwrap() >= 250);
+    assert!(store.forfeited_sats_total().await.unwrap() >= 40);
+}

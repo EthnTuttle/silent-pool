@@ -912,6 +912,67 @@ impl Store {
         Ok(out)
     }
 
+    /// Run a query that returns exactly one BIGINT column in exactly one
+    /// row (the `/metrics` scalar counters).
+    async fn count_u64(&self, sql: &'static str) -> Result<u64> {
+        let row = sqlx::query(sql).fetch_one(&self.pool).await?;
+        let n: i64 = row.try_get(0)?;
+        sats_u64(n)
+    }
+
+    /// Found blocks per settlement status, for `spc_blocks_total{status}`
+    /// (read-only, `api` role; SPEC §9).
+    pub async fn blocks_by_status(&self) -> Result<Vec<(String, u64)>> {
+        let rows = sqlx::query(
+            "SELECT status, COUNT(*)::bigint AS n FROM block_found
+             GROUP BY status ORDER BY status",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|r| {
+                let status: String = r.try_get("status")?;
+                let n: i64 = r.try_get("n")?;
+                Ok((status, sats_u64(n)?))
+            })
+            .collect()
+    }
+
+    /// Sats booked to the Ark rail and not yet sent, for
+    /// `spc_ark_due_sats` (read-only, `api` role; SPEC §9).
+    pub async fn ark_due_sats(&self) -> Result<u64> {
+        self.count_u64(
+            "SELECT COALESCE(SUM(sats), 0)::bigint AS n FROM ark_payout
+             WHERE status = 'scheduled'",
+        )
+        .await
+    }
+
+    /// Ark payouts per status, for `spc_ark_payouts_total{status}`
+    /// (read-only, `api` role; SPEC §9).
+    pub async fn ark_payouts_by_status(&self) -> Result<Vec<(String, u64)>> {
+        let rows = sqlx::query(
+            "SELECT status, COUNT(*)::bigint AS n FROM ark_payout
+             GROUP BY status ORDER BY status",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|r| {
+                let status: String = r.try_get("status")?;
+                let n: i64 = r.try_get("n")?;
+                Ok((status, sats_u64(n)?))
+            })
+            .collect()
+    }
+
+    /// Cumulative forfeited sats, for `spc_forfeited_sats_total`
+    /// (read-only, `api` role; SPEC §9, §11.1).
+    pub async fn forfeited_sats_total(&self) -> Result<u64> {
+        self.count_u64("SELECT COALESCE(SUM(forfeited_sats), 0)::bigint AS n FROM ledger_history")
+            .await
+    }
+
     /// Bootstrap snapshot. Every field is read in one `REPEATABLE READ`
     /// transaction, so the pending projection, the applied-block list and
     /// the `front_event_state.rev` watermark describe the same instant

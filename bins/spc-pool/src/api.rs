@@ -24,6 +24,9 @@ use tokio::sync::Mutex;
 
 pub const CHALLENGE_TTL: Duration = Duration::from_secs(60);
 
+/// Content type of the Prometheus text exposition format 0.0.4.
+pub const METRICS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
+
 /// The API's backing data. Implementations are read-only.
 #[async_trait]
 pub trait ApiBackend: Send + Sync + 'static {
@@ -34,6 +37,10 @@ pub trait ApiBackend: Send + Sync + 'static {
     async fn capacity(&self) -> Value;
     async fn me(&self, sp_id: &[u8; 32]) -> Option<Value>;
     async fn audit(&self, sp_id: &[u8; 32], block_hash: &str) -> Option<Value>;
+    /// Rendered Prometheus 0.0.4 text for `/metrics`. A failed source omits
+    /// its family and is counted in `spc_metrics_scrape_errors_total`
+    /// (SPEC §9); absent means unknown, never zero.
+    async fn metrics(&self) -> String;
 }
 
 #[derive(Debug, Error)]
@@ -220,10 +227,16 @@ async fn audit<B: ApiBackend>(
 async fn healthz() -> Json<Value> {
     Json(json!({ "ok": true }))
 }
-async fn metrics() -> &'static str {
-    // Replaced by the Prometheus registry in WP6; the route exists so probes
-    // do not 404 during bring-up.
-    "# spc metrics not yet wired\n"
+
+/// Prometheus text format 0.0.4 (SPEC §6.1, §9). The backend renders from
+/// live sources; there is no canned payload.
+async fn metrics<B: ApiBackend>(State(s): State<Arc<ApiState<B>>>) -> Response {
+    let text = s.backend.metrics().await;
+    (
+        [(axum::http::header::CONTENT_TYPE, METRICS_CONTENT_TYPE)],
+        text,
+    )
+        .into_response()
 }
 
 fn auth_failure(e: AuthError) -> Response {
@@ -295,6 +308,9 @@ mod tests {
         async fn audit(&self, _sp_id: &[u8; 32], _block: &str) -> Option<Value> {
             Some(json!({"slices":[]}))
         }
+        async fn metrics(&self) -> String {
+            crate::metrics::render(&crate::metrics::MetricsSnapshot::default())
+        }
     }
 
     fn keys(seed: u8) -> (SecretKey, SecretKey) {
@@ -365,5 +381,38 @@ mod tests {
             hex(&msg),
             "59ffe830c5807ba676a5971c3abb2d78149ed04e9712b97d519a037229020dd7"
         );
+    }
+
+    /// Router-level: `/metrics` serves real Prometheus 0.0.4 text with the
+    /// 0.0.4 content type, not a placeholder.
+    #[tokio::test]
+    async fn metrics_route_serves_prometheus_text() {
+        use axum::body::Body;
+        use http_body_util::BodyExt;
+        use tower::ServiceExt;
+
+        let app = router(Arc::new(Memory), Network::Testnet);
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok()),
+            Some(METRICS_CONTENT_TYPE)
+        );
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let text = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(text.contains("# TYPE spc_metrics_scrape_errors_total counter\n"));
+        assert!(!text.contains("not yet wired"));
+        assert!(!text.contains("placeholder"));
     }
 }

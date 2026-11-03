@@ -125,8 +125,15 @@ verifies. Current build:
 
 ### GET /healthz, GET /metrics
 
-`/healthz` returns `{ "ok": true }`. `/metrics` serves Prometheus text; the
-exporter wiring is pending (`docs/OPERATIONS.md` §7).
+`/healthz` returns `{ "ok": true }`. `/metrics` serves Prometheus text
+(`text/plain; version=0.0.4; charset=utf-8`): the store-sourced families
+`spc_blocks_total{status}`, `spc_pending_liability_sats`,
+`spc_ark_due_sats`, `spc_ark_payouts_total{status}` and
+`spc_forfeited_sats_total`, the config gauges (`spc_config_*`), and
+`spc_process_uptime_seconds` / `spc_metrics_scrape_errors_total`. A family
+whose store query failed is omitted from the scrape - a missing series
+means "unknown", never "empty". The alarm mapping is
+`docs/OPERATIONS.md` §7.
 
 ## 3. The SPc challenge flow
 

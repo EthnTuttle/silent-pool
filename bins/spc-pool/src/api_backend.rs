@@ -5,19 +5,47 @@ use serde_json::{json, Value};
 use spc_store::Store;
 
 use crate::api::ApiBackend;
+use crate::metrics::{render, MetricsSnapshot};
+
+/// Config-sourced constants for the `/metrics` config families (SPEC §9).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MetricsConfig {
+    /// `[accounting] window_n`.
+    pub window_n: u32,
+    /// `[accounting] coinbase_threshold_sats` (the tier threshold `C`).
+    pub coinbase_threshold_sats: u64,
+    /// `[budget] floor_wu`.
+    pub budget_floor_wu: u64,
+    /// `[budget] ceiling_wu`.
+    pub budget_ceiling_wu: u64,
+}
 
 pub struct StoreBackend {
     store: Store,
     pool: Value,
     capacity: Value,
+    metrics_cfg: MetricsConfig,
 }
 
 impl StoreBackend {
+    /// Backend with zeroed config families. Callers that know the config
+    /// should use [`StoreBackend::with_metrics_config`]; this constructor
+    /// keeps existing call sites compiling.
     pub fn new(store: Store, pool: Value, capacity: Value) -> Self {
+        Self::with_metrics_config(store, pool, capacity, MetricsConfig::default())
+    }
+
+    pub fn with_metrics_config(
+        store: Store,
+        pool: Value,
+        capacity: Value,
+        metrics_cfg: MetricsConfig,
+    ) -> Self {
         Self {
             store,
             pool,
             capacity,
+            metrics_cfg,
         }
     }
 }
@@ -108,5 +136,57 @@ impl ApiBackend for StoreBackend {
                 })
             }).collect::<Vec<_>>(),
         }))
+    }
+
+    /// Gather one scrape from the live store and render it. A failed query
+    /// omits its family and counts in `spc_metrics_scrape_errors_total`;
+    /// the config-sourced families cannot fail.
+    async fn metrics(&self) -> String {
+        let mut snap = MetricsSnapshot {
+            uptime_secs: crate::metrics::process_uptime_secs(),
+            window_n: Some(self.metrics_cfg.window_n),
+            coinbase_threshold_sats: Some(self.metrics_cfg.coinbase_threshold_sats),
+            budget_floor_wu: Some(self.metrics_cfg.budget_floor_wu),
+            budget_ceiling_wu: Some(self.metrics_cfg.budget_ceiling_wu),
+            ..Default::default()
+        };
+        let mut failed = 0u32;
+        match self.store.blocks_by_status().await {
+            Ok(v) => snap.blocks_by_status = Some(v),
+            Err(e) => {
+                tracing::warn!(error = %e, "metrics: blocks_by_status failed");
+                failed += 1;
+            }
+        }
+        match self.store.liability_sats().await {
+            Ok(v) => snap.pending_liability_sats = Some(v),
+            Err(e) => {
+                tracing::warn!(error = %e, "metrics: liability_sats failed");
+                failed += 1;
+            }
+        }
+        match self.store.ark_due_sats().await {
+            Ok(v) => snap.ark_due_sats = Some(v),
+            Err(e) => {
+                tracing::warn!(error = %e, "metrics: ark_due_sats failed");
+                failed += 1;
+            }
+        }
+        match self.store.ark_payouts_by_status().await {
+            Ok(v) => snap.ark_payouts_by_status = Some(v),
+            Err(e) => {
+                tracing::warn!(error = %e, "metrics: ark_payouts_by_status failed");
+                failed += 1;
+            }
+        }
+        match self.store.forfeited_sats_total().await {
+            Ok(v) => snap.forfeited_sats_total = Some(v),
+            Err(e) => {
+                tracing::warn!(error = %e, "metrics: forfeited_sats_total failed");
+                failed += 1;
+            }
+        }
+        snap.scrape_errors = failed;
+        render(&snap)
     }
 }

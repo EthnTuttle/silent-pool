@@ -200,7 +200,7 @@ async fn main() -> anyhow::Result<()> {
     if roles.contains(&Role::Api) {
         let store = Store::connect(&config.storage.postgres).await?;
         store.migrate().await?;
-        let backend = std::sync::Arc::new(StoreBackend::new(
+        let backend = std::sync::Arc::new(StoreBackend::with_metrics_config(
             store,
             serde_json::json!({
                 "network": config.pool.network,
@@ -213,6 +213,12 @@ async fn main() -> anyhow::Result<()> {
                 "ceiling_wu": config.budget.ceiling_wu,
                 "max_payout_slots": config.accounting.max_payout_slots,
             }),
+            spc_pool::api_backend::MetricsConfig {
+                window_n: config.accounting.window_n,
+                coinbase_threshold_sats: config.accounting.coinbase_threshold_sats,
+                budget_floor_wu: u64::from(config.budget.floor_wu),
+                budget_ceiling_wu: u64::from(config.budget.ceiling_wu),
+            },
         ));
         let app = spc_pool::api::router(backend, network);
         let listener = tokio::net::TcpListener::bind(&config.api.listen).await?;

@@ -65,6 +65,15 @@ distribution path. The `payout` and `ark` roles have no inbound ports; they
 talk to Redis/Postgres and the Ark server respectively. `spc-agent` connects
 upstream to `[pool] listen` (SV2) and serves local SV1 miners.
 
+Startup fails closed. A `front` refuses to start when Redis is unreachable
+(slice and block events are the accounting trail), `payout` refuses to run
+without a chain view (template source `rpc`), and the `ark` role requires
+`[ark]` with `enabled`, `float_target_sats`, `ark_id`, `order_pubkey`,
+`retry_blocks`, a non-empty `send_command` (SPEC §11.10), and template
+source `rpc` (it refreshes its tip from the chain view). The single dev
+escape hatch is `[accounting] allow_unchecked_chain` - regtest/signet only,
+enforced at config validation - which re-enables those unchecked paths.
+
 Example NixOS configuration (`nixosModules.spc-stack` imports the pool and
 agent modules and enables Postgres/Redis):
 
@@ -217,21 +226,32 @@ are normative. Page-worthy items are marked.
 | `spc_registration_lag_revs` | rising |
 | `spc_orphaned_settlement_total{reason}` | any `missing_block_event` - reconstruct from the on-chain coinbase (SPEC §7.4) |
 
-Status caveat: the `/metrics` route currently returns a placeholder - the
-Prometheus registry wiring is pending (§9). The names above are what the
-build is converging to; wire the alarm rules once the exporter lands.
-`GET /healthz` works today and is the probe to use for liveness.
-
+Served today by the `api` role (Prometheus text 0.0.4 on `GET /metrics`):
+the store-sourced families `spc_blocks_total{status}`,
+`spc_pending_liability_sats`, `spc_ark_due_sats`,
+`spc_ark_payouts_total{status}` and `spc_forfeited_sats_total`; the
+config gauges `spc_config_window_n`, `spc_config_coinbase_threshold_sats`,
+`spc_config_budget_floor_wu` and `spc_config_budget_ceiling_wu`; plus
+`spc_process_uptime_seconds` and `spc_metrics_scrape_errors_total`. A
+family whose store query failed is omitted from the scrape - a missing
+series means "unknown", never "empty" - and the failure counts in
+`spc_metrics_scrape_errors_total` (alarm on any growth). The remaining
+families in the table above are sourced by other roles and are not
+exported yet; wire those alarm rules as they land. `GET /healthz` is the
+liveness probe.
 ## 8. What is deliberately not complete
 
 From `docs/STATUS.md` "Remaining"; these are the gaps an operator must know
 about, not bugs:
 
 1. **The bark wallet adapter.** Order emission (`payout` signs and caps
-   `ArkSendOrder`s) and order verification (the `ark` role) are done, but the
-   transport to a real Ark server is a mock. The stock bark wallet/server
-   call is missing and needs a pinned bark checkout plus a stock `captaind`.
-   Until it lands, the Ark tier does not pay out against a live server.
+   `ArkSendOrder`s) and order verification (the `ark` role) are done, and
+   the `ark` role executes sends through the external-command transport
+   (`[ark] send_command`, SPEC §11.10), fail-closed on every ambiguity.
+   What is still missing is the stock bark wallet/server adapter behind
+   that command - it needs a pinned bark checkout plus a stock `captaind`.
+   Until it lands, the Ark tier pays out only through an operator-supplied
+   send command, not against a live server.
 2. **JD fallback.** The rules for a JDS decline or 10 s silence, and the
    full-template rebuild path in the JDC, are not implemented. Live JDS/JDC
    declaration and recompute-and-compare work; the fallbacks do not.
@@ -240,6 +260,5 @@ about, not bugs:
    independently recovered by a third party's `spc-scan` (SPEC §9 rollout) -
    has not run. Mainnet is out of scope for v0.1.
 4. Also pending, lower operational impact: the `"ipc"`/`"sv2-tp"` template
-   sources (§1), the `/metrics` exporter (§7), the seeded
-   `--features cheat-slice-difficulty` statistical test, and the
-   normative/security review over the integrated tree.
+   sources (§1), the seeded `--features cheat-slice-difficulty` statistical
+   test, and the normative/security review over the integrated tree.
