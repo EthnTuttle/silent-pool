@@ -7,18 +7,22 @@ use std::sync::Arc;
 
 use spc_ext::{DistributionIdTlv, SetPayoutDistribution};
 use stratum_apps::key_utils::{Secp256k1PublicKey, Secp256k1SecretKey};
-use stratum_core::binary_sv2::{self, B0255, B064K};
+use stratum_core::binary_sv2::{self, GetSize, Seq064K, B0255, B064K};
 use stratum_core::codec_sv2::SerializedFrame;
 use stratum_core::common_messages_sv2::{
     SetupConnection, SetupConnectionSuccess, MESSAGE_TYPE_SETUP_CONNECTION,
     MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
+};
+use stratum_core::extensions_sv2::{
+    RequestExtensions, RequestExtensionsSuccess, EXTENSION_TYPE_EXTENSIONS_NEGOTIATION,
+    MESSAGE_TYPE_REQUEST_EXTENSIONS, MESSAGE_TYPE_REQUEST_EXTENSIONS_SUCCESS,
 };
 use stratum_core::job_declaration_sv2::{
     AllocateMiningJobToken, AllocateMiningJobTokenSuccess, DeclareMiningJob,
     MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN, MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN_SUCCESS,
     MESSAGE_TYPE_DECLARE_MINING_JOB,
 };
-use stratum_core::mining_sv2::MESSAGE_TYPE_SET_CUSTOM_MINING_JOB;
+use stratum_core::mining_sv2::{SetCustomMiningJob, MESSAGE_TYPE_SET_CUSTOM_MINING_JOB};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, Mutex};
 
@@ -139,6 +143,32 @@ impl JdsServerRef {
                             }
                         }
                         (EXT_PAYOUTS, 0) => { /* client must not publish */ }
+                        (EXTENSION_TYPE_EXTENSIONS_NEGOTIATION, MESSAGE_TYPE_REQUEST_EXTENSIONS) => {
+                            let msg: RequestExtensions = binary_sv2::from_bytes(&mut payload)
+                                .map_err(|e| format!("extensions: {e}"))?;
+                            let requested: Vec<u16> =
+                                msg.requested_extensions.iter().copied().collect();
+                            // 0x0001 negotiates, 0x0003 publishes payouts. An
+                            // unsupported 0x0020 is simply omitted from the
+                            // success list; the JDC only requires 0x0003.
+                            let supported: Vec<u16> = requested
+                                .iter()
+                                .copied()
+                                .filter(|e| matches!(*e, EXTENSION_TYPE_EXTENSIONS_NEGOTIATION | EXT_PAYOUTS))
+                                .collect();
+                            let success = RequestExtensionsSuccess {
+                                request_id: msg.request_id,
+                                supported_extensions: Seq064K::new(supported)
+                                    .map_err(|e| format!("extensions: {e}"))?,
+                            };
+                            write_msg_ext(
+                                &mut write,
+                                success,
+                                MESSAGE_TYPE_REQUEST_EXTENSIONS_SUCCESS,
+                                EXTENSION_TYPE_EXTENSIONS_NEGOTIATION,
+                            )
+                            .await?;
+                        }
                         (_, MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN) => {
                             let msg: AllocateMiningJobToken = binary_sv2::from_bytes(&mut payload)
                                 .map_err(|e| format!("allocate: {e}"))?;
@@ -166,17 +196,25 @@ impl JdsServerRef {
                             if let Some(id) = find_tlv(msg.excess_data.as_bytes()) {
                                 let height = *self.height.lock().await;
                                 if let Ok(outputs) = parse_coinbase_outputs(msg.coinbase_tx_suffix.as_bytes()) {
-                                    let res = self.jds.lock().await.validate_declared(id, height, &outputs);
-                                    if res.is_ok() {
-                                        *self.accepted.lock().await = Some(id);
+                                    match self.jds.lock().await.validate_declared(id, height, &outputs) {
+                                        Ok(()) => *self.accepted.lock().await = Some(id),
+                                        Err(error) => {
+                                            tracing::warn!(id, height, %error, "declared coinbase rejected")
+                                        }
                                     }
                                 }
                             }
                         }
                         (_, MESSAGE_TYPE_SET_CUSTOM_MINING_JOB) => {
-                            if let Some(id) = find_tlv(&payload) {
-                                if self.jds.lock().await.accepts_id(id) {
-                                    *self.accepted.lock().await = Some(id);
+                            let height = *self.height.lock().await;
+                            let result = {
+                                let jds = self.jds.lock().await;
+                                check_custom_job(&jds, height, &payload)
+                            };
+                            match result {
+                                Ok(id) => *self.accepted.lock().await = Some(id),
+                                Err(error) => {
+                                    tracing::warn!(height, %error, "SetCustomMiningJob rejected")
                                 }
                             }
                         }
@@ -196,21 +234,99 @@ impl JdsServerRef {
     }
 }
 
+/// Validate a Coinbase-only declaration (`SetCustomMiningJob`).
+///
+/// The extension appends the `distribution_id` TLV after the message payload
+/// (PR #203 §6); the TLV is not part of the `mining_sv2` struct, so the
+/// declared outputs are `coinbase_tx_outputs` (a consensus-serialized
+/// `Vec<TxOut>`, i.e. count + outputs) and the trailing bytes must contain
+/// exactly one well-formed `0x0003`/`0x01` TLV.
+fn check_custom_job(jds: &Jds, height: u32, payload: &[u8]) -> Result<u64, String> {
+    // `from_bytes` leaves trailing bytes untouched, so decode from a copy and
+    // use the message's serialized size to locate the appended TLV.
+    let mut buf = payload.to_vec();
+    let msg: SetCustomMiningJob =
+        binary_sv2::from_bytes(&mut buf).map_err(|e| format!("SetCustomMiningJob decode: {e}"))?;
+    let consumed = msg.get_size();
+    let outputs_bytes = msg.coinbase_tx_outputs.as_bytes().to_vec();
+    let trailing = payload
+        .get(consumed..)
+        .ok_or("SetCustomMiningJob message size does not match its payload")?;
+    let id = distribution_id_from_trailing(trailing)?;
+    let (outputs, consumed_outputs) = parse_outputs(&outputs_bytes, 0)?;
+    if consumed_outputs != outputs_bytes.len() {
+        return Err("trailing bytes after SetCustomMiningJob coinbase_tx_outputs".into());
+    }
+    jds.validate_declared(id, height, &outputs)
+        .map_err(|e| e.to_string())?;
+    Ok(id)
+}
+
+/// Parse one or more appended TLVs and return the `distribution_id`.
+///
+/// Fail-closed: truncated headers/values, a duplicate id, a wrong length or a
+/// missing id are all rejected with a specific reason.
+fn distribution_id_from_trailing(bytes: &[u8]) -> Result<u64, String> {
+    if bytes.is_empty() {
+        return Err("SetCustomMiningJob is missing the appended distribution_id TLV".into());
+    }
+    let mut off = 0usize;
+    let mut found = None;
+    while off < bytes.len() {
+        let rest = bytes
+            .get(off..)
+            .ok_or("SetCustomMiningJob TLV offset out of range")?;
+        if rest.len() < 5 {
+            return Err("truncated TLV header after SetCustomMiningJob".into());
+        }
+        let ext_type = u16::from_le_bytes([rest[0], rest[1]]);
+        let field_type = rest[2];
+        let len = u16::from_le_bytes([rest[3], rest[4]]) as usize;
+        let value = rest
+            .get(5..5 + len)
+            .ok_or("truncated TLV value after SetCustomMiningJob")?;
+        if ext_type == EXT_PAYOUTS && field_type == 0x01 {
+            if found.is_some() {
+                return Err("duplicate distribution_id TLV on SetCustomMiningJob".into());
+            }
+            if len != 8 {
+                return Err(format!("distribution_id TLV must be 8 bytes, got {len}"));
+            }
+            let id = u64::from_le_bytes(
+                value
+                    .try_into()
+                    .map_err(|_| "distribution_id TLV length mismatch")?,
+            );
+            found = Some(id);
+        }
+        off = off
+            .checked_add(5 + len)
+            .ok_or("SetCustomMiningJob TLV offset overflow")?;
+    }
+    found.ok_or_else(|| "SetCustomMiningJob is missing the appended distribution_id TLV".into())
+}
+
 fn parse_coinbase_outputs(suffix: &[u8]) -> Result<Vec<spc_ext::TxOut>, String> {
     // suffix: sequence (4) || output count || outputs || locktime
-    let mut off = 4usize;
-    let count = read_compact(suffix, &mut off).ok_or("output count")?;
+    Ok(parse_outputs(suffix, 4)?.0)
+}
+
+/// Parse a compact-size output list starting at `off`; returns the outputs and
+/// the offset just past the last one (the caller decides whether trailing
+/// bytes are allowed).
+fn parse_outputs(buf: &[u8], mut off: usize) -> Result<(Vec<spc_ext::TxOut>, usize), String> {
+    let count = read_compact(buf, &mut off).ok_or("output count")?;
     let mut out = Vec::with_capacity(count.min(4096));
     for _ in 0..count {
-        let value_bytes = suffix.get(off..off + 8).ok_or("value")?;
+        let value_bytes = buf.get(off..off + 8).ok_or("value")?;
         let value = u64::from_le_bytes(value_bytes.try_into().map_err(|_| "value")?);
         off += 8;
-        let n = read_compact(suffix, &mut off).ok_or("script len")?;
-        let script = suffix.get(off..off + n).ok_or("script")?.to_vec();
+        let n = read_compact(buf, &mut off).ok_or("script len")?;
+        let script = buf.get(off..off + n).ok_or("script")?.to_vec();
         off += n;
         out.push(spc_ext::TxOut { script, value });
     }
-    Ok(out)
+    Ok((out, off))
 }
 
 fn read_compact(buf: &[u8], off: &mut usize) -> Option<usize> {
@@ -255,9 +371,22 @@ async fn write_msg<T>(
 where
     T: binary_sv2::Serialize + binary_sv2::GetSize,
 {
-    let frame =
-        stratum_core::framing_sv2::framing::MessageFrame::from_message(msg, msg_type, 0, false)
-            .map_err(|e| format!("frame: {e}"))?;
+    write_msg_ext(write, msg, msg_type, 0).await
+}
+
+async fn write_msg_ext<T>(
+    write: &mut stratum_apps::network_helpers::noise_stream::NoiseTcpWriteHalf,
+    msg: T,
+    msg_type: u8,
+    ext_type: u16,
+) -> Result<(), String>
+where
+    T: binary_sv2::Serialize + binary_sv2::GetSize,
+{
+    let frame = stratum_core::framing_sv2::framing::MessageFrame::from_message(
+        msg, msg_type, ext_type, false,
+    )
+    .map_err(|e| format!("frame: {e}"))?;
     write
         .write_frame(frame)
         .await
@@ -279,4 +408,227 @@ async fn write_dist(
         .write_frame(frame)
         .await
         .map_err(|e| format!("write: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::coinbase::{build_jd_template, write_compact_size};
+    use crate::jds::{JdError, Jds};
+    use bitcoin::script::ScriptBuf;
+    use spc_ext::{compute_payout_amounts, TxOut};
+    use stratum_core::binary_sv2::{Seq0255, B0255, U256};
+    use stratum_core::mining_sv2::SetCustomMiningJob;
+
+    fn dist() -> SetPayoutDistribution {
+        SetPayoutDistribution {
+            distribution_id: 0,
+            pool_payout: TxOut {
+                script: vec![0x51, 0x20, 1, 1],
+                value: 100,
+            },
+            payouts: vec![TxOut {
+                script: vec![0x51, 0x20, 2, 2],
+                value: 300,
+            }],
+            dust_limits: vec![0],
+            additional_outputs: vec![TxOut {
+                script: vec![0x6a, 0x01, 2, 3],
+                value: 0,
+            }],
+        }
+    }
+
+    fn coinbase_outputs(d: &SetPayoutDistribution) -> Vec<(ScriptBuf, u64)> {
+        let a = compute_payout_amounts(1_000, d.pool_payout.value, &[300], &[0], 0).unwrap();
+        vec![
+            (ScriptBuf::from_bytes(d.pool_payout.script.clone()), a.pay_p),
+            (
+                ScriptBuf::from_bytes(d.payouts[0].script.clone()),
+                a.pays[0].unwrap(),
+            ),
+            (
+                ScriptBuf::from_bytes(d.additional_outputs[0].script.clone()),
+                0,
+            ),
+        ]
+    }
+
+    #[test]
+    fn declared_coinbase_parses_and_validates() {
+        let mut jds = Jds::new(3);
+        let d = dist();
+        let id = jds.publish(800_000, 1_000, d.clone());
+        let outputs = coinbase_outputs(&d);
+        let template = build_jd_template(2, 800_000, 8, &outputs, 0).unwrap();
+        let parsed = parse_coinbase_outputs(&template.suffix).unwrap();
+        assert_eq!(parsed.len(), outputs.len());
+        assert_eq!(parsed[0].value, outputs[0].1);
+        assert_eq!(parsed[0].script, outputs[0].0.as_bytes());
+
+        assert_eq!(jds.validate_declared(id, 800_000, &parsed), Ok(()));
+
+        // Height straddling is stale even for the current id.
+        assert_eq!(
+            jds.validate_declared(id, 800_001, &parsed),
+            Err(JdError::Stale)
+        );
+
+        // Mutated amounts and reordered outputs are invalid.
+        let mut bad = parsed.clone();
+        bad[0].value += 1;
+        assert_eq!(
+            jds.validate_declared(id, 800_000, &bad),
+            Err(JdError::Invalid)
+        );
+        let mut swapped = parsed.clone();
+        swapped.swap(0, 1);
+        assert_eq!(
+            jds.validate_declared(id, 800_000, &swapped),
+            Err(JdError::Invalid)
+        );
+    }
+
+    #[test]
+    fn declared_coinbase_tolerates_a_duplicate_trailing_carrier() {
+        let mut jds = Jds::new(0);
+        let d = dist();
+        let id = jds.publish(1, 1_000, d.clone());
+        let mut outputs = coinbase_outputs(&d);
+        outputs.push((
+            ScriptBuf::from_bytes(d.additional_outputs[0].script.clone()),
+            0,
+        ));
+        let template = build_jd_template(2, 1, 8, &outputs, 0).unwrap();
+        let parsed = parse_coinbase_outputs(&template.suffix).unwrap();
+        assert_eq!(jds.validate_declared(id, 1, &parsed), Ok(()));
+    }
+
+    #[test]
+    fn malformed_coinbase_suffixes_are_rejected() {
+        assert!(parse_coinbase_outputs(&[]).is_err());
+        assert!(parse_coinbase_outputs(&[0, 0, 0, 0]).is_err());
+        // One output declared but no bytes for its value.
+        assert!(parse_coinbase_outputs(&[0, 0, 0, 0, 1]).is_err());
+        // Script length runs past the suffix.
+        assert!(parse_coinbase_outputs(&[0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0x51]).is_err());
+    }
+
+    fn plain_outputs(d: &SetPayoutDistribution) -> Vec<(Vec<u8>, u64)> {
+        coinbase_outputs(d)
+            .into_iter()
+            .map(|(script, value)| (script.into_bytes(), value))
+            .collect()
+    }
+
+    fn serialize_outputs(outputs: &[(Vec<u8>, u64)]) -> Vec<u8> {
+        let mut out = Vec::new();
+        write_compact_size(&mut out, outputs.len() as u64);
+        for (script, value) in outputs {
+            out.extend_from_slice(&value.to_le_bytes());
+            write_compact_size(&mut out, script.len() as u64);
+            out.extend_from_slice(script);
+        }
+        out
+    }
+
+    fn custom_job_payload(outputs: &[(Vec<u8>, u64)], tlv: Option<u64>) -> Vec<u8> {
+        let encoded = serialize_outputs(outputs);
+        let msg = SetCustomMiningJob {
+            channel_id: 0,
+            request_id: 1,
+            token: B0255::new(b"token").unwrap(),
+            version: 0x2000_0000,
+            prev_hash: U256::from(&[0u8; 32]),
+            min_ntime: 0,
+            nbits: 0,
+            coinbase_tx_version: 2,
+            coinbase_prefix: B0255::new(b"").unwrap(),
+            coinbase_tx_input_n_sequence: u32::MAX,
+            coinbase_tx_outputs: B064K::new(&encoded).unwrap(),
+            coinbase_tx_locktime: 0,
+            merkle_path: Seq0255::new(Vec::<U256>::new()).unwrap(),
+        };
+        let mut bytes = binary_sv2::to_bytes(msg).unwrap();
+        if let Some(id) = tlv {
+            bytes.extend_from_slice(&DistributionIdTlv { id }.encode());
+        }
+        bytes
+    }
+
+    #[test]
+    fn custom_job_valid_declaration_is_accepted() {
+        let mut jds = Jds::new(0);
+        let d = dist();
+        let id = jds.publish(1, 1_000, d.clone());
+        let outputs = plain_outputs(&d);
+        let payload = custom_job_payload(&outputs, Some(id));
+        assert_eq!(check_custom_job(&jds, 1, &payload), Ok(id));
+    }
+
+    #[test]
+    fn custom_job_mutated_or_reordered_payout_is_rejected() {
+        let mut jds = Jds::new(0);
+        let d = dist();
+        let id = jds.publish(1, 1_000, d.clone());
+        let outputs = plain_outputs(&d);
+
+        let mut mutated = outputs.clone();
+        mutated[0].1 += 1;
+        assert!(check_custom_job(&jds, 1, &custom_job_payload(&mutated, Some(id))).is_err());
+
+        let mut swapped = outputs.clone();
+        swapped.swap(0, 1);
+        assert!(check_custom_job(&jds, 1, &custom_job_payload(&swapped, Some(id))).is_err());
+
+        // Dropping the carrier is also a mismatch.
+        let mut missing = outputs.clone();
+        missing.pop();
+        assert!(check_custom_job(&jds, 1, &custom_job_payload(&missing, Some(id))).is_err());
+    }
+
+    #[test]
+    fn custom_job_without_or_with_a_bad_tlv_is_rejected() {
+        let mut jds = Jds::new(0);
+        let d = dist();
+        let id = jds.publish(1, 1_000, d.clone());
+        let outputs = plain_outputs(&d);
+
+        let err = check_custom_job(&jds, 1, &custom_job_payload(&outputs, None)).unwrap_err();
+        assert!(
+            err.contains("missing the appended distribution_id TLV"),
+            "{err}"
+        );
+
+        // Truncated TLV header.
+        let mut payload = custom_job_payload(&outputs, Some(id));
+        payload.truncate(payload.len() - 10);
+        assert!(check_custom_job(&jds, 1, &payload).is_err());
+
+        // Wrong id at the current height is stale.
+        assert!(check_custom_job(&jds, 1, &custom_job_payload(&outputs, Some(id + 1))).is_err());
+        // Height straddling is stale.
+        assert!(check_custom_job(&jds, 2, &custom_job_payload(&outputs, Some(id))).is_err());
+    }
+
+    #[test]
+    fn custom_job_appended_tlv_is_parsed_strictly() {
+        let id = 0x0102_0304_0506_0708u64;
+        let tlv = DistributionIdTlv { id }.encode();
+        assert_eq!(distribution_id_from_trailing(&tlv), Ok(id));
+
+        // Unknown TLV before the id is skipped.
+        let mut mixed = vec![0x20, 0x00, 0x02, 0x02, 0x00, 0xaa, 0xbb];
+        mixed.extend_from_slice(&tlv);
+        assert_eq!(distribution_id_from_trailing(&mixed), Ok(id));
+
+        // Duplicate ids and wrong lengths are rejected.
+        let mut duplicate = tlv.clone();
+        duplicate.extend_from_slice(&tlv);
+        assert!(distribution_id_from_trailing(&duplicate).is_err());
+        let mut wrong_len = vec![0x03, 0x00, 0x01, 0x04, 0x00, 0x01, 0x02, 0x03, 0x04];
+        assert!(distribution_id_from_trailing(&wrong_len).is_err());
+        wrong_len.clear();
+        assert!(distribution_id_from_trailing(&wrong_len).is_err());
+    }
 }

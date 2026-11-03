@@ -39,7 +39,19 @@ async fn main() -> anyhow::Result<()> {
         "spc-agent starting"
     );
     if cli.roles.contains(&Role::Translator) {
+        if cli.roles.contains(&Role::Jdc) {
+            let jdc_config = config.clone();
+            return tokio::select! {
+                result = spc_agent::jdc::run(jdc_config) => result,
+                result = spc_agent::translator::run(config) => result,
+            };
+        }
         return spc_agent::translator::run(config).await;
     }
-    anyhow::bail!("this build wires the translator role; use --roles translator")
+    if cli.roles.contains(&Role::Jdc) {
+        return spc_agent::jdc::run(config).await;
+    }
+    anyhow::bail!(
+        "this build wires the translator and JDC roles; --roles wallet is not implemented"
+    )
 }

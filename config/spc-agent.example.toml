@@ -10,9 +10,15 @@ request_share_accounting = true
 [downstream]
 listen = "127.0.0.1:34255"
 
-# [jd]
+# [jd]                               # JDC role (SPEC §3.2, §3.5, §3.6)
 # enabled = true
-# tp_address = "127.0.0.1:48333"
+# jds_address = "127.0.0.1:34264"    # JDS listener in spc-pool [jd] listen
+# tp_address = "127.0.0.1:48333"     # the miner's own Template Provider (reserved)
+# scan_secret_key = "<64 hex chars>" # b_scan; MUST match sp_address
+# height = 800000                    # template fields until a TP is wired
+# coinbase_value = 5000000000        # coinbase_tx_value_remaining (T)
+# extranonce_len = 8
+# user_identifier = "spc-agent"      # AllocateMiningJobToken.user_identifier
 
 # [ark]
 # enabled = true
