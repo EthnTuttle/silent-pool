@@ -303,7 +303,10 @@ mod tests {
     /// decline is always distinguishable from a transport error.
     #[test]
     fn decline_codes_match_the_spec_table() {
-        assert_eq!(JdError::Invalid.decline_code(), "invalid-payout-distribution");
+        assert_eq!(
+            JdError::Invalid.decline_code(),
+            "invalid-payout-distribution"
+        );
         assert_eq!(JdError::Stale.decline_code(), "stale-payout-distribution");
         assert_eq!(JdError::Empty.decline_code(), "no-payout-distribution");
         assert_eq!(JdError::Ext("x".into()).decline_code(), "internal-error");

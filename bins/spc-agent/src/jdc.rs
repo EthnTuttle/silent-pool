@@ -6,6 +6,18 @@
 //! job. There is no base-protocol fallback: a JDS that declines `0x0003` or
 //! does not answer within [`JD_NEGOTIATION_TIMEOUT`] makes the role fail
 //! closed instead.
+//!
+//! ## Fallback (SPEC §3.5; decision 2026-11-03)
+//!
+//! After declaring, the JDC waits up to `declare_timeout` for the matching
+//! `DeclareMiningJob.Success`/`.Error`. A coded decline, silence past the
+//! window, or a refuse-mode own-payout failure latch the fallback: the JDC
+//! stops declaring, alarms once per episode, and retries once per *changed*
+//! declaration key `(distribution_id, template)` - never on a timer, so a
+//! dead JDS yields exactly one alarm and no re-sent declarations. Reading
+//! happens in a dedicated pump task ([`read_pump`]) so waiting with a
+//! deadline never cancels a half-read frame (the noise stream is not
+//! cancellation-safe).
 
 use std::time::{Duration, Instant};
 
@@ -27,12 +39,13 @@ use stratum_core::extensions_sv2::{
 };
 use stratum_core::framing_sv2::framing::MessageFrame;
 use stratum_core::job_declaration_sv2::{
-    AllocateMiningJobToken, AllocateMiningJobTokenSuccess, DeclareMiningJob,
-    MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN, MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN_SUCCESS,
-    MESSAGE_TYPE_DECLARE_MINING_JOB,
+    AllocateMiningJobToken, AllocateMiningJobTokenSuccess, DeclareMiningJob, DeclareMiningJobError,
+    DeclareMiningJobSuccess, MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN,
+    MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN_SUCCESS, MESSAGE_TYPE_DECLARE_MINING_JOB,
+    MESSAGE_TYPE_DECLARE_MINING_JOB_ERROR, MESSAGE_TYPE_DECLARE_MINING_JOB_SUCCESS,
 };
 use thiserror::Error;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tokio::time::timeout;
 
 use crate::config::{AgentConfig, OwnPayoutPolicy};
@@ -42,11 +55,20 @@ const EXT_PAYOUTS: u16 = 0x0003;
 const EXT_SHARE_ACCOUNTING: u16 = 0x0020;
 const EXT_NEGOTIATION: u16 = 0x0001;
 
-/// How long the JDS may stay silent before the JDC refuses JD mode
-/// (SPEC §3.2: a client whose `RequestExtensions.Error` lists `0x0003` MUST NOT
-/// run JD mode; silence is treated the same way rather than falling back to the
-/// base protocol).
+/// How long the JDS may stay silent during connect/negotiation before the JDC
+/// refuses JD mode (SPEC §3.2: a client whose `RequestExtensions.Error` lists
+/// `0x0003` MUST NOT run JD mode; silence is treated the same way rather than
+/// falling back to the base protocol).
 pub const JD_NEGOTIATION_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Default bounded wait for the declaration answer (SPEC §3.5; the roadmap
+/// names the same 10 s). Configured per deployment as `[jd]
+/// declare_timeout_secs`; [`MIN_DECLARE_TIMEOUT`] is the fail-closed floor.
+pub const DEFAULT_DECLARE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The fail-closed minimum for the declaration window: a shorter configured
+/// value is a startup error, never a clamp (SPEC §3.5).
+pub const MIN_DECLARE_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Miner-side key material for own-payout verification (SPEC §3.6): the
 /// BIP 352 scan secret key and spend public key.
@@ -88,14 +110,21 @@ pub enum JdcError {
     Config(String),
 }
 
-/// The template fields the JDC needs to build and declare a coinbase. A live
+/// The template fields the JDC needs to build and declare a job. A live
 /// deployment fills this from its own Template Provider; until that hook is
 /// wired the role takes it from `[jd]` (see [`JdPlan::from_config`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// `txs` is the template's transaction set as the wtxid list that goes into
+/// `DeclareMiningJob.wtxid_list`: on a new prev-hash the JDC rebuilds the
+/// *whole* template - coinbase and transaction list - never one without the
+/// other (SPEC §3.5).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JdTemplate {
     pub height: u32,
     pub coinbase_value: u64,
     pub extranonce_len: usize,
+    /// Wtxids of the template's non-coinbase transactions, in template order.
+    pub txs: Vec<[u8; 32]>,
 }
 
 /// Everything `run` needs, validated once at startup.
@@ -107,6 +136,8 @@ pub struct JdPlan {
     pub template: JdTemplate,
     pub policy: Policy,
     pub user_identifier: String,
+    /// Bounded wait for the declaration answer (SPEC §3.5).
+    pub declare_timeout: Duration,
 }
 
 impl JdPlan {
@@ -130,6 +161,13 @@ impl JdPlan {
             .map_err(|e| JdcError::Config(e.to_string()))?;
         let (height, coinbase_value, extranonce_len) =
             jd.template().map_err(|e| JdcError::Config(e.to_string()))?;
+        let declare_timeout = Duration::from_secs(jd.declare_timeout_secs);
+        if declare_timeout < MIN_DECLARE_TIMEOUT {
+            return Err(JdcError::Config(format!(
+                "[jd] declare_timeout_secs must be at least {}s (fail-closed minimum, SPEC §3.5)",
+                MIN_DECLARE_TIMEOUT.as_secs()
+            )));
+        }
         let policy = match config
             .own_payout_policy()
             .map_err(|e| JdcError::Config(e.to_string()))?
@@ -145,9 +183,11 @@ impl JdPlan {
                 height,
                 coinbase_value,
                 extranonce_len,
+                txs: Vec::new(),
             },
             policy,
             user_identifier: jd.user_identifier.clone(),
+            declare_timeout,
         })
     }
 }
@@ -165,24 +205,32 @@ pub async fn run(config: AgentConfig) -> anyhow::Result<()> {
 /// whole run, so `templates.changed()` stays pending instead of resolving to
 /// `Err` when there is no live Template Provider yet.
 async fn run_static_template(plan: JdPlan) -> anyhow::Result<()> {
-    let (tx, rx) = watch::channel(plan.template);
+    let (tx, rx) = watch::channel(plan.template.clone());
     run_with_templates(plan, rx, tx).await
 }
 
-/// Drive the JDC from a template stream. Every `SetPayoutDistribution` triggers
-/// a rebuild and a fresh declaration under the new distribution id; template
-/// updates are picked up by the next declaration. A new `SetNewPrevHash` is
-/// accompanied by a fresh distribution (SPEC §3.5), so the same path covers it.
+/// Drive the JDC from a template stream (SPEC §3.5 "JDC fallback").
+///
+/// One loop iteration: if the outstanding declared job's key moved, abandon
+/// it with a reason; if the current declaration key was not attempted yet,
+/// declare against the newest retained distribution and await the bounded
+/// answer. Then wait for the next distribution or template update.
+///
+/// Decline outcomes latch the fallback (alarm once per episode); recovery is
+/// a single fresh attempt triggered by a changed key - a republished
+/// distribution (owed on every `SetNewPrevHash`, rebalance and ledger apply)
+/// or a template move. There is no timer-based retry, so a silent JDS is
+/// declared to once and only once per key.
 ///
 /// `keepalive` MUST stay alive for the duration of this function. It is the
 /// `watch::Sender` for `templates`; dropping it makes `templates.changed()`
 /// resolve to `Err`, which this loop treats as a fatal "undeclared job" error.
 ///
 /// Integration hook: a live Template Provider must send each new
-/// [`JdTemplate`] (height, `coinbase_tx_value_remaining`, extranonce length)
-/// through the watch channel. There is intentionally no reuse of a stale
-/// coinbase across heights: the next declaration only happens on a new
-/// distribution.
+/// [`JdTemplate`] (height, `coinbase_tx_value_remaining`, extranonce length,
+/// transaction list) through the watch channel. There is intentionally no
+/// reuse of a stale template across heights: the template keys every
+/// declaration.
 pub async fn run_with_templates(
     plan: JdPlan,
     mut templates: watch::Receiver<JdTemplate>,
@@ -191,17 +239,51 @@ pub async fn run_with_templates(
     let mut jdc = Jdc::connect(&plan.jds, &plan.egress).await?;
     let token = jdc.allocate_token(&plan.user_identifier).await?;
     tracing::info!(jds = %plan.jds, "JDC connected; JD mode negotiated");
+    let mut latch = FallbackLatch::default();
+    let mut attempted: Option<(u64, JdTemplate)> = None;
 
     loop {
-        let template = *templates.borrow_and_update();
-        let id = jdc
-            .declare_with_distribution(&token, &template, &plan.own_keys, plan.policy)
-            .await?;
-        tracing::info!(
-            distribution_id = id,
-            height = template.height,
-            "JDC declared its coinbase"
-        );
+        let template = templates.borrow_and_update().clone();
+        if let Some(outstanding) = jdc.outstanding() {
+            if let Some(reason) = abandon_reason(
+                &outstanding,
+                &template,
+                jdc.last().map(|d| d.distribution_id),
+            ) {
+                jdc.abandon_outstanding(reason);
+            }
+        }
+        if let Some(id) = jdc.last().map(|d| d.distribution_id) {
+            let key = (id, template.clone());
+            if attempted.as_ref() != Some(&key) {
+                attempted = Some(key);
+                match jdc
+                    .declare_with_distribution(
+                        &token,
+                        &template,
+                        &plan.own_keys,
+                        plan.policy,
+                        plan.declare_timeout,
+                    )
+                    .await
+                {
+                    Ok(DeclareOutcome::Accepted(id)) => {
+                        latch.clear();
+                        tracing::info!(
+                            distribution_id = id,
+                            height = template.height,
+                            "JDC declared its coinbase"
+                        );
+                    }
+                    Ok(DeclareOutcome::Declined(decline)) => latch.enter_decline(&decline),
+                    Ok(DeclareOutcome::Silent) => latch.enter_silence(plan.declare_timeout),
+                    Err(error) => match fallback_kind_for(&error) {
+                        Some(kind) => latch.enter(kind, error.to_string()),
+                        None => return Err(error.into()),
+                    },
+                }
+            }
+        }
 
         tokio::select! {
             distribution = jdc.next_distribution() => {
@@ -223,11 +305,197 @@ pub async fn run_with_templates(
     }
 }
 
+/// The declaration this JDC considers live at the pool: answered
+/// `.Success` and not yet superseded (SPEC §3.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OutstandingJob {
+    pub distribution_id: u64,
+    pub height: u32,
+}
+
+/// Why an outstanding declaration was dropped. JDP has no cancel message;
+/// the JDS grace rule makes the abandoned job unacceptable to the pool, so
+/// this is client-side bookkeeping plus a log line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AbandonReason {
+    /// The template height moved (`SetNewPrevHash` at the miner's own TP).
+    NewPrevHash,
+    /// A new distribution replaced the one the job was declared under.
+    DistributionReplaced,
+}
+
+impl std::fmt::Display for AbandonReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AbandonReason::NewPrevHash => write!(f, "new-prev-hash"),
+            AbandonReason::DistributionReplaced => write!(f, "distribution-replaced"),
+        }
+    }
+}
+
+/// Decide whether the outstanding declaration is stale after the latest
+/// template/distribution state, and why. Height wins over distribution: a
+/// height move is the prev-hash signal.
+fn abandon_reason(
+    outstanding: &OutstandingJob,
+    template: &JdTemplate,
+    last_distribution_id: Option<u64>,
+) -> Option<AbandonReason> {
+    if outstanding.height != template.height {
+        Some(AbandonReason::NewPrevHash)
+    } else if last_distribution_id != Some(outstanding.distribution_id) {
+        Some(AbandonReason::DistributionReplaced)
+    } else {
+        None
+    }
+}
+
+/// A coded decline answer from the JDS (SPEC §3.5 "Declaration answers").
+/// This is a protocol outcome, not an I/O failure - [`JdcError::Network`] is
+/// reserved for transport errors, so the two are always distinguishable.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Decline {
+    pub code: String,
+}
+
+impl Decline {
+    /// Transient codes are expected at height races; anything else (including
+    /// an unknown code) is hard.
+    pub fn transient(&self) -> bool {
+        matches!(
+            self.code.as_str(),
+            "stale-payout-distribution" | "no-payout-distribution"
+        )
+    }
+}
+
+impl std::fmt::Display for Decline {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.code)
+    }
+}
+
+/// How a sent declaration resolved inside the bounded window.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DeclareOutcome {
+    /// `DeclareMiningJobSuccess`; carries the distribution id declared under.
+    Accepted(u64),
+    /// `DeclareMiningJobError` with the server's coded reason.
+    Declined(Decline),
+    /// No matching answer arrived inside `declare_timeout`.
+    Silent,
+}
+
+/// Why the fallback latched (drives the alarm level).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FallbackKind {
+    /// No answer inside the declaration window.
+    Silence,
+    /// A hard coded decline.
+    HardDecline,
+    /// A transient coded decline (height race, no distribution yet).
+    TransientDecline,
+    /// The own-payout check refused the job (or made it unverifiable).
+    OwnPayoutRefused,
+}
+
+/// The latched fallback state: alarms once per episode (error level) for
+/// hard causes, warn level for transient ones; cleared on a successful
+/// declaration.
+#[derive(Default, Debug)]
+struct FallbackLatch {
+    active: Option<FallbackKind>,
+    episodes: u64,
+}
+
+impl FallbackLatch {
+    fn enter(&mut self, kind: FallbackKind, detail: String) {
+        if self.active == Some(kind) {
+            // Same episode, same cause: hold quietly. Changing cause while
+            // latched logs again at debug level only.
+            tracing::debug!(?kind, %detail, "JD fallback already latched");
+            return;
+        }
+        self.active = Some(kind);
+        self.episodes += 1;
+        match kind {
+            FallbackKind::TransientDecline => {
+                tracing::warn!(%detail, episode = self.episodes, "JDS declined (transient); holding for the next distribution or template");
+            }
+            _ => {
+                tracing::error!(%detail, episode = self.episodes, "JD fallback latched: not declaring until the declaration key changes");
+            }
+        }
+    }
+
+    fn enter_decline(&mut self, decline: &Decline) {
+        let kind = if decline.transient() {
+            FallbackKind::TransientDecline
+        } else {
+            FallbackKind::HardDecline
+        };
+        self.enter(kind, decline.to_string());
+    }
+
+    fn enter_silence(&mut self, window: Duration) {
+        self.enter(
+            FallbackKind::Silence,
+            format!("no DeclareMiningJob answer within {window:?}"),
+        );
+    }
+
+    fn clear(&mut self) {
+        if self.active.take().is_some() {
+            tracing::info!(
+                episodes = self.episodes,
+                "JD fallback cleared; declaring again"
+            );
+        }
+    }
+}
+
+/// Which declaration-path failures latch the fallback instead of tearing the
+/// role down (SPEC §3.5/§3.6: refuse to mine an unpayable job; keep the
+/// failure scoped to JD). Transport and codec failures stay fatal.
+fn fallback_kind_for(error: &JdcError) -> Option<FallbackKind> {
+    match error {
+        JdcError::OwnAbsent | JdcError::OwnDerivation | JdcError::NoCarrier => {
+            Some(FallbackKind::OwnPayoutRefused)
+        }
+        _ => None,
+    }
+}
+
 pub struct Jdc {
-    read: NoiseTcpReadHalf,
+    rx: mpsc::Receiver<Result<SerializedFrame, String>>,
     write: NoiseTcpWriteHalf,
     last: Option<SetPayoutDistribution>,
     last_declared: Option<u64>,
+    outstanding: Option<OutstandingJob>,
+    last_abandonment: Option<(u64, AbandonReason)>,
+    request_seq: u32,
+    _pump: tokio::task::JoinHandle<()>,
+}
+
+/// Pump frames off the noise stream into a channel for the connection's
+/// whole life. `read_frame` is documented as not cancellation-safe, so no
+/// bounded wait in the JDC may wrap it directly; `mpsc::Receiver::recv` is
+/// cancellation-safe, which makes `declare_timeout` safe to apply anywhere
+/// without corrupting a half-read frame.
+async fn read_pump(mut read: NoiseTcpReadHalf, tx: mpsc::Sender<Result<SerializedFrame, String>>) {
+    loop {
+        match read.read_frame().await {
+            Ok(frame) => {
+                if tx.send(Ok(frame)).await.is_err() {
+                    return;
+                }
+            }
+            Err(e) => {
+                let _ = tx.send(Err(e.to_string())).await;
+                return;
+            }
+        }
+    }
 }
 
 impl Jdc {
@@ -239,7 +507,9 @@ impl Jdc {
         let stream = connect_with_noise(stream, None)
             .await
             .map_err(|e| JdcError::Network(e.to_string()))?;
-        let (mut read, mut write) = stream.into_split();
+        let (read, mut write) = stream.into_split();
+        let (tx, rx) = mpsc::channel(64);
+        let pump = tokio::spawn(read_pump(read, tx));
         let s = |x: &'static str| Str0255::try_from(x).unwrap();
         let setup = SetupConnection {
             protocol: Protocol::JobDeclarationProtocol,
@@ -259,30 +529,41 @@ impl Jdc {
             .write_frame(frame)
             .await
             .map_err(|e| JdcError::Network(e.to_string()))?;
-        // `read_frame` is not cancellation safe; an expired timeout aborts the
-        // whole `Jdc` (the connection is dropped), so no half-frame is reused.
-        let mut f = timeout(JD_NEGOTIATION_TIMEOUT, read.read_frame())
+        let mut jdc = Self {
+            rx,
+            write,
+            last: None,
+            last_declared: None,
+            outstanding: None,
+            last_abandonment: None,
+            request_seq: 2, // 1 is AllocateMiningJobToken's
+            _pump: pump,
+        };
+        let mut f = timeout(JD_NEGOTIATION_TIMEOUT, jdc.recv_frame())
             .await
-            .map_err(|_| JdcError::Timeout(JD_NEGOTIATION_TIMEOUT))?
-            .map_err(|e| JdcError::Network(e.to_string()))?;
+            .map_err(|_| JdcError::Timeout(JD_NEGOTIATION_TIMEOUT))??;
         if f.header().msg_type() != MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS {
             return Err(JdcError::Codec("expected SetupConnection.Success".into()));
         }
         let mut p = f.payload().to_vec();
         let _: SetupConnectionSuccess =
             binary_sv2::from_bytes(&mut p).map_err(|e| JdcError::Codec(e.to_string()))?;
-        let mut jdc = Self {
-            read,
-            write,
-            last: None,
-            last_declared: None,
-        };
         jdc.negotiate().await?;
         if jdc.last.is_none() {
             jdc.receive_distribution_within(JD_NEGOTIATION_TIMEOUT)
                 .await?;
         }
         Ok(jdc)
+    }
+
+    /// Receive the next frame from the pump. Channel closure or a pump-side
+    /// error is a transport failure and tears the role down.
+    async fn recv_frame(&mut self) -> Result<SerializedFrame, JdcError> {
+        match self.rx.recv().await {
+            Some(Ok(frame)) => Ok(frame),
+            Some(Err(e)) => Err(JdcError::Network(e)),
+            None => Err(JdcError::Network("JDS connection closed".into())),
+        }
     }
 
     /// Send `RequestExtensions{0x0001, 0x0003, 0x0020}` and require `0x0003`
@@ -314,10 +595,9 @@ impl Jdc {
             if remaining.is_zero() {
                 return Err(JdcError::Timeout(JD_NEGOTIATION_TIMEOUT));
             }
-            let mut f = timeout(remaining, self.read.read_frame())
+            let mut f = timeout(remaining, self.recv_frame())
                 .await
-                .map_err(|_| JdcError::Timeout(JD_NEGOTIATION_TIMEOUT))?
-                .map_err(|e| JdcError::Network(e.to_string()))?;
+                .map_err(|_| JdcError::Timeout(JD_NEGOTIATION_TIMEOUT))??;
             let ext = f.header().ext_type_without_channel_msg();
             let msg_type = f.header().msg_type();
 
@@ -370,10 +650,9 @@ impl Jdc {
             .await
             .map_err(|e| JdcError::Network(e.to_string()))?;
         loop {
-            let mut f = timeout(JD_NEGOTIATION_TIMEOUT, self.read.read_frame())
+            let mut f = timeout(JD_NEGOTIATION_TIMEOUT, self.recv_frame())
                 .await
-                .map_err(|_| JdcError::Timeout(JD_NEGOTIATION_TIMEOUT))?
-                .map_err(|e| JdcError::Network(e.to_string()))?;
+                .map_err(|_| JdcError::Timeout(JD_NEGOTIATION_TIMEOUT))??;
             if f.header().msg_type() == MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN_SUCCESS {
                 let mut p = f.payload().to_vec();
                 let success: AllocateMiningJobTokenSuccess =
@@ -491,15 +770,17 @@ impl Jdc {
         spc_crypto::parse_op_return(&views).ok_or(JdcError::NoCarrier)
     }
 
-    /// Rebuild the coinbase for the most recent distribution and declare it.
-    /// Returns the distribution id that was declared.
+    /// Rebuild the coinbase for the most recent distribution and declare it,
+    /// then wait up to `window` for the matching `.Success`/`.Error`
+    /// (SPEC §3.5). Distributions published during the wait are retained.
     pub async fn declare_with_distribution(
         &mut self,
         token: &[u8],
         template: &JdTemplate,
         own_keys: &OwnKeys,
         policy: Policy,
-    ) -> Result<u64, JdcError> {
+        window: Duration,
+    ) -> Result<DeclareOutcome, JdcError> {
         let distribution = self.last.clone().ok_or(JdcError::Empty)?;
         let a_send_x = Self::send_key_from_distribution(&distribution)?;
         let (prefix, suffix) = Self::build_coinbase(
@@ -511,32 +792,53 @@ impl Jdc {
             own_keys,
             policy,
         )?;
-        self.declare_job(token, distribution.distribution_id, &prefix, &suffix)
+        let request_id = self.next_request_id();
+        self.declare_job(
+            token,
+            distribution.distribution_id,
+            &prefix,
+            &suffix,
+            &template.txs,
+            request_id,
+        )
+        .await?;
+        let outcome = self
+            .await_declaration(request_id, distribution.distribution_id, window)
             .await?;
-        self.last_declared = Some(distribution.distribution_id);
-        Ok(distribution.distribution_id)
+        if let DeclareOutcome::Accepted(id) = outcome {
+            self.last_declared = Some(id);
+            self.outstanding = Some(OutstandingJob {
+                distribution_id: id,
+                height: template.height,
+            });
+        }
+        Ok(outcome)
     }
 
     /// Declare a job with the current distribution id. The caller supplies the
-    /// token from `allocate_token` and the prefix/suffix from `build_coinbase`.
+    /// token from `allocate_token`, the prefix/suffix from `build_coinbase`
+    /// and the template's transaction list (`wtxids`).
     pub async fn declare_job(
         &mut self,
         token: &[u8],
         id: u64,
         coinbase_prefix: &[u8],
         coinbase_suffix: &[u8],
+        wtxids: &[[u8; 32]],
+        request_id: u32,
     ) -> Result<(), JdcError> {
         let tlv = DistributionIdTlv { id }.encode();
+        let wtxid_list = Seq064K::try_from(wtxids.iter().map(U256::from).collect::<Vec<U256>>())
+            .map_err(|e| JdcError::Codec(e.to_string()))?;
         let msg = DeclareMiningJob {
-            request_id: 2,
+            request_id,
             mining_job_token: B0255::new(token).map_err(|e| JdcError::Codec(e.to_string()))?,
             version: 0x2000_0000,
             coinbase_tx_prefix: B064K::new(coinbase_prefix)
                 .map_err(|e| JdcError::Codec(e.to_string()))?,
             coinbase_tx_suffix: B064K::new(coinbase_suffix)
                 .map_err(|e| JdcError::Codec(e.to_string()))?,
-            wtxid_list: Seq064K::try_from(Vec::<U256>::new())
-                .map_err(|e| JdcError::Codec(e.to_string()))?,
+            wtxid_list,
             excess_data: B064K::new(&tlv).map_err(|e| JdcError::Codec(e.to_string()))?,
         };
         let frame = MessageFrame::from_message(msg, MESSAGE_TYPE_DECLARE_MINING_JOB, 0, false)
@@ -547,21 +849,79 @@ impl Jdc {
             .map_err(|e| JdcError::Network(e.to_string()))
     }
 
+    /// Wait for the answer to the declaration sent with `request_id`, at most
+    /// `window`. Frames that are not the matching answer are handled inline
+    /// (distributions retained) or skipped; a late answer for a different
+    /// request is ignored, not mistaken for ours.
+    async fn await_declaration(
+        &mut self,
+        request_id: u32,
+        id: u64,
+        window: Duration,
+    ) -> Result<DeclareOutcome, JdcError> {
+        let deadline = Instant::now() + window;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Ok(DeclareOutcome::Silent);
+            }
+            let mut f = match timeout(remaining, self.recv_frame()).await {
+                Ok(f) => f?,
+                Err(_) => return Ok(DeclareOutcome::Silent),
+            };
+            if self.retain_distribution(&mut f)? {
+                continue;
+            }
+            let msg_type = f.header().msg_type();
+            if !matches!(
+                msg_type,
+                MESSAGE_TYPE_DECLARE_MINING_JOB_SUCCESS | MESSAGE_TYPE_DECLARE_MINING_JOB_ERROR
+            ) {
+                continue;
+            }
+            let mut p = f.payload().to_vec();
+            match msg_type {
+                MESSAGE_TYPE_DECLARE_MINING_JOB_SUCCESS => {
+                    let m: DeclareMiningJobSuccess = binary_sv2::from_bytes(&mut p)
+                        .map_err(|e| JdcError::Codec(e.to_string()))?;
+                    if m.request_id == request_id {
+                        return Ok(DeclareOutcome::Accepted(id));
+                    }
+                    tracing::debug!(
+                        got = m.request_id,
+                        want = request_id,
+                        "ignoring a declaration answer for another request"
+                    );
+                }
+                _ => {
+                    let m: DeclareMiningJobError = binary_sv2::from_bytes(&mut p)
+                        .map_err(|e| JdcError::Codec(e.to_string()))?;
+                    if m.request_id == request_id {
+                        return Ok(DeclareOutcome::Declined(Decline {
+                            code: m.error_code.as_utf8_or_hex().to_string(),
+                        }));
+                    }
+                    tracing::debug!(
+                        got = m.request_id,
+                        want = request_id,
+                        "ignoring a declaration answer for another request"
+                    );
+                }
+            }
+        }
+    }
+
     pub async fn next_distribution(&mut self) -> Result<SetPayoutDistribution, JdcError> {
         loop {
-            let mut f = self
-                .read
-                .read_frame()
-                .await
-                .map_err(|e| JdcError::Network(e.to_string()))?;
+            let mut f = self.recv_frame().await?;
             if self.retain_distribution(&mut f)? {
                 return self.last.clone().ok_or(JdcError::Empty);
             }
         }
     }
 
-    /// Bounded first-distribution read. The same cancellation-safety caveat as
-    /// [`Self::negotiate`] applies: expiry drops the connection.
+    /// Bounded first-distribution read. The pump makes the timeout
+    /// cancellation-safe: expiry no longer drops a half-read frame.
     pub async fn receive_distribution_within(
         &mut self,
         window: Duration,
@@ -572,10 +932,9 @@ impl Jdc {
             if remaining.is_zero() {
                 return Err(JdcError::Timeout(window));
             }
-            let mut f = timeout(remaining, self.read.read_frame())
+            let mut f = timeout(remaining, self.recv_frame())
                 .await
-                .map_err(|_| JdcError::Timeout(window))?
-                .map_err(|e| JdcError::Network(e.to_string()))?;
+                .map_err(|_| JdcError::Timeout(window))??;
             if self.retain_distribution(&mut f)? {
                 return self.last.clone().ok_or(JdcError::Empty);
             }
@@ -594,12 +953,43 @@ impl Jdc {
         Ok(false)
     }
 
+    fn next_request_id(&mut self) -> u32 {
+        let id = self.request_seq;
+        self.request_seq = self.request_seq.wrapping_add(1);
+        id
+    }
+
     pub fn last(&self) -> Option<&SetPayoutDistribution> {
         self.last.as_ref()
     }
 
     pub fn last_declared(&self) -> Option<u64> {
         self.last_declared
+    }
+
+    /// The declaration the JDC considers live at the pool, if any.
+    pub fn outstanding(&self) -> Option<OutstandingJob> {
+        self.outstanding
+    }
+
+    /// The most recent abandonment, for observability and tests.
+    pub fn last_abandonment(&self) -> Option<(u64, AbandonReason)> {
+        self.last_abandonment
+    }
+
+    /// Abandon the outstanding declaration with a reason (SPEC §3.5: a
+    /// template move invalidates it; the JDS grace rule makes it
+    /// unacceptable server-side).
+    pub fn abandon_outstanding(&mut self, reason: AbandonReason) -> Option<u64> {
+        let job = self.outstanding.take()?;
+        tracing::info!(
+            distribution_id = job.distribution_id,
+            height = job.height,
+            %reason,
+            "JDC abandoning declared job"
+        );
+        self.last_abandonment = Some((job.distribution_id, reason));
+        Some(job.distribution_id)
     }
 
     /// Reserved for the declaration layer; the write half is kept so the JDC
@@ -637,11 +1027,25 @@ mod tests {
     use bitcoin::secp256k1::Secp256k1;
     use spc_ext::TxOut;
 
+    /// Non-negotiation declaration windows used by the tests: long enough
+    /// that a live JDS answers; short enough that a scripted silence fails
+    /// fast.
+    const SHORT: Duration = Duration::from_millis(300);
+
     fn keys() -> OwnKeys {
         let secp = Secp256k1::new();
         let b_scan = SecretKey::from_slice(&[0x11; 32]).unwrap();
         let b_spend = SecretKey::from_slice(&[0x12; 32]).unwrap();
         OwnKeys::new(b_scan, PublicKey::from_secret_key(&secp, &b_spend))
+    }
+
+    fn template_at(height: u32) -> JdTemplate {
+        JdTemplate {
+            height,
+            coinbase_value: 1_000,
+            extranonce_len: 8,
+            txs: Vec::new(),
+        }
     }
 
     fn dist_with_payout(script: Vec<u8>) -> SetPayoutDistribution {
@@ -863,6 +1267,80 @@ mod tests {
         assert!(require_payout_extension(&[EXT_NEGOTIATION, EXT_PAYOUTS]).is_ok());
     }
 
+    /// SPEC §3.5: only the race-expected codes are transient; anything else,
+    /// including a code this build does not know, is hard (fail closed).
+    #[test]
+    fn decline_codes_classify_by_action() {
+        assert!(Decline {
+            code: "stale-payout-distribution".into()
+        }
+        .transient());
+        assert!(Decline {
+            code: "no-payout-distribution".into()
+        }
+        .transient());
+        assert!(!Decline {
+            code: "invalid-payout-distribution".into()
+        }
+        .transient());
+        assert!(!Decline {
+            code: "invalid-job".into()
+        }
+        .transient());
+        assert!(!Decline {
+            code: "some-future-code".into()
+        }
+        .transient());
+    }
+
+    /// SPEC §3.5: a height move abandons with `new-prev-hash`; a same-height
+    /// distribution move with `distribution-replaced`.
+    #[test]
+    fn abandon_reason_prefers_the_height_move() {
+        let job = OutstandingJob {
+            distribution_id: 5,
+            height: 1,
+        };
+        let t1 = template_at(1);
+        let mut t2 = template_at(2);
+        assert_eq!(abandon_reason(&job, &t1, Some(5)), None);
+        assert_eq!(
+            abandon_reason(&job, &t1, Some(6)),
+            Some(AbandonReason::DistributionReplaced)
+        );
+        assert_eq!(
+            abandon_reason(&job, &t2, Some(5)),
+            Some(AbandonReason::NewPrevHash)
+        );
+        // Height wins when both moved.
+        assert_eq!(
+            abandon_reason(&job, &t2, Some(6)),
+            Some(AbandonReason::NewPrevHash)
+        );
+        // A same-height template whose tx set changed is not an abandonment.
+        t2.height = 1;
+        t2.txs.push([0xaa; 32]);
+        assert_eq!(abandon_reason(&job, &t2, Some(5)), None);
+    }
+
+    #[test]
+    fn own_payout_failures_latch_the_fallback_transport_errors_do_not() {
+        for e in [
+            JdcError::OwnAbsent,
+            JdcError::OwnDerivation,
+            JdcError::NoCarrier,
+        ] {
+            assert_eq!(
+                fallback_kind_for(&e),
+                Some(FallbackKind::OwnPayoutRefused),
+                "{e}"
+            );
+        }
+        assert_eq!(fallback_kind_for(&JdcError::Network("x".into())), None);
+        assert_eq!(fallback_kind_for(&JdcError::Codec("x".into())), None);
+        assert_eq!(fallback_kind_for(&JdcError::Empty), None);
+    }
+
     fn own_distribution(
         height: u32,
         a_send_x: &[u8; 32],
@@ -888,6 +1366,38 @@ mod tests {
         }
     }
 
+    async fn wait_accepted(server: &spc_pool::jds_server::JdsServer, id: u64) {
+        for _ in 0..100 {
+            if server.accepted().await == Some(id) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("JDS did not accept distribution {id}");
+    }
+
+    async fn wait_declare_count(server: &spc_pool::jds_server::JdsServer, n: usize) {
+        for _ in 0..100 {
+            if server.declare_count().await >= n {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("JDS saw fewer than {n} declarations");
+    }
+
+    fn plan_for(addr: std::net::SocketAddr, own_keys: &OwnKeys, template: JdTemplate) -> JdPlan {
+        JdPlan {
+            jds: addr.into(),
+            egress: Egress::DIRECT,
+            own_keys: own_keys.clone(),
+            template,
+            policy: Policy::Refuse,
+            user_identifier: "jdc-test".into(),
+            declare_timeout: SHORT,
+        }
+    }
+
     #[tokio::test]
     async fn jdc_declares_current_and_rebuilds_on_a_new_distribution() {
         use spc_pool::jds_server::JdsServer;
@@ -902,17 +1412,20 @@ mod tests {
 
         let mut jdc = Jdc::connect(&addr.into(), &Egress::DIRECT).await.unwrap();
         let token = jdc.allocate_token("jdc-test").await.unwrap();
-        let template = JdTemplate {
-            height: 1,
-            coinbase_value: 1_000,
-            extranonce_len: 8,
-        };
-        let declared = jdc
-            .declare_with_distribution(&token, &template, &own_keys, Policy::Refuse)
+        let template = template_at(1);
+        let outcome = jdc
+            .declare_with_distribution(&token, &template, &own_keys, Policy::Refuse, SHORT)
             .await
             .unwrap();
-        assert_eq!(declared, id);
+        assert_eq!(outcome, DeclareOutcome::Accepted(id));
         assert_eq!(jdc.last_declared(), Some(id));
+        assert_eq!(
+            jdc.outstanding(),
+            Some(OutstandingJob {
+                distribution_id: id,
+                height: 1
+            })
+        );
         wait_accepted(&server, id).await;
 
         // The JDS republishes at a new revenue; the JDC must rebuild the
@@ -926,24 +1439,257 @@ mod tests {
         assert_eq!(received.distribution_id, id2);
         let template2 = JdTemplate {
             coinbase_value: 2_000,
-            ..template
+            ..template.clone()
         };
-        let declared2 = jdc
-            .declare_with_distribution(&token, &template2, &own_keys, Policy::Refuse)
+        let outcome2 = jdc
+            .declare_with_distribution(&token, &template2, &own_keys, Policy::Refuse, SHORT)
             .await
             .unwrap();
-        assert_eq!(declared2, id2);
+        assert_eq!(outcome2, DeclareOutcome::Accepted(id2));
         wait_accepted(&server, id2).await;
     }
 
-    async fn wait_accepted(server: &spc_pool::jds_server::JdsServer, id: u64) {
-        for _ in 0..100 {
-            if server.accepted().await == Some(id) {
-                return;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-        panic!("JDS did not accept distribution {id}");
+    /// A coded decline is a protocol outcome (SPEC §3.5), not a transport
+    /// failure: the same client then sees a real network error behave
+    /// differently when the server goes away.
+    #[tokio::test]
+    async fn decline_codes_are_not_transport_errors() {
+        use spc_pool::jds_server::{AnswerPolicy, JdsServer};
+
+        let server = JdsServer::new(4);
+        let (addr, _handle) = server.bind("127.0.0.1:0").await.unwrap();
+        let own_keys = keys();
+        let send = spc_crypto::SendKey::generate(1).unwrap();
+        let a_x = *send.x_only();
+        server
+            .publish(1, 1_000, own_distribution(1, &a_x, &own_keys, 100))
+            .await
+            .unwrap();
+        server
+            .set_answer_policy(AnswerPolicy::ForceDecline(
+                "invalid-payout-distribution".into(),
+            ))
+            .await;
+
+        let mut jdc = Jdc::connect(&addr.into(), &Egress::DIRECT).await.unwrap();
+        let token = jdc.allocate_token("jdc-test").await.unwrap();
+        let outcome = jdc
+            .declare_with_distribution(&token, &template_at(1), &own_keys, Policy::Refuse, SHORT)
+            .await
+            .unwrap();
+        assert_eq!(
+            outcome,
+            DeclareOutcome::Declined(Decline {
+                code: "invalid-payout-distribution".into()
+            }),
+            "a coded decline is a protocol outcome, not an Err"
+        );
+        assert_eq!(jdc.last_declared(), None, "declined jobs are not live");
+        assert_eq!(jdc.outstanding(), None);
+        assert_eq!(server.declare_count().await, 1);
+
+        // A transport failure is a different beast: the connection drops
+        // (crashed-JDS stand-in) and the same call path returns Err(Network).
+        server.set_answer_policy(AnswerPolicy::HangUp).await;
+        let err = jdc
+            .declare_with_distribution(&token, &template_at(1), &own_keys, Policy::Refuse, SHORT)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, JdcError::Network(_)),
+            "expected a transport error, got {err}"
+        );
+    }
+
+    /// Decline -> fallback, once: the JDC declares once per declaration key,
+    /// does not loop against the decline, and recovers on the next key (a
+    /// republished distribution).
+    #[tokio::test]
+    async fn decline_latches_the_fallback_and_recovery_redeclares_once() {
+        use spc_pool::jds_server::{AnswerPolicy, JdsServer};
+
+        let server = JdsServer::new(5);
+        let (addr, _handle) = server.bind("127.0.0.1:0").await.unwrap();
+        let own_keys = keys();
+        let send = spc_crypto::SendKey::generate(1).unwrap();
+        let a_x = *send.x_only();
+        server
+            .publish(1, 1_000, own_distribution(1, &a_x, &own_keys, 100))
+            .await
+            .unwrap();
+        server
+            .set_answer_policy(AnswerPolicy::ForceDecline(
+                "invalid-payout-distribution".into(),
+            ))
+            .await;
+
+        let plan = plan_for(addr, &own_keys, template_at(1));
+        let template = plan.template.clone();
+        let (tx, rx) = watch::channel(template);
+        let handle = tokio::spawn(run_with_templates(plan, rx, tx));
+        wait_declare_count(&server, 1).await;
+        // Latched: no second declaration while nothing moved.
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        assert_eq!(server.declare_count().await, 1);
+        assert!(!handle.is_finished(), "a declined JDC must not exit");
+
+        // Recovery: clear the decline and republish; exactly one fresh
+        // declaration under the new key is accepted.
+        server.set_answer_policy(AnswerPolicy::Natural).await;
+        let id2 = server
+            .publish(1, 1_000, own_distribution(1, &a_x, &own_keys, 100))
+            .await
+            .unwrap();
+        wait_accepted(&server, id2).await;
+        assert_eq!(server.declare_count().await, 2);
+        handle.abort();
+    }
+
+    /// 10 s style silence (here 300 ms) -> fallback once, not repeatedly: the
+    /// muted server receives exactly one declaration per key, and the role
+    /// stays alive waiting for inputs.
+    #[tokio::test]
+    async fn silence_latches_exactly_once_until_an_input_moves() {
+        use spc_pool::jds_server::{AnswerPolicy, JdsServer};
+
+        let server = JdsServer::new(6);
+        let (addr, _handle) = server.bind("127.0.0.1:0").await.unwrap();
+        let own_keys = keys();
+        let send = spc_crypto::SendKey::generate(1).unwrap();
+        let a_x = *send.x_only();
+        server
+            .publish(1, 1_000, own_distribution(1, &a_x, &own_keys, 100))
+            .await
+            .unwrap();
+        server.set_answer_policy(AnswerPolicy::Mute).await;
+
+        let plan = plan_for(addr, &own_keys, template_at(1));
+        let template = plan.template.clone();
+        let (tx, rx) = watch::channel(template);
+        let handle = tokio::spawn(run_with_templates(plan, rx, tx));
+        wait_declare_count(&server, 1).await;
+        // Well beyond the SHORT window: no retry, no busy loop, no exit.
+        tokio::time::sleep(std::time::Duration::from_millis(1_200)).await;
+        assert_eq!(server.declare_count().await, 1);
+        assert!(!handle.is_finished(), "a silenced JDC must not exit");
+
+        // Un-mute and republish: one fresh declaration, accepted.
+        server.set_answer_policy(AnswerPolicy::Natural).await;
+        let id2 = server
+            .publish(1, 1_000, own_distribution(1, &a_x, &own_keys, 100))
+            .await
+            .unwrap();
+        wait_accepted(&server, id2).await;
+        assert_eq!(server.declare_count().await, 2);
+        handle.abort();
+    }
+
+    /// A refuse-mode own-payout failure falls back *before any declaration is
+    /// sent*: the miner never hashes a job that cannot pay it. Recovery is the
+    /// next key as usual.
+    #[tokio::test]
+    async fn own_payout_refusal_declares_nothing_until_fixed() {
+        use spc_pool::jds_server::JdsServer;
+
+        let server = JdsServer::new(7);
+        let (addr, _handle) = server.bind("127.0.0.1:0").await.unwrap();
+        let own_keys = keys();
+        let send = spc_crypto::SendKey::generate(1).unwrap();
+        let a_x = *send.x_only();
+        // This distribution pays a different miner only (dist_with_payout has
+        // someone else's script), and carries the carrier with a valid key.
+        let mut without_us = dist_with_payout(vec![0x51, 0x20, 2, 2]);
+        without_us.additional_outputs = vec![TxOut {
+            script: spc_crypto::emit_op_return(&a_x).to_bytes(),
+            value: 0,
+        }];
+        server.publish(1, 1_000, without_us).await.unwrap();
+
+        let plan = plan_for(addr, &own_keys, template_at(1));
+        let template = plan.template.clone();
+        let (tx, rx) = watch::channel(template);
+        let handle = tokio::spawn(run_with_templates(plan, rx, tx));
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        assert_eq!(
+            server.declare_count().await,
+            0,
+            "an unpayable distribution must never be declared"
+        );
+        assert!(!handle.is_finished(), "a refused JDC must not exit");
+
+        // Recovery: the next distribution pays us again.
+        let id2 = server
+            .publish(1, 1_000, own_distribution(1, &a_x, &own_keys, 100))
+            .await
+            .unwrap();
+        wait_accepted(&server, id2).await;
+        assert_eq!(server.declare_count().await, 1);
+        handle.abort();
+    }
+
+    /// A new prev-hash while a declared job is outstanding: the old job is
+    /// abandoned (`new-prev-hash`), and the redeclaration carries the *whole*
+    /// rebuilt template - fresh coinbase and the fresh transaction list.
+    #[tokio::test]
+    async fn new_prev_hash_abandons_and_rebuilds_the_full_template() {
+        use spc_pool::jds_server::JdsServer;
+
+        let server = JdsServer::new(8);
+        let (addr, _handle) = server.bind("127.0.0.1:0").await.unwrap();
+        let own_keys = keys();
+        let send1 = spc_crypto::SendKey::generate(1).unwrap();
+        let a_x1 = *send1.x_only();
+        let id1 = server
+            .publish(1, 1_000, own_distribution(1, &a_x1, &own_keys, 100))
+            .await
+            .unwrap();
+
+        let mut jdc = Jdc::connect(&addr.into(), &Egress::DIRECT).await.unwrap();
+        let token = jdc.allocate_token("jdc-test").await.unwrap();
+        let outcome = jdc
+            .declare_with_distribution(&token, &template_at(1), &own_keys, Policy::Refuse, SHORT)
+            .await
+            .unwrap();
+        assert_eq!(outcome, DeclareOutcome::Accepted(id1));
+
+        // The prev-hash moves: a new distribution for height 2 arrives.
+        let send2 = spc_crypto::SendKey::generate(2).unwrap();
+        let a_x2 = *send2.x_only();
+        let id2 = server
+            .publish(2, 1_000, own_distribution(2, &a_x2, &own_keys, 100))
+            .await
+            .unwrap();
+        let received = jdc.next_distribution().await.unwrap();
+        assert_eq!(received.distribution_id, id2);
+
+        // The abandoning decision the run loop applies.
+        let mut moved = template_at(2);
+        moved.txs = vec![[0xaa; 32], [0xbb; 32]];
+        let outstanding = jdc.outstanding().unwrap();
+        assert_eq!(
+            abandon_reason(&outstanding, &moved, Some(id2)),
+            Some(AbandonReason::NewPrevHash)
+        );
+        assert_eq!(
+            jdc.abandon_outstanding(AbandonReason::NewPrevHash),
+            Some(id1)
+        );
+        assert_eq!(
+            jdc.last_abandonment(),
+            Some((id1, AbandonReason::NewPrevHash))
+        );
+        assert_eq!(jdc.outstanding(), None);
+
+        // Redeclare with the whole new template (coinbase + tx set).
+        let outcome2 = jdc
+            .declare_with_distribution(&token, &moved, &own_keys, Policy::Refuse, SHORT)
+            .await
+            .unwrap();
+        assert_eq!(outcome2, DeclareOutcome::Accepted(id2));
+        let declares = server.declares().await;
+        assert_eq!(declares.len(), 2);
+        assert_eq!(declares[1].wtxids, 2, "the fresh tx set rides the wire");
+        wait_accepted(&server, id2).await;
     }
 
     #[tokio::test]
@@ -960,18 +1706,7 @@ mod tests {
             .publish(1, 1_000, own_distribution(1, &a_x, &own_keys, 100))
             .await
             .unwrap();
-        let plan = JdPlan {
-            jds: addr.into(),
-            egress: spc_pool::net::Egress::DIRECT,
-            own_keys: own_keys.clone(),
-            template: JdTemplate {
-                height: 1,
-                coinbase_value: 1_000,
-                extranonce_len: 8,
-            },
-            policy: Policy::Refuse,
-            user_identifier: "test".into(),
-        };
+        let plan = plan_for(addr, &own_keys, template_at(1));
 
         let handle = tokio::spawn(run_static_template(plan));
         wait_accepted(&server, id).await;
@@ -996,31 +1731,22 @@ mod tests {
         let own_keys = keys();
         let send = spc_crypto::SendKey::generate(1).unwrap();
         let a_x = *send.x_only();
-        let template = JdTemplate {
-            height: 1,
-            coinbase_value: 1_000,
-            extranonce_len: 8,
-        };
+        let template = template_at(1);
         let id = server
             .publish(1, 1_000, own_distribution(1, &a_x, &own_keys, 100))
             .await
             .unwrap();
-        let plan = JdPlan {
-            jds: addr.into(),
-            egress: spc_pool::net::Egress::DIRECT,
-            own_keys: own_keys.clone(),
-            template,
-            policy: Policy::Refuse,
-            user_identifier: "test".into(),
-        };
+        let plan = plan_for(addr, &own_keys, template.clone());
         let (tx, rx) = watch::channel(template);
         let handle = tokio::spawn(run_with_templates(plan, rx, tx.clone()));
         wait_accepted(&server, id).await;
 
         // A template tick is consumed without tearing the loop down.
-        tx.send(template).unwrap();
+        tx.send(template_at(1)).unwrap();
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(!handle.is_finished(), "JDC exited on a template tick");
+        // An unchanged declaration key is not re-declared.
+        assert_eq!(server.declare_count().await, 1);
 
         // A republished distribution triggers a rebuild/redeclare.
         let id2 = server
@@ -1028,6 +1754,7 @@ mod tests {
             .await
             .unwrap();
         wait_accepted(&server, id2).await;
+        assert_eq!(server.declare_count().await, 2);
         handle.abort();
     }
 
@@ -1073,6 +1800,7 @@ mod tests {
                 coinbase_value: None,
                 extranonce_len: 8,
                 user_identifier: "spc-agent".into(),
+                declare_timeout_secs: 10,
             }),
             ark: None,
         }

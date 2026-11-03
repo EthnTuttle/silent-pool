@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use spc_ext::{DistributionIdTlv, SetPayoutDistribution};
 use stratum_apps::key_utils::{Secp256k1PublicKey, Secp256k1SecretKey};
-use stratum_core::binary_sv2::{self, GetSize, Seq064K, B0255, B064K, Str0255};
+use stratum_core::binary_sv2::{self, GetSize, Seq064K, Str0255, B0255, B064K};
 use stratum_core::codec_sv2::SerializedFrame;
 use stratum_core::common_messages_sv2::{
     SetupConnection, SetupConnectionSuccess, MESSAGE_TYPE_SETUP_CONNECTION,
@@ -18,8 +18,8 @@ use stratum_core::extensions_sv2::{
     MESSAGE_TYPE_REQUEST_EXTENSIONS, MESSAGE_TYPE_REQUEST_EXTENSIONS_SUCCESS,
 };
 use stratum_core::job_declaration_sv2::{
-    AllocateMiningJobToken, AllocateMiningJobTokenSuccess, DeclareMiningJob,
-    DeclareMiningJobError, DeclareMiningJobSuccess, MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN,
+    AllocateMiningJobToken, AllocateMiningJobTokenSuccess, DeclareMiningJob, DeclareMiningJobError,
+    DeclareMiningJobSuccess, MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN,
     MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN_SUCCESS, MESSAGE_TYPE_DECLARE_MINING_JOB,
     MESSAGE_TYPE_DECLARE_MINING_JOB_ERROR, MESSAGE_TYPE_DECLARE_MINING_JOB_SUCCESS,
 };
@@ -54,6 +54,9 @@ pub enum AnswerPolicy {
     ForceDecline(String),
     /// Never answer declarations (distributions are still served).
     Mute,
+    /// Drop the connection on the next declaration (a crashed-JDS stand-in,
+    /// for distinguishing coded declines from transport errors in tests).
+    HangUp,
 }
 
 pub struct JdsServer {
@@ -255,6 +258,10 @@ impl JdsServerRef {
                             match self.answer.lock().await.clone() {
                                 // Simulated silence: nothing is answered at all.
                                 AnswerPolicy::Mute => {}
+                                // Simulated crash: the connection is dropped.
+                                AnswerPolicy::HangUp => {
+                                    return Err("answer policy: simulated JDS hangup".into())
+                                }
                                 AnswerPolicy::ForceDecline(code) => {
                                     send_declare_error(&mut write, msg.request_id, &code).await?;
                                 }
@@ -380,16 +387,12 @@ impl std::error::Error for Decline {}
 
 /// Validate a Full-Template declaration (`DeclareMiningJob`), returning the
 /// distribution id it declared under on success.
-fn check_declare(
-    jds: &Jds,
-    height: u32,
-    msg: &DeclareMiningJob<'_>,
-) -> Result<u64, Decline> {
+fn check_declare(jds: &Jds, height: u32, msg: &DeclareMiningJob<'_>) -> Result<u64, Decline> {
     let id = find_tlv(msg.excess_data.as_bytes()).ok_or_else(|| {
         Decline::Malformed("DeclareMiningJob is missing the distribution_id TLV".into())
     })?;
-    let outputs = parse_coinbase_outputs(msg.coinbase_tx_suffix.as_bytes())
-        .map_err(Decline::Malformed)?;
+    let outputs =
+        parse_coinbase_outputs(msg.coinbase_tx_suffix.as_bytes()).map_err(Decline::Malformed)?;
     jds.validate_declared(id, height, &outputs)
         .map_err(Decline::Rejected)?;
     Ok(id)
@@ -815,8 +818,8 @@ mod tests {
         assert!(check_custom_job(&jds, 1, &payload).is_err());
 
         // Wrong id at the current height is stale.
-        let err = check_custom_job(&jds, 1, &custom_job_payload(&outputs, Some(id + 1)))
-            .unwrap_err();
+        let err =
+            check_custom_job(&jds, 1, &custom_job_payload(&outputs, Some(id + 1))).unwrap_err();
         assert_eq!(err.code(), "stale-payout-distribution");
         // Height straddling is stale.
         let err = check_custom_job(&jds, 2, &custom_job_payload(&outputs, Some(id))).unwrap_err();
@@ -946,7 +949,10 @@ mod tests {
 
         // Missing TLV -> invalid-job.
         send_declare(&mut write, 12, None, &coinbase_outputs(&d)).await;
-        assert_eq!(read_answer(&mut read, 12).await, Some("invalid-job".to_string()));
+        assert_eq!(
+            read_answer(&mut read, 12).await,
+            Some("invalid-job".to_string())
+        );
 
         // Mutated amount -> invalid-payout-distribution.
         let mut bogus = coinbase_outputs(&d);

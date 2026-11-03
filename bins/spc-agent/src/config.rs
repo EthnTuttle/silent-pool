@@ -64,8 +64,13 @@ pub struct Jd {
     #[serde(default)]
     pub coinbase_value: Option<u64>,
     /// Bytes the miner rolls in the scriptSig after the BIP 34 height push.
+    /// Bytes the miner rolls in the scriptSig after the BIP 34 height push.
     #[serde(default = "default_extranonce_len")]
     pub extranonce_len: usize,
+    /// Bounded wait for the declaration answer (SPEC §3.5 "JDC fallback"),
+    /// seconds. Default 10; minimum 1 - 0 is a startup error, never a clamp.
+    #[serde(default = "default_declare_timeout_secs")]
+    pub declare_timeout_secs: u64,
     #[serde(default = "default_user_identifier")]
     pub user_identifier: String,
 }
@@ -100,6 +105,9 @@ fn default_downstream() -> String {
 }
 fn default_extranonce_len() -> usize {
     8
+}
+fn default_declare_timeout_secs() -> u64 {
+    10
 }
 fn default_user_identifier() -> String {
     "spc-agent".into()
@@ -168,6 +176,8 @@ pub enum ConfigError {
     ScanKeyMismatch,
     #[error("[jd] needs height and coinbase_value until a Template Provider is wired")]
     JdTemplate,
+    #[error("[jd] declare_timeout_secs must be at least 1 (fail-closed minimum, SPEC §3.5)")]
+    DeclareTimeout,
 }
 
 impl Jd {
@@ -264,6 +274,9 @@ impl AgentConfig {
                     return Err(ConfigError::ScanKeyMismatch);
                 }
                 let _ = jd.template()?;
+                if jd.declare_timeout_secs == 0 {
+                    return Err(ConfigError::DeclareTimeout);
+                }
             }
         }
         if let Some(ark) = &self.ark {
@@ -363,6 +376,7 @@ mailbox_mode = "epoch_derived"
             height: Some(800_000),
             coinbase_value: Some(5_000_000_000),
             extranonce_len: 8,
+            declare_timeout_secs: 10,
             user_identifier: "spc-agent".into(),
         });
         cfg
@@ -450,6 +464,22 @@ mailbox_mode = "epoch_derived"
                 "{scheme}"
             );
         }
+    }
+
+    #[test]
+    fn rejects_a_zero_declare_timeout() {
+        let mut cfg = with_jd();
+        cfg.jd.as_mut().unwrap().declare_timeout_secs = 0;
+        assert_eq!(cfg.validate(), Err(ConfigError::DeclareTimeout));
+        // The documented default applies when the key is absent entirely.
+        let parsed: Jd = toml::from_str(
+            r#"
+                enabled = true
+                jds_address = "127.0.0.1:34264"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(parsed.declare_timeout_secs, 10);
     }
 
     #[test]

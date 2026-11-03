@@ -56,7 +56,9 @@ async fn jds_accepts_a_declaration_with_the_current_id() {
         spc_agent::verify::Policy::Warn,
     )
     .unwrap();
-    jdc.declare_job(&token, id, &prefix, &suffix).await.unwrap();
+    jdc.declare_job(&token, id, &prefix, &suffix, &[], 2)
+        .await
+        .unwrap();
 
     for _ in 0..50 {
         if server.accepted().await == Some(id) {
