@@ -17,6 +17,7 @@ reviews are recorded for risky packets, and the commit is pushed.
 | Amount-banded payouts analysis | `ses_e5d9b9192` | landed `116ed34`, merged |
 | Settlement window target | `ses_e5cf0b2b9` | dispatched 2026-11-03 on branch `window-target` |
 | JD fallback + template rebuild | `ses_e5cf0b27d` | dispatched 2026-11-03 on branch `jd-fallback` |
+| Banded amounts + Ark overage design | `ses_e5ceb5ce6` | dispatched 2026-11-03 on branch `banded-design`; decision accepted, design + numeric study |
 | rbitcoin node fork (testnet4) | `ses_e6195c6a` | separate repo `/home/ethan/code/rbitcoin`; not merged here |
 | Proxy/upstream analysis | `ses_e60f175c` | closed, `docs/analysis/2026-11-02-proxy-and-upstream-options.md` |
 | Multi-identifier analysis | `ses_e638a2e6` | closed, `docs/analysis/2026-11-02-multi-identifier-payouts.md` |
@@ -33,9 +34,14 @@ reviews are recorded for risky packets, and the commit is pushed.
   **Residual:** the ark role's Ark gRPC and the mailbox reader do not exist
   yet (O13/Phase 7); they will dial through the same egress when they land.
 - Amount-banded payouts analysis (`116ed34`): overage-to-Ark relocates exact
-  amounts to the Ark server and is not worth building; band + overage-to-
-  pending is feasible as a v2 mitigation that bounds the on-chain leak to
-  `ceil(log2 L)` bits per block. No code change.
+  amounts to the Ark server; band + overage-to-pending bounds the on-chain
+  leak to `ceil(log2 L)` bits per block. No code change.
+- **Adopted direction (2026-11-03):** band the coinbase amounts and pay the
+  overage over Ark. The accepted tradeoff is explicit: every coinbase-tier
+  miner gains an Ark footprint, the overage is trustodial until refresh, and
+  the Ark server sees exact per-miner amounts; amount privacy then rests on
+  the Ark-server assumptions. A design session is producing the decision
+  record, SPEC/DESIGN edits and a numeric ladder/float study before code.
 - Stock bark Ark adapter (branch `bark-adapter`): in progress.
 
 ## Current state
