@@ -16,6 +16,18 @@ reviews are recorded for risky packets, and the commit is pushed.
 | Proxy/upstream analysis | `ses_e60f175c` | closed, `docs/analysis/2026-11-02-proxy-and-upstream-options.md` |
 | Multi-identifier analysis | `ses_e638a2e6` | closed, `docs/analysis/2026-11-02-multi-identifier-payouts.md` |
 
+## Wave 3 (in flight)
+
+- Tor transport implementation (branch `tor-impl`, `e919d35`..): SPEC §3.8
+  lands in code - in-tree socks5h CONNECT dialer with per-connection
+  isolation credentials (no new dependency crates), `[reach]`/`[net]` config
+  on both binaries, onion-published listeners forced to loopback at startup,
+  `.onion` targets without a proxy rejected, and `GET /api/pool` publishing
+  `endpoints` verbatim from `[reach] advertise`. The agent's SV2 upstream and
+  JDP dials route through `[net]`; the ark role's in-process Ark gRPC and
+  mailbox readers do not exist yet (O13/Phase 7), and will dial through the
+  same egress when they land.
+
 ## Current state
 
 The pool runs end to end on regtest. Native SV1 and SV2 listeners build the
