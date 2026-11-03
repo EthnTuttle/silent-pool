@@ -270,6 +270,7 @@ The one unifying trick that keeps this tractable: in pool-template mode every sh
 - [ ] `spc-regtest-harness`: bitcoin-core (IPC/TDP) + `spc-pool` (JDS module included) + `spc-translator` + `spc-jdc` + 3 synthetic miners; CI job.
 - [ ] Metrics: slices/min, open-slice shares, distribution entries, trimmed sats, `a_send` age, outbox depth/age, per-stream lag, `spc_orphaned_settlement_total` (a build must never fail over a lost block event — Blitzpool's vouching invariant; SPEC §7.4, §9).
 - [ ] Capacity alert before anyone is trimmed (Blitzpool pattern).
+- [ ] Tor transport (SPEC §3.8): `[reach]` advertises endpoints on `GET /api/pool` and refuses to start when an onion-published listener is not loopback; `spc-agent`/`ark` refuse a `.onion` target without a proxy, reject local-resolution proxy URLs, and open a fresh isolated SOCKS connection per mailbox read. Regtest e2e: one agent reaches `front` over a local onion service and one `ark` run uses the proxy.
 - [ ] Testnet deployment with `tsp` addresses; publish `spc-scan` so external SP implementers can verify blocks.
 **Validation**:
 - validates: 24 h testnet soak
@@ -278,6 +279,7 @@ The one unifying trick that keeps this tractable: in pool-template mode every sh
 - [ ] §8.4 steps 1–9 run green in CI on the regtest harness.
 - [ ] §9 monitoring: every metric listed there is exported, including `spc_a_send_repeat_total{front_id}`, `spc_outbox_depth`, `spc_stream_lag_seconds{stream}`, `spc_ark_overdue_total`, `spc_orphaned_settlement_total`; the `spc:*` stream 1M-entry backstop alarm fires in a test (§5.2).
 - [ ] §11.6: a third party reconciles one found block to zero from the type-32 window and the coinbase alone.
+- [ ] §3.8: onion-published listener on a non-loopback bind fails startup; a `.onion` upstream with no proxy fails startup; a `socks5` (local-resolution) URL is rejected; an onion-reached miner mines and is paid identically to a clearnet one.
 
 **Total**: ≈ 23 weeks single-developer, ≈ 12–14 with two. Phases 1–3 (≈ 7 weeks) are the minimum that demonstrates SPc end-to-end on regtest; Phase 7 adds the Ark tier; everything else is the interview's scope additions.
 

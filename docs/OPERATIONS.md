@@ -59,6 +59,8 @@ lease at start and refuses to start if the lease is held.
 | `payout` | none - consumes Redis streams, writes Postgres | - | - |
 | `ark` | none - dials out to the third-party Ark server over HTTPS (`[ark] server`) | - | - |
 | `spc-agent` | SV1 downstream for ASICs | `[downstream] listen` | 34255 |
+| `front`, `api` | Tor onion services (optional) - the Tor daemon forwards to the loopback listener | `[reach] onion` + Tor `HiddenServicePort` | - |
+| `spc-agent`, `ark` | outbound via SOCKS5 (optional) - upstream SV2, JDP, Ark server and mailbox reads | `[net] proxy` | SOCKS 9050 |
 
 Both `front` listeners (SV1 and SV2) feed the same share, slice and
 distribution path. The `payout` and `ark` roles have no inbound ports; they
@@ -92,6 +94,44 @@ The module hardens the service (`NoNewPrivileges`, `ProtectSystem=strict`,
 and nothing else to disk. `openFirewall` does not open the JDP port; open it
 separately if remote JDCs declare against this front. Validated starting
 configs: `config/spc-pool.example.toml`, `config/spc-agent.example.toml`.
+
+### Tor reach (optional)
+
+Tor is a transport option, not a deployment mode (SPEC §3.8). The pool does
+not create or manage onion keys - the Tor daemon does, and forwards to the
+listener the pool already binds.
+
+```nix
+# Illustrative; exact option shape follows the pinned NixOS release.
+services.tor = {
+  enable = true;
+  client.enable = true;                      # spc-agent / ark egress
+  settings.SocksPort = [ "9050 IsolateSOCKSAuth" ];
+  relay.onionServices.spc-sv2.map = [
+    { port = 34254; target = { addr = "127.0.0.1"; port = 34254; }; }
+  ];
+};
+```
+
+- **Inbound.** Set `[reach] onion` and bind that listener to `127.0.0.1`.
+  `spc-pool` refuses to start when an onion-published listener is not loopback,
+  so an advertised onion address can never be decorative. List the public
+  endpoints in `[reach] advertise`; they are served from `GET /api/pool`.
+- **Outbound.** Set `[net] proxy = "socks5h://127.0.0.1:9050"` on `spc-agent`
+  and on the `ark` host's `spc-pool` config. `socks5h` (remote resolution) is
+  mandatory: local DNS leaks the query the proxy exists to hide. Stream
+  isolation keeps mailbox reads on separate circuits. A `.onion` upstream with
+  no proxy is a startup error, never a silent direct connection.
+- **Multi-region.** One onion service terminates on one `front`. Either publish
+  one address per front in `advertise` (and let `spc-agent` rotate on failure)
+  or put OnionBalance in front of the set. Back up each front's onion key with
+  its other secrets.
+- **Abuse controls.** Onion clients arrive from `127.0.0.1`, so IP reputation
+  and per-IP limits do nothing. Rely on the per-connection concurrency cap and
+  per-`sp_id` share-rate limits; watch `spc_channel_reject_total{reason}`.
+- **Costs.** Pool-template job delivery is one-way, so the added RTT is cheap;
+  reconnect transients (new extranonce, VarDiff ramp) are the real cost. Keep
+  the JDC role direct unless the miner explicitly asks for Tor.
 
 ## 3. Postgres and Redis
 
