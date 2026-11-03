@@ -14,7 +14,9 @@ reviews are recorded for risky packets, and the commit is pushed.
 | Tor transport (spec and docs) | `ses_e60e6aac` | landed `8aca4be`, `914509f`; spec-ahead-of-code, closed |
 | Tor transport implementation | `ses_e5d9b9134` | landed `e919d35`..`57bd046`, merged `9be60a9` |
 | Stock bark Ark adapter | `ses_e5d9b9133` | dispatched 2026-11-03 on branch `bark-adapter` |
-| Amount-banded payouts analysis | `ses_e5d9b9192` | dispatched 2026-11-03, writes `docs/analysis/2026-11-03-amount-banded-payouts.md` |
+| Amount-banded payouts analysis | `ses_e5d9b9192` | landed `116ed34`, merged |
+| Settlement window target | `ses_e5cf0b2b9` | dispatched 2026-11-03 on branch `window-target` |
+| JD fallback + template rebuild | `ses_e5cf0b27d` | dispatched 2026-11-03 on branch `jd-fallback` |
 | rbitcoin node fork (testnet4) | `ses_e6195c6a` | separate repo `/home/ethan/code/rbitcoin`; not merged here |
 | Proxy/upstream analysis | `ses_e60f175c` | closed, `docs/analysis/2026-11-02-proxy-and-upstream-options.md` |
 | Multi-identifier analysis | `ses_e638a2e6` | closed, `docs/analysis/2026-11-02-multi-identifier-payouts.md` |
