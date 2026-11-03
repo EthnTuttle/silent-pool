@@ -23,9 +23,19 @@
           inherit src;
           rustc = rust;
           cargo = rust;
-          nativeBuildInputs = [ rust pkgs.pkg-config ];
+          # bark-server-rpc's build script generates protobuf code and
+          # needs a `protoc` on PATH.
+          PROTOC = "${pkgs.protobuf}/bin/protoc";
+          nativeBuildInputs = [ rust pkgs.pkg-config pkgs.protobuf ];
           buildInputs = [ pkgs.openssl pkgs.sqlite ];
-          cargoLock.lockFile = ./Cargo.lock;
+          # The workspace pins git deps (bark at c419159, decision
+          # 2026-11-02-bark-adapter.md), which `cargoLock.lockFile`
+          # cannot vendor; fetchCargoVendor runs `cargo vendor` on the
+          # source and covers registry and git sources alike.
+          cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
+            inherit src;
+            hash = "sha256-JDPDVUwJZzViAxnhLDIuPxmZz60V3jJMZm1ooc6Rfr0=";
+          };
           doCheck = false;
         };
         mkBinary = name: features: pkgs.rustPlatform.buildRustPackage (common // {
