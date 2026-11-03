@@ -14,12 +14,21 @@
 //!   carrier. `A_send` travels in the `OP_RETURN` output the caller supplies
 //!   in `outputs` (§2.4.2).
 
+use bitcoin::bip32::{ChildNumber, Xpub};
 use bitcoin::script::ScriptBuf;
-use spc_crypto::{emit_script_sig, height_push_bytes, script_sig_budget};
+use bitcoin::NetworkKind;
+use spc_crypto::{emit_script_sig, height_push_bytes, script_sig_budget, Network};
 
 /// The scriptSig budget the Template Provider reserves unconditionally
 /// (SPEC §2.4.1).
 const SCRIPT_SIG_BUDGET: usize = 100;
+
+/// Extended-public-key version bytes (BIP 32 / SLIP 132): mainnet `xpub`
+/// and the testnet-family `tpub`, `upub`, `vpub`.
+const XPUB_VERSION_MAINNET: [u8; 4] = [0x04, 0x88, 0xB2, 0x1E];
+const TPUB_VERSION: [u8; 4] = [0x04, 0x35, 0x87, 0xCF];
+const UPUB_VERSION: [u8; 4] = [0x04, 0x4A, 0x52, 0x62];
+const VPUB_VERSION: [u8; 4] = [0x04, 0x5F, 0x1C, 0xF6];
 
 /// A coinbase could not be built within the scriptSig budget.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -185,6 +194,161 @@ pub fn p2tr_script(x: &[u8; 32]) -> ScriptBuf {
     ScriptBuf::from_bytes(bytes)
 }
 
+/// The parsed `[pool] pool_payout_descriptor` (SPEC §6.3, §11.3): a
+/// single-key `tr(<xpub>/.../*)` whose wildcard index is the block height.
+///
+/// Fail-closed by construction: every ambiguity a descriptor can carry
+/// (private key, hardened step after the xpub, multipath, missing or
+/// repeated wildcard, wrong network, malformed key) is a parse error, never
+/// a fallback. The SPc side holds only this public key material.
+#[derive(Clone, Debug)]
+pub struct PoolPayoutDescriptor {
+    xpub: Xpub,
+    /// Unhardened derivation steps between the xpub and the wildcard.
+    steps: Vec<ChildNumber>,
+    network: Network,
+}
+
+impl PoolPayoutDescriptor {
+    /// Parse fail-closed per the three assertions of the xpub spec (SPEC
+    /// §6.3): single-key `tr()` wrapper, one extended public key
+    /// (`xpub`/`tpub`/`upub`/`vpub`) matching `network`, unhardened steps
+    /// only, exactly one trailing `*`, no private key, no multipath.
+    pub fn parse(desc: &str, network: Network) -> Result<Self, String> {
+        let inner = desc
+            .strip_prefix("tr(")
+            .and_then(|d| d.strip_suffix(')'))
+            .ok_or_else(|| "must be a tr(...) descriptor".to_string())?;
+        if inner.is_empty() {
+            return Err("empty descriptor".into());
+        }
+        if inner.contains("prv") {
+            return Err("must not contain a private key".into());
+        }
+        if inner.contains('<') || inner.contains(';') {
+            return Err("multipath is not supported".into());
+        }
+        let parts: Vec<&str> = inner.split('/').collect();
+        let xpub_str = parts[0];
+        if xpub_str.contains('*') {
+            return Err("the wildcard must be the last step".into());
+        }
+        let xpub = parse_xpub(xpub_str, network)?;
+        let mut steps = Vec::new();
+        for (i, part) in parts.iter().enumerate().skip(1) {
+            if *part == "*" {
+                // A wildcard is only legal as the final step; the trailing
+                // position is re-asserted below.
+                if i != parts.len() - 1 {
+                    return Err("the wildcard must be the last step".into());
+                }
+                continue;
+            }
+            let index = part
+                .parse::<u32>()
+                .map_err(|_| format!("invalid derivation step '{part}'"))?;
+            steps.push(normal_child(index)?);
+        }
+        // Exactly one unhardened wildcard at the end (the index is the
+        // block height, SPEC §11.3).
+        if !desc.ends_with("/*)") {
+            return Err("exactly one trailing unhardened wildcard is required".into());
+        }
+        Ok(Self {
+            xpub,
+            steps,
+            network,
+        })
+    }
+
+    /// The 34-byte P2TR output script for the pool output at `height`
+    /// (SPEC §11.3): `pool_output(H) = descriptor.at_derivation_index(H)`,
+    /// a fresh key-path taproot output per height.
+    pub fn script_at(&self, height: u32) -> Result<ScriptBuf, String> {
+        let index = normal_child(height)?;
+        let mut path = self.steps.clone();
+        path.push(index);
+        let secp = bitcoin::secp256k1::Secp256k1::verification_only();
+        let child = self
+            .xpub
+            .derive_pub(&secp, &path)
+            .map_err(|e| format!("public derivation failed: {e}"))?;
+        // Key-path P2TR (no script tree): tweak the x-only internal key.
+        let address = bitcoin::Address::p2tr(
+            &secp,
+            child.to_x_only_pub(),
+            None,
+            bitcoin_network(self.network),
+        );
+        let script = address.script_pubkey();
+        if script.len() != 34 {
+            return Err("derived script is not a 34-byte P2TR".into());
+        }
+        Ok(script)
+    }
+}
+
+/// An unhardened child number, rejecting the hardened half of the space.
+fn normal_child(index: u32) -> Result<ChildNumber, String> {
+    ChildNumber::from_normal_idx(index).map_err(|_| "hardened indexes are not allowed".to_string())
+}
+
+fn bitcoin_network(n: Network) -> bitcoin::Network {
+    match n {
+        Network::Mainnet => bitcoin::Network::Bitcoin,
+        Network::Testnet | Network::Signet => bitcoin::Network::Testnet,
+        Network::Regtest => bitcoin::Network::Regtest,
+    }
+}
+
+/// Base58check-decode an extended public key and bind its version bytes to
+/// the configured network: `xpub` is mainnet, `tpub`/`upub`/`vpub` are the
+/// testnet family. Anything else fails closed.
+fn parse_xpub(s: &str, network: Network) -> Result<Xpub, String> {
+    let data = bitcoin::base58::decode_check(s).map_err(|_| "invalid extended key".to_string())?;
+    if data.len() != 78 {
+        return Err("invalid extended key length".into());
+    }
+    let version: [u8; 4] = data[0..4]
+        .try_into()
+        .expect("slice of length 4 fits [u8; 4]");
+    let is_mainnet = version == XPUB_VERSION_MAINNET;
+    let is_testnet = version == TPUB_VERSION || version == UPUB_VERSION || version == VPUB_VERSION;
+    if !is_mainnet && !is_testnet {
+        return Err("unknown extended-key version bytes".into());
+    }
+    let network_ok = match network {
+        Network::Mainnet => is_mainnet,
+        Network::Testnet | Network::Signet | Network::Regtest => is_testnet,
+    };
+    if !network_ok {
+        return Err("extended key does not match the configured network".into());
+    }
+    let chain_code: [u8; 32] = data[13..45]
+        .try_into()
+        .expect("slice of length 32 fits [u8; 32]");
+    Ok(Xpub {
+        network: if is_mainnet {
+            NetworkKind::Main
+        } else {
+            NetworkKind::Test
+        },
+        depth: data[4],
+        parent_fingerprint: data[5..9]
+            .try_into()
+            .expect("slice of length 4 fits [u8; 4]"),
+        child_number: u32::from_be_bytes(
+            data[9..13]
+                .try_into()
+                .expect("slice of length 4 fits [u8; 4]"),
+        )
+        .into(),
+        chain_code: chain_code.into(),
+        public_key: bitcoin::secp256k1::PublicKey::from_slice(&data[45..78])
+            .map_err(|_| "invalid public key point".to_string())?,
+    })
+}
+
 /// Bitcoin compact size.
 pub fn write_compact_size(out: &mut Vec<u8>, n: u64) {
     match n {
@@ -230,6 +394,7 @@ pub fn read_compact_size(buf: &[u8], offset: usize) -> Option<(u64, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitcoin::bip32::Xpriv;
 
     #[test]
     fn compact_size_boundaries() {
@@ -363,5 +528,136 @@ mod tests {
                 used: 5 + 96,
             })
         );
+    }
+
+    /// A real testnet-family xpub (watch-only nonsense, structurally valid),
+    /// so the parse path exercises real base58check and point validation.
+    fn test_xpub() -> Xpub {
+        let secp = bitcoin::secp256k1::Secp256k1::new();
+        let xprv = Xpriv::new_master(bitcoin::Network::Testnet, &[0x5c; 32]).expect("master key");
+        Xpub::from_priv(&secp, &xprv)
+    }
+
+    fn test_descriptor(network: Network) -> PoolPayoutDescriptor {
+        PoolPayoutDescriptor::parse(&format!("tr({}/0/*)", test_xpub()), network)
+            .expect("valid descriptor")
+    }
+
+    /// The watch-only tpub documented in `config/spc-pool.example.toml`
+    /// and the regtest harnesses: structurally valid (real base58check
+    /// checksum, real point), so it must parse and derive.
+    #[test]
+    fn the_documented_example_tpub_parses() {
+        const DOC_TPUB: &str = "tpubD6NzVbkrYhZ4WUjXBVxZPvGhWxTRE5veAscTgokX65xcfCoDF5nyNdtaS4xGoJ7xnZuDTxCAEAnGpxJbWo6wtTAJsESmeJWpZzybZ6dvCia";
+        let d = PoolPayoutDescriptor::parse(&format!("tr({DOC_TPUB}/0/*)"), Network::Regtest)
+            .expect("the documented tpub must parse");
+        let script = d.script_at(800_000).unwrap();
+        assert_eq!(script.len(), 34);
+        assert_ne!(&script.as_bytes()[2..], &[0u8; 32]);
+    }
+
+    #[test]
+    fn descriptor_derives_a_distinct_p2tr_per_height() {
+        let d = test_descriptor(Network::Regtest);
+        let at = |h: u32| d.script_at(h).unwrap();
+        let s0 = at(800_000);
+        let s1 = at(800_001);
+        let s0_again = at(800_000);
+        assert_eq!(s0.len(), 34);
+        assert_eq!(&s0.as_bytes()[..2], &[0x51, 0x20]);
+        assert_ne!(s0, s1, "two heights must derive different scripts");
+        assert_eq!(s0, s0_again, "derivation is deterministic");
+        // No zero-key output: the fallback is gone.
+        assert_ne!(&s0.as_bytes()[2..], &[0u8; 32]);
+    }
+
+    #[test]
+    fn descriptor_derivation_matches_the_reference_p2tr_tweak() {
+        // Cross-check against bitcoin's own address derivation: the derived
+        // child's x-only key, tweaked with no script tree, must produce the
+        // same script as `script_at`.
+        let d = test_descriptor(Network::Regtest);
+        let secp = bitcoin::secp256k1::Secp256k1::verification_only();
+        let path = vec![
+            ChildNumber::Normal { index: 0 },
+            ChildNumber::Normal { index: 800_012 },
+        ];
+        let child = d.xpub.derive_pub(&secp, &path).unwrap();
+        let expected = bitcoin::Address::p2tr(
+            &secp,
+            child.to_x_only_pub(),
+            None,
+            bitcoin::Network::Regtest,
+        )
+        .script_pubkey();
+        assert_eq!(d.script_at(800_012).unwrap(), expected);
+    }
+
+    #[test]
+    fn descriptor_rejects_network_mismatch() {
+        // A tpub on mainnet is refused; an xpub on regtest is refused.
+        assert!(
+            PoolPayoutDescriptor::parse(&format!("tr({}/0/*)", test_xpub()), Network::Mainnet)
+                .is_err()
+        );
+        let secp = bitcoin::secp256k1::Secp256k1::new();
+        let xprv = Xpriv::new_master(bitcoin::Network::Bitcoin, &[0x5c; 32]).unwrap();
+        let xpub = Xpub::from_priv(&secp, &xprv);
+        assert!(PoolPayoutDescriptor::parse(&format!("tr({xpub}/0/*)"), Network::Regtest).is_err());
+        assert!(PoolPayoutDescriptor::parse(&format!("tr({xpub}/0/*)"), Network::Mainnet).is_ok());
+    }
+
+    #[test]
+    fn descriptor_fails_closed_on_every_ambiguity() {
+        let xpub = test_xpub().to_string();
+        let xprv_like = xpub.replacen("tpub", "tprv", 1);
+        for bad in [
+            format!("tr({xpub}/0)"),              // no wildcard
+            format!("tr({xpub}/0/*/1)"),          // wildcard not last
+            format!("tr({xpub}/0/*/*)"),          // two wildcards
+            format!("tr({xpub}/0'/ *)"),          // malformed step
+            format!("tr({xpub}/0'/*)"),           // hardened step
+            format!("tr({xpub}/0h/*)"),           // hardened step (h)
+            format!("tr({xpub}/0/2147483648/*)"), // hardened index value
+            format!("tr({xpub}/<0;1>/*)"),        // multipath
+            format!("wpkh({xpub}/0/*)"),          // wrong wrapper
+            format!("tr({xprv_like}/0/*)"),       // private key
+            format!("tr({xpub}/0/*) extra"),      // trailing junk
+            format!("tr({xpub}/0/*"),             // unbalanced
+        ] {
+            assert!(
+                PoolPayoutDescriptor::parse(&bad, Network::Regtest).is_err(),
+                "{bad} should fail closed"
+            );
+        }
+        // Malformed key material.
+        assert!(PoolPayoutDescriptor::parse("tr(notakey/0/*)", Network::Regtest).is_err());
+        assert!(PoolPayoutDescriptor::parse("tr()", Network::Regtest).is_err());
+        // A height in the hardened half of the child space is refused too.
+        let d = test_descriptor(Network::Regtest);
+        assert!(d.script_at(1 << 31).is_err());
+    }
+
+    #[test]
+    fn descriptor_accepts_upub_and_vpub_on_the_testnet_family() {
+        // SLIP-132 public-key versions: structurally valid testnet-family
+        // keys must parse and derive (the network binding is the version
+        // bytes, not the prefix characters).
+        let secp = bitcoin::secp256k1::Secp256k1::new();
+        let xprv = Xpriv::new_master(bitcoin::Network::Testnet, &[0x5c; 32]).unwrap();
+        let tpub = Xpub::from_priv(&secp, &xprv);
+        for version in [UPUB_VERSION, VPUB_VERSION] {
+            let mut raw = tpub.encode().to_vec();
+            raw[..4].copy_from_slice(&version);
+            let encoded = bitcoin::base58::encode_check(&raw);
+            let d = PoolPayoutDescriptor::parse(&format!("tr({encoded}/0/*)"), Network::Regtest)
+                .expect("upub/vpub parse on regtest");
+            assert!(d.script_at(1).is_ok());
+            // ... and are still refused on mainnet.
+            assert!(
+                PoolPayoutDescriptor::parse(&format!("tr({encoded}/0/*)"), Network::Mainnet)
+                    .is_err()
+            );
+        }
     }
 }

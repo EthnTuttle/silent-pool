@@ -62,6 +62,8 @@ pub enum FrontError {
     Accounting(#[from] spc_accounting::Error),
     #[error("crypto: {0}")]
     Crypto(#[from] spc_crypto::Error),
+    #[error("pool payout derivation: {0}")]
+    PoolPayout(String),
     #[error("no active template")]
     NoTemplate,
     #[error("no active slice")]
@@ -96,9 +98,14 @@ pub struct FrontConfig {
     pub max_payout_slots: usize,
     pub budget_wu: u32,
     pub overhead_wu: u32,
-    /// P2TR script of the pool output (43 bytes). The production source is
-    /// `pool_payout_descriptor`; the dev front takes the derived script.
-    pub pool_payout_script: Vec<u8>,
+    /// Parsed `[pool] pool_payout_descriptor` (SPEC §6.3, §11.3). The pool
+    /// output for height `H` is derived from it at `H`; the SPc side holds
+    /// only this public key material.
+    pub pool_payout_descriptor: crate::coinbase::PoolPayoutDescriptor,
+    /// Explicit dev/test override of the pool output script (hex in
+    /// `[pool] pool_payout_script`). When set it is used verbatim and no
+    /// derivation happens; there is no fallback when it is absent.
+    pub pool_payout_script: Option<Vec<u8>>,
     pub extranonce_len: usize,
     pub front_id: u8,
     pub keep_slices: usize,
@@ -188,9 +195,23 @@ pub enum FrontEvent {
 impl FrontConfig {
     pub fn from_config(c: &crate::config::Config) -> Result<Self, String> {
         let network = c.network().map_err(|e| e.to_string())?;
-        let script = match &c.pool.pool_payout_script {
-            Some(h) => hex::decode(h).map_err(|e| format!("pool_payout_script: {e}"))?,
-            None => crate::coinbase::p2tr_script(&[0u8; 32]).to_bytes().to_vec(),
+        // Fail-closed descriptor parse (SPEC §6.3): the three xpub-spec
+        // assertions plus network binding. There is no zero-key fallback.
+        let descriptor =
+            crate::coinbase::PoolPayoutDescriptor::parse(&c.pool.pool_payout_descriptor, network)?;
+        let pool_payout_script = match &c.pool.pool_payout_script {
+            Some(h) => {
+                let script = hex::decode(h).map_err(|e| format!("pool_payout_script: {e}"))?;
+                // A dev override that is not an unambiguous 34-byte P2TR
+                // is rejected, not guessed at.
+                if script.len() != 34 || script[..2] != [0x51, 0x20] {
+                    return Err(
+                        "pool_payout_script must be a 34-byte P2TR script (hex)".to_string()
+                    );
+                }
+                Some(script)
+            }
+            None => None,
         };
         Ok(Self {
             network,
@@ -203,11 +224,26 @@ impl FrontConfig {
             max_payout_slots: c.accounting.max_payout_slots,
             budget_wu: c.budget.floor_wu,
             overhead_wu: 0,
-            pool_payout_script: script,
+            pool_payout_descriptor: descriptor,
+            pool_payout_script,
             extranonce_len: c.sv1.extranonce1_bytes + c.sv1.extranonce2_bytes,
             front_id: c.pool.front_id,
             keep_slices: c.accounting.retain_windows as usize,
         })
+    }
+
+    /// The pool output script for height `H` (SPEC §11.3): the explicit
+    /// dev/test override when present, else the descriptor derived at `H`.
+    pub fn pool_script_at(&self, height: u32) -> Result<Vec<u8>, FrontError> {
+        if let Some(script) = &self.pool_payout_script {
+            return Ok(script.clone());
+        }
+        Ok(self
+            .pool_payout_descriptor
+            .script_at(height)
+            .map_err(FrontError::PoolPayout)?
+            .as_bytes()
+            .to_vec())
     }
 }
 
@@ -292,10 +328,15 @@ impl Front {
         self.weights.as_ref()
     }
 
-    /// P2TR script of the pool output, the `pool_payout` of the JD
-    /// distribution.
-    pub fn pool_payout_script(&self) -> &[u8] {
-        &self.cfg.pool_payout_script
+    /// P2TR script of the pool output in the current distribution, the
+    /// `pool_payout` of the JD distribution. Derived per height from the
+    /// descriptor (SPEC §11.3); `None` before the first `refresh`.
+    pub fn pool_payout_script(&self) -> Option<&[u8]> {
+        self.distribution
+            .as_ref()?
+            .outputs
+            .first()
+            .map(|(script, _)| script.as_slice())
     }
 
     /// The inclusive high-water mark of the current window (SPEC §4.3).
@@ -582,6 +623,10 @@ impl Front {
         // Copy the carrier key so the distribution build does not hold a
         // borrow of `self` across the slice roll below.
         let a_send_x = *self.send.as_ref().ok_or(FrontError::NoSendKey)?.x_only();
+        // The pool output is derived per height from the descriptor (SPEC
+        // §11.3): a fresh key-path P2TR at index H, unless the explicit
+        // dev/test override is set.
+        let pool_script = self.cfg.pool_script_at(template.height)?;
         let distribution = {
             let send = self.send.as_ref().ok_or(FrontError::NoSendKey)?;
             build_distribution(
@@ -589,7 +634,7 @@ impl Front {
                 send,
                 &routing,
                 &self.miners,
-                &self.cfg.pool_payout_script,
+                &pool_script,
                 &self.ark_dest,
             )?
         };
@@ -1049,13 +1094,132 @@ mod tests {
             max_payout_slots: 256,
             budget_wu: 100_000,
             overhead_wu: 0,
-            pool_payout_script: crate::coinbase::p2tr_script(&[0x99; 32])
-                .to_bytes()
-                .to_vec(),
+            pool_payout_descriptor: test_descriptor(),
+            pool_payout_script: Some(
+                crate::coinbase::p2tr_script(&[0x99; 32])
+                    .to_bytes()
+                    .to_vec(),
+            ),
             extranonce_len: 8,
             front_id: 0,
             keep_slices: 16,
         }
+    }
+
+    /// A parsed `[pool] pool_payout_descriptor` for the in-process tests:
+    /// a real watch-only testnet-family key, fail-closed parsed.
+    fn test_descriptor() -> crate::coinbase::PoolPayoutDescriptor {
+        let secp = bitcoin::secp256k1::Secp256k1::new();
+        let xprv =
+            bitcoin::bip32::Xpriv::new_master(bitcoin::Network::Testnet, &[0x5c; 32]).unwrap();
+        let xpub = bitcoin::bip32::Xpub::from_priv(&secp, &xprv);
+        crate::coinbase::PoolPayoutDescriptor::parse(&format!("tr({xpub}/0/*)"), Network::Regtest)
+            .unwrap()
+    }
+
+    /// SPEC §6.3/§11.3: with no dev override, the coinbase pool output is
+    /// derived from the descriptor at the template's height, so two
+    /// heights build different pool outputs and neither is ever a zero
+    /// key.
+    #[tokio::test]
+    async fn the_pool_output_is_derived_per_height() {
+        let source = Arc::new(MutableSource::new(template()));
+        let mut cfg = cfg();
+        cfg.pool_payout_script = None;
+        let mut front = Front::new(
+            cfg,
+            source.clone(),
+            std::sync::Arc::new(std::sync::Mutex::new(crate::type32::Type32Store::default())),
+        );
+        front.refresh().await.unwrap();
+        let d1 = front.distribution().unwrap().clone();
+        let pool_1 = d1.outputs.first().cloned().unwrap().0;
+        assert_eq!(pool_1.len(), 34);
+        assert_ne!(&pool_1[2..], &[0u8; 32], "never a zero-key output");
+
+        let mut t2 = template();
+        t2.height = 800_001;
+        source.set(t2);
+        front.refresh().await.unwrap();
+        let d2 = front.distribution().unwrap().clone();
+        let pool_2 = d2.outputs.first().cloned().unwrap().0;
+        assert_ne!(pool_1, pool_2, "each height derives a fresh pool output");
+
+        // The built script equals the descriptor's own derivation at H.
+        assert_eq!(
+            pool_1,
+            test_descriptor()
+                .script_at(800_000)
+                .unwrap()
+                .as_bytes()
+                .to_vec()
+        );
+    }
+
+    /// The explicit dev/test override wins verbatim and no derivation
+    /// happens (the e2e harnesses rely on this).
+    #[tokio::test]
+    async fn the_dev_override_replaces_derivation() {
+        let source = Arc::new(MockTemplateSource::new(template()));
+        let mut front = Front::new(
+            cfg(),
+            source,
+            std::sync::Arc::new(std::sync::Mutex::new(crate::type32::Type32Store::default())),
+        );
+        front.refresh().await.unwrap();
+        let pool = front
+            .distribution()
+            .unwrap()
+            .outputs
+            .first()
+            .cloned()
+            .unwrap()
+            .0;
+        assert_eq!(
+            pool,
+            crate::coinbase::p2tr_script(&[0x99; 32])
+                .to_bytes()
+                .to_vec()
+        );
+    }
+
+    /// `FrontConfig::from_config` carries the parsed descriptor and rejects
+    /// a bad one (and a non-P2TR override) fail-closed.
+    #[test]
+    fn from_config_parses_the_descriptor_fail_closed() {
+        let toml_text = r#"
+[pool]
+network = "regtest"
+listen = "127.0.0.1:34254"
+authority_public_key = "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+pool_payout_descriptor = "DESCRIPTOR"
+"#;
+        let secp = bitcoin::secp256k1::Secp256k1::new();
+        let xprv =
+            bitcoin::bip32::Xpriv::new_master(bitcoin::Network::Testnet, &[0x5c; 32]).unwrap();
+        let xpub = bitcoin::bip32::Xpub::from_priv(&secp, &xprv);
+
+        // Valid: the parsed descriptor is carried, no override, no
+        // zero-key fallback.
+        let text = toml_text.replace("DESCRIPTOR", &format!("tr({xpub}/0/*)"));
+        let cfg: crate::config::Config = toml::from_str(&text).unwrap();
+        let front = FrontConfig::from_config(&cfg).unwrap();
+        assert!(front.pool_payout_script.is_none());
+        let s = front.pool_script_at(800_000).unwrap();
+        assert_eq!(s.len(), 34);
+        assert_ne!(&s[2..], &[0u8; 32]);
+
+        // Malformed descriptor (hardened step): fail closed.
+        let bad = toml_text.replace("DESCRIPTOR", "tr(tpubD6NzVbkrYhZ4YTest/0'/*)");
+        let cfg: crate::config::Config = toml::from_str(&bad).unwrap();
+        assert!(FrontConfig::from_config(&cfg).is_err());
+
+        // Non-P2TR dev override: fail closed.
+        let with_override = format!(
+            "{text}pool_payout_script = \"76a914000000000000000000000000000000000000000088ac\"\n"
+        );
+        let cfg: crate::config::Config = toml::from_str(&with_override).unwrap();
+        assert!(FrontConfig::from_config(&cfg).is_err());
     }
 
     #[tokio::test]
@@ -1787,12 +1951,15 @@ mod tests {
         let jd = crate::jds::distribution_from_weights(
             &weights,
             &p_x_by_id,
-            front.pool_payout_script(),
+            front.pool_payout_script().unwrap(),
             &dist.a_send_x,
             330,
         )
         .unwrap();
-        assert_eq!(jd.pool_payout.script, front.pool_payout_script());
+        assert_eq!(
+            jd.pool_payout.script,
+            front.pool_payout_script().unwrap().to_vec()
+        );
         assert_eq!(jd.pool_payout.value, weights.pool_weight);
         assert_eq!(jd.payouts.len(), 1);
         assert_eq!(jd.payouts[0].value, 312_500_000);

@@ -6,10 +6,12 @@ network = "regtest"                 # mainnet is refused by v0.1
 roles = ["front", "payout", "api"]
 listen = "127.0.0.1:34254"          # SV2 (Noise)
 authority_public_key = "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-pool_payout_descriptor = "tr(tpubD6NzVbkrYhZ4YTest/0/*)"
-# Dev-only: the derived P2TR script for the pool output. Production derives it
-# from the descriptor above.
-pool_payout_script = "51200000000000000000000000000000000000000000000000000000000000000000"
+# Watch-only, structurally valid testnet tpub (throwaway): the pool output
+# for height H is derived from it at H (SPEC §11.3).
+pool_payout_descriptor = "tr(tpubD6NzVbkrYhZ4WUjXBVxZPvGhWxTRE5veAscTgokX65xcfCoDF5nyNdtaS4xGoJ7xnZuDTxCAEAnGpxJbWo6wtTAJsESmeJWpZzybZ6dvCia/0/*)"
+# Dev-only override of the derived pool output script (hex, 34-byte P2TR).
+# Leave it unset in production: the descriptor above is authoritative.
+# pool_payout_script = "5120<32-byte tweaked key>"
 fee_bps = 100
 front_id = 0
 outbox_max = 4096
@@ -47,6 +49,10 @@ max_payout_slots = 256
 retain_windows = 16
 scrub_after_blocks = 100
 confirmation_depth = 6
+# Dev-only escape hatch (regtest/signet): allows template source "mock",
+# payout without a chain view, and a front without redis. Never set it in
+# production.
+# allow_unchecked_chain = false
 
 [budget]
 floor_wu = 50000
@@ -89,4 +95,5 @@ listen = "127.0.0.1:8080"
 # pool_output_account = "m/86'/1'/1'"
 # min_remaining_blocks = 3024
 # retry_blocks = 6
+# send_command = "/usr/local/bin/spc-ark-send"   # SPEC §11.10: JSON on stdin/stdout
 # server_is_self = false

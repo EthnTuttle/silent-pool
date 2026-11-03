@@ -753,6 +753,7 @@ fn published_key(front: &Front) -> Option<Published> {
 fn jd_distribution(front: &Front, dust_limit: u32) -> Option<spc_ext::SetPayoutDistribution> {
     let weights = front.weights()?;
     let dist = front.distribution()?;
+    let pool_script = front.pool_payout_script()?;
     let p_x_by_id: std::collections::BTreeMap<[u8; 32], [u8; 32]> = dist
         .entries
         .iter()
@@ -761,7 +762,7 @@ fn jd_distribution(front: &Front, dust_limit: u32) -> Option<spc_ext::SetPayoutD
     match spc_pool::jds::distribution_from_weights(
         weights,
         &p_x_by_id,
-        front.pool_payout_script(),
+        pool_script,
         &dist.a_send_x,
         dust_limit,
     ) {

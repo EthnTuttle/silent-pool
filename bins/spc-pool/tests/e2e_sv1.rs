@@ -43,13 +43,26 @@ fn config() -> FrontConfig {
         max_payout_slots: 256,
         budget_wu: 100_000,
         overhead_wu: 0,
-        pool_payout_script: spc_pool::coinbase::p2tr_script(&[0x99; 32])
-            .to_bytes()
-            .to_vec(),
+        pool_payout_descriptor: test_pool_payout_descriptor(),
+        pool_payout_script: Some(
+            spc_pool::coinbase::p2tr_script(&[0x99; 32])
+                .to_bytes()
+                .to_vec(),
+        ),
         extranonce_len: 8,
         front_id: 0,
         keep_slices: 16,
     }
+}
+
+/// A fail-closed parsed `[pool] pool_payout_descriptor` stand-in for the
+/// in-process tests (the explicit script override wins over it here).
+fn test_pool_payout_descriptor() -> spc_pool::coinbase::PoolPayoutDescriptor {
+    let secp = bitcoin::secp256k1::Secp256k1::new();
+    let xprv = bitcoin::bip32::Xpriv::new_master(bitcoin::Network::Testnet, &[0x5c; 32]).unwrap();
+    let xpub = bitcoin::bip32::Xpub::from_priv(&secp, &xprv);
+    spc_pool::coinbase::PoolPayoutDescriptor::parse(&format!("tr({xpub}/0/*)"), Network::Regtest)
+        .unwrap()
 }
 
 #[tokio::test]

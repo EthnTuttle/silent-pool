@@ -2876,8 +2876,14 @@ mod tests {
     }
 
     fn test_front() -> crate::front::Front {
+        use crate::coinbase::PoolPayoutDescriptor;
         use crate::front::{Front, FrontConfig};
         use crate::template::{MockTemplateSource, Template};
+        use bitcoin::bip32::Xpriv;
+
+        let secp = bitcoin::secp256k1::Secp256k1::new();
+        let xprv = Xpriv::new_master(bitcoin::Network::Testnet, &[0x5c; 32]).unwrap();
+        let xpub = bitcoin::bip32::Xpub::from_priv(&secp, &xprv);
 
         let cfg = FrontConfig {
             network: spc_crypto::Network::Regtest,
@@ -2890,7 +2896,12 @@ mod tests {
             max_payout_slots: 256,
             budget_wu: 100_000,
             overhead_wu: 0,
-            pool_payout_script: vec![0x51; 34],
+            pool_payout_descriptor: PoolPayoutDescriptor::parse(
+                &format!("tr({xpub}/0/*)"),
+                spc_crypto::Network::Regtest,
+            )
+            .unwrap(),
+            pool_payout_script: Some(vec![0x51; 34]),
             extranonce_len: 8,
             front_id: 0,
             keep_slices: 16,
