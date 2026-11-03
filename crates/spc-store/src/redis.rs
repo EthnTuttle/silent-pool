@@ -34,8 +34,17 @@ impl Streams {
     }
 
     pub async fn ensure_group(&self, stream: &str, group: &str) -> Result<()> {
+        self.ensure_group_from(stream, group, "$").await
+    }
+
+    /// Like [`Self::ensure_group`], but a first-created group starts at
+    /// `start_id` instead of `$`. Use `"0"` for a stream whose pre-existing
+    /// entries must not be lost (e.g. `spc:ark:receipts` across a payout
+    /// restart). An existing group is left untouched (`BUSYGROUP`).
+    pub async fn ensure_group_from(&self, stream: &str, group: &str, start_id: &str) -> Result<()> {
         let mut conn = self.conn.clone();
-        let res: redis::RedisResult<()> = conn.xgroup_create_mkstream(stream, group, "$").await;
+        let res: redis::RedisResult<()> =
+            conn.xgroup_create_mkstream(stream, group, start_id).await;
         match res {
             Ok(()) => Ok(()),
             Err(e) if e.to_string().contains("BUSYGROUP") => Ok(()),
@@ -110,6 +119,15 @@ impl Streams {
     pub async fn sismember(&self, key: &str, member: &[u8]) -> Result<bool> {
         let mut conn = self.conn.clone();
         Ok(conn.sismember(key, member).await?)
+    }
+
+    /// Remove `member` from the set at `key`; returns true when it was
+    /// present. Used to clear the Ark "ambiguous order" pin once a receipt
+    /// resolves it.
+    pub async fn srem(&self, key: &str, member: &[u8]) -> Result<bool> {
+        let mut conn = self.conn.clone();
+        let removed: i64 = conn.srem(key, member).await?;
+        Ok(removed > 0)
     }
 
     /// Refresh `key`'s TTL to `secs`; a missing key is a no-op.

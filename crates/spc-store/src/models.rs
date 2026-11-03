@@ -162,6 +162,19 @@ pub struct ArkPayoutRow {
     pub expiry_height: Option<u32>,
 }
 
+/// One scheduled `ark_payout` row plus the destination frozen in its block's
+/// distribution snapshot. This is everything `payout` needs to (re)build and
+/// sign an `ArkSendOrder` after a restart (SPEC §11.3).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArkPayoutEmission {
+    pub block_hash: [u8; 32],
+    pub sp_id: [u8; 32],
+    pub sats: u64,
+    pub due_height: u32,
+    /// `dest_id` from the snapshot entry; empty when it was not derived.
+    pub dest_id: Vec<u8>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArkPayoutStatus {
     Scheduled,
@@ -192,6 +205,10 @@ impl ArkPayoutStatus {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BootstrapSnapshot {
     pub rev: u64,
+    /// Confirmed blocks whose `LedgerApplied` is reflected in
+    /// `pending_balance` (newest first, bounded). A front seeds its
+    /// block-hash dedupe from this so a republished event is applied once.
+    pub applied_blocks: Vec<[u8; 32]>,
     pub pending_balance: Vec<([u8; 32], u64)>,
     pub ark_delivery: Vec<ArkDeliveryRow>,
     pub window_tail: Vec<SliceRow>,

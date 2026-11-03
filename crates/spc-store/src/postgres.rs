@@ -1,6 +1,8 @@
 //! Postgres settlement store. Only the `payout` role writes these tables
 //! (SPEC §1, §5.1, §7.4).
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use sqlx::postgres::{PgPool, PgPoolOptions, PgRow};
 use sqlx::Row;
 use thiserror::Error;
@@ -20,6 +22,14 @@ pub enum StoreError {
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;
+
+/// How many confirmed blocks a bootstrap/republish window carries. Bounds the
+/// block-hash dedupe a front seeds and the `LedgerApplied` replay.
+pub const APPLIED_BLOCKS_LIMIT: i64 = 1000;
+
+/// One confirmed block's replayable ledger deltas: `(block_hash,
+/// [(sp_id, pending_delta)])`.
+pub type LedgerEvent = ([u8; 32], Vec<([u8; 32], i64)>);
 
 fn id32(v: &[u8]) -> Result<[u8; 32]> {
     v.try_into()
@@ -230,6 +240,133 @@ impl Store {
         Ok(())
     }
 
+    /// Load one distribution snapshot by fingerprint. `entries` and
+    /// `high_water` are the frozen window metadata settlement reconstructs
+    /// from (SPEC §4.3, §4.7, §7.4).
+    pub async fn snapshot(&self, fingerprint: &[u8; 32]) -> Result<Option<SnapshotRow>> {
+        let row = sqlx::query(
+            "SELECT fingerprint, height, a_send_x, distribution_id, entries, high_water
+             FROM distribution_snapshot WHERE fingerprint = $1",
+        )
+        .bind(&fingerprint[..])
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|r| {
+            let fingerprint: Vec<u8> = r.try_get("fingerprint")?;
+            let height: i32 = r.try_get("height")?;
+            let a_send_x: Vec<u8> = r.try_get("a_send_x")?;
+            let distribution_id: Option<i64> = r.try_get("distribution_id")?;
+            Ok(SnapshotRow {
+                fingerprint: id32(&fingerprint)?,
+                height: height_u32(height)?,
+                a_send_x: id32(&a_send_x)?,
+                distribution_id: distribution_id.map(sats_u64).transpose()?,
+                entries: r.try_get("entries")?,
+                high_water: r.try_get("high_water")?,
+            })
+        })
+        .transpose()
+    }
+
+    /// Every sealed slice at or below a single-front high-water mark that is
+    /// still stored, newest first, with its identity aggregates (SPEC §4.3,
+    /// §7.4).
+    ///
+    /// The `slice` table has no `front_id` column, so only a single-front
+    /// high-water vector can be reconstructed exactly. Callers must reject a
+    /// multi-front vector before calling this; passing the finding front's
+    /// value against a table that also holds other fronts' `slice_id`
+    /// sequences would silently mix windows.
+    ///
+    /// `limit` bounds the walk; a caller that receives exactly `limit` rows
+    /// MUST treat the window as ambiguous unless its selection closed before
+    /// the last row.
+    pub async fn window_slices_to(&self, high_water: u64, limit: i64) -> Result<Vec<SliceRow>> {
+        let rows = sqlx::query(
+            "SELECT slice_id, height, prev_hash, ref_job_id, ref_fees, n_shares,
+                    difficulty::text AS difficulty, root, shares
+             FROM slice WHERE slice_id <= $1
+             ORDER BY height DESC, slice_id DESC LIMIT $2",
+        )
+        .bind(sats_i64(high_water)?)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        let slices = rows
+            .into_iter()
+            .map(slice_from_row)
+            .collect::<Result<Vec<_>>>()?;
+        self.attach_credits(slices).await
+    }
+
+    /// Attach the `slice_credit` aggregates to already-selected slice rows.
+    ///
+    /// `slice_from_row` deliberately returns no credits (the header query is
+    /// shared and cheap); every caller that hands slices to a window builder
+    /// must go through this helper, or the window has no per-identity
+    /// difficulty and cannot be reconstructed (SPEC §4.3, §4.7). One query
+    /// covers the whole list.
+    async fn attach_credits(&self, mut slices: Vec<SliceRow>) -> Result<Vec<SliceRow>> {
+        if slices.is_empty() {
+            return Ok(slices);
+        }
+
+        let ids: Vec<i64> = slices
+            .iter()
+            .map(|s| {
+                i64::try_from(s.slice_id).map_err(|_| StoreError::Invalid("slice_id exceeds i64"))
+            })
+            .collect::<Result<_>>()?;
+        let credit_rows = sqlx::query(
+            "SELECT slice_id, sp_id, diff_sum::text AS diff_sum,
+                    diff_fee_sum::text AS diff_fee_sum
+             FROM slice_credit WHERE slice_id = ANY($1)",
+        )
+        .bind(ids.as_slice())
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut by_slice = credits_by_slice(credit_rows)?;
+        for s in &mut slices {
+            s.credits = by_slice.remove(&s.slice_id).unwrap_or_default();
+        }
+        Ok(slices)
+    }
+
+    /// The whole pending ledger, keyed by `sp_id` (SPEC §4.6, §7.4).
+    pub async fn pending_map(&self) -> Result<BTreeMap<[u8; 32], u64>> {
+        let rows = sqlx::query("SELECT sp_id, sats FROM pending_balance")
+            .fetch_all(&self.pool)
+            .await?;
+        let mut out = BTreeMap::new();
+        for r in rows {
+            let id: Vec<u8> = r.try_get("sp_id")?;
+            let sats: i64 = r.try_get("sats")?;
+            out.insert(id32(&id)?, sats_u64(sats)?);
+        }
+        Ok(out)
+    }
+
+    /// Which of `sp_ids` have an `ark_delivery` row, i.e. are Ark-capable at
+    /// this instant (SPEC §4.6(f), §11.1). Settlement re-decides the rail
+    /// from this set, never from the block event's rail.
+    pub async fn ark_delivery_ids(&self, sp_ids: &[[u8; 32]]) -> Result<BTreeSet<[u8; 32]>> {
+        if sp_ids.is_empty() {
+            return Ok(BTreeSet::new());
+        }
+        let ids: Vec<Vec<u8>> = sp_ids.iter().map(|id| id.to_vec()).collect();
+        let rows = sqlx::query("SELECT sp_id FROM ark_delivery WHERE sp_id = ANY($1)")
+            .bind(ids.as_slice())
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|r| {
+                let id: Vec<u8> = r.try_get("sp_id")?;
+                id32(&id)
+            })
+            .collect()
+    }
+
     /// Apply one settlement transaction. Re-delivery is a no-op.
     ///
     /// Fail-closed on the schema invariant (SPEC §5.1/§7.4, review 4.5): a
@@ -238,7 +375,7 @@ impl Store {
     /// coerces a stray `Confirmed`+NULL request to `Pending` here as well.
     /// Ledger rows are written only for a confirmed booking; `pending` and
     /// `orphaned` bookings record just the `block_found` row.
-    pub async fn settle(&self, s: &Settlement, confirmation_depth: u32) -> Result<()> {
+    pub async fn settle(&self, s: &Settlement, confirmation_depth: u32) -> Result<Option<u64>> {
         let status = match (s.status, s.fingerprint) {
             (BlockStatus::Confirmed, None) => BlockStatus::Pending,
             (st, _) => st,
@@ -347,8 +484,17 @@ impl Store {
             }
         }
 
+        // The revision commits with the ledger booking, so a crash cannot
+        // leave `pending_balance` advanced while the watermark still points
+        // at an older event (SPEC §7.4). Orphan/pending bookings publish no
+        // `LedgerApplied` and need no rev.
+        let rev = if book_ledger {
+            Some(bump_front_rev_conn(&mut tx).await?)
+        } else {
+            None
+        };
         tx.commit().await?;
-        Ok(())
+        Ok(rev)
     }
 
     /// Mark a block orphaned and reverse anything already booked.
@@ -475,6 +621,49 @@ impl Store {
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter().map(ark_payout_from_row).collect()
+    }
+
+    /// Scheduled `ark_payout` rows joined with their block's frozen
+    /// distribution snapshot, so `payout` can rebuild a signed order from the
+    /// database alone (SPEC §11.3). Entries are retained while a payout is
+    /// `scheduled` (see [`Self::scrub`]), so an empty `dest_id` means the
+    /// snapshot never derived one and the row cannot be emitted.
+    pub async fn scheduled_ark_emissions(&self) -> Result<Vec<ArkPayoutEmission>> {
+        let rows = sqlx::query(
+            "SELECT ap.block_hash, ap.sp_id, ap.sats, ap.due_height, ds.entries
+             FROM ark_payout ap
+             JOIN block_found bf ON bf.block_hash = ap.block_hash
+             JOIN distribution_snapshot ds ON ds.fingerprint = bf.fingerprint
+             WHERE ap.status = 'scheduled'
+             ORDER BY ap.due_height, ap.block_hash, ap.sp_id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            let block_hash: Vec<u8> = r.try_get("block_hash")?;
+            let sp_id: Vec<u8> = r.try_get("sp_id")?;
+            let sats: i64 = r.try_get("sats")?;
+            let due_height: i32 = r.try_get("due_height")?;
+            let sp_id = id32(&sp_id)?;
+            let entries: serde_json::Value = r.try_get("entries")?;
+            let entries: Vec<crate::wire::Entry> = serde_json::from_value(entries)
+                .map_err(|_| StoreError::Invalid("snapshot entries"))?;
+            let dest_id = entries
+                .into_iter()
+                .find(|e| e.sp_id == sp_id)
+                .map(|e| e.dest_id)
+                .unwrap_or_default();
+            out.push(ArkPayoutEmission {
+                block_hash: id32(&block_hash)?,
+                sp_id,
+                sats: sats_u64(sats)?,
+                due_height: height_u32(due_height)?,
+                dest_id,
+            });
+        }
+        Ok(out)
     }
 
     pub async fn mark_ark_sent(
@@ -638,7 +827,10 @@ impl Store {
             .collect()
     }
 
-    /// Recent sealed slices for the live window tail and type-32 service.
+    /// Recent sealed slices for the live window tail and type-32 service,
+    /// with the same per-identity credits as [`Self::window_slices_to`] so a
+    /// restarting front can rebuild its window from `bootstrap` (SPEC §5.3,
+    /// WIRE-FORMATS §3.5).
     pub async fn window_tail(&self, limit: i64) -> Result<Vec<SliceRow>> {
         let rows = sqlx::query(
             "SELECT slice_id, height, prev_hash, ref_job_id, ref_fees, n_shares,
@@ -648,30 +840,172 @@ impl Store {
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;
-        rows.into_iter().map(slice_from_row).collect()
+        let slices = rows
+            .into_iter()
+            .map(slice_from_row)
+            .collect::<Result<Vec<_>>>()?;
+        self.attach_credits(slices).await
     }
 
-    /// Bootstrap snapshot. `rev` is 0 until the stream supplies a newer one;
-    /// fronts apply only newer revs, so this is safe.
+    /// Bump the persisted `spc:front:events` watermark and return the value
+    /// to put in the event (SPEC §5.2, §7.4).
+    ///
+    /// `now_ms` is the candidate; the row is strictly increasing even when
+    /// several events are published in the same millisecond or the wall
+    /// clock moves backwards.
+    pub async fn bump_front_rev(&self) -> Result<u64> {
+        let mut tx = self.pool.begin().await?;
+        let rev = bump_front_rev_conn(&mut tx).await?;
+        tx.commit().await?;
+        Ok(rev)
+    }
+
+    /// The persisted `spc:front:events` watermark, or 0 when no event has
+    /// been published yet (or the migration has not run: a bootstrap-only
+    /// front may start before `payout`).
+    pub async fn front_rev(&self) -> Result<u64> {
+        let mut tx = self.pool.begin().await?;
+        let rev = front_rev_conn(&mut tx).await;
+        tx.rollback().await?;
+        rev
+    }
+
+    /// Ledger deltas for the most recent confirmed blocks, oldest first, for
+    /// republishing `LedgerApplied` after a lost XADD (SPEC §5.2, §7.4).
+    ///
+    /// Only non-zero `pending_delta` rows are returned; a block whose ledger
+    /// changed no balance needs no delta replay (the front seeds its
+    /// block-hash dedupe from `bootstrap.applied_blocks`).
+    pub async fn recent_ledger_events(&self, limit: i64) -> Result<Vec<LedgerEvent>> {
+        let rows = sqlx::query(
+            "WITH recent AS (
+                 SELECT block_hash, height FROM block_found
+                 WHERE status = 'confirmed'
+                 ORDER BY height DESC, block_hash
+                 LIMIT $1
+             )
+             SELECT recent.block_hash, lh.sp_id, lh.pending_delta
+             FROM recent
+             JOIN ledger_history lh ON lh.block_hash = recent.block_hash
+             ORDER BY recent.height ASC, recent.block_hash, lh.sp_id",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut out: Vec<LedgerEvent> = Vec::new();
+        for r in rows {
+            let delta: i64 = r.try_get("pending_delta")?;
+            if delta == 0 {
+                continue;
+            }
+            let block: Vec<u8> = r.try_get("block_hash")?;
+            let sp_id: Vec<u8> = r.try_get("sp_id")?;
+            let block = id32(&block)?;
+            match out.last_mut() {
+                Some((last, deltas)) if *last == block => {
+                    deltas.push((id32(&sp_id)?, delta));
+                }
+                _ => out.push((block, vec![(id32(&sp_id)?, delta)])),
+            }
+        }
+        Ok(out)
+    }
+
+    /// Bootstrap snapshot. Every field is read in one `REPEATABLE READ`
+    /// transaction, so the pending projection, the applied-block list and
+    /// the `front_event_state.rev` watermark describe the same instant
+    /// (SPEC §5.2, §7.4). `rev` is 0 when no event has been published.
     pub async fn bootstrap(&self, retain_windows: i64) -> Result<BootstrapSnapshot> {
-        let pending_balance = self.pending_balances().await?;
+        let mut tx = self.pool.begin().await?;
+        // Must be the first statement of the transaction.
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            .execute(&mut *tx)
+            .await?;
+
+        let pending_rows = sqlx::query("SELECT sp_id, sats FROM pending_balance ORDER BY sp_id")
+            .fetch_all(&mut *tx)
+            .await?;
+        let pending_balance = pending_rows
+            .into_iter()
+            .map(|r| {
+                let id: Vec<u8> = r.try_get("sp_id")?;
+                let sats: i64 = r.try_get("sats")?;
+                Ok((id32(&id)?, sats_u64(sats)?))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
         let delivery_rows = sqlx::query(
             "SELECT sp_id, ark_id, b_ark, mailbox_mode, mailbox_m, mailbox_d FROM ark_delivery",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *tx)
         .await?;
         let ark_delivery = delivery_rows
             .into_iter()
             .map(ark_delivery_from_row)
             .collect::<Result<Vec<_>>>()?;
-        let window_tail = self.window_tail(retain_windows).await?;
+
+        let slice_rows = sqlx::query(
+            "SELECT slice_id, height, prev_hash, ref_job_id, ref_fees, n_shares,
+                    difficulty::text AS difficulty, root, shares
+             FROM slice ORDER BY height DESC, slice_id DESC LIMIT $1",
+        )
+        .bind(retain_windows)
+        .fetch_all(&mut *tx)
+        .await?;
+        let mut window_tail: Vec<SliceRow> = slice_rows
+            .into_iter()
+            .map(slice_from_row)
+            .collect::<Result<_>>()?;
+        if !window_tail.is_empty() {
+            let ids: Vec<i64> = window_tail
+                .iter()
+                .map(|s| {
+                    i64::try_from(s.slice_id)
+                        .map_err(|_| StoreError::Invalid("slice_id exceeds i64"))
+                })
+                .collect::<Result<_>>()?;
+            let credit_rows = sqlx::query(
+                "SELECT slice_id, sp_id, diff_sum::text AS diff_sum,
+                        diff_fee_sum::text AS diff_fee_sum
+                 FROM slice_credit WHERE slice_id = ANY($1)",
+            )
+            .bind(ids.as_slice())
+            .fetch_all(&mut *tx)
+            .await?;
+            let mut by_slice = credits_by_slice(credit_rows)?;
+            for s in &mut window_tail {
+                s.credits = by_slice.remove(&s.slice_id).unwrap_or_default();
+            }
+        }
         let type32_blobs = window_tail
             .iter()
             .map(|s| (s.slice_id, s.shares.clone()))
             .collect();
 
+        let block_rows = sqlx::query(
+            "SELECT block_hash FROM block_found
+             WHERE status = 'confirmed'
+             ORDER BY height DESC, block_hash
+             LIMIT $1",
+        )
+        .bind(APPLIED_BLOCKS_LIMIT)
+        .fetch_all(&mut *tx)
+        .await?;
+        let applied_blocks = block_rows
+            .into_iter()
+            .map(|r| {
+                let hash: Vec<u8> = r.try_get("block_hash")?;
+                id32(&hash)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let rev = front_rev_conn(&mut tx).await?;
+        tx.commit().await?;
+
         Ok(BootstrapSnapshot {
-            rev: 0,
+            rev,
+            applied_blocks,
             pending_balance,
             ark_delivery,
             window_tail,
@@ -679,6 +1013,65 @@ impl Store {
             slices_cursor: None,
             front_events_cursor: None,
         })
+    }
+}
+
+/// Group `slice_credit` rows by slice id. Shared by the pool-backed
+/// `attach_credits` and the repeatable-read `bootstrap` transaction.
+fn credits_by_slice(rows: Vec<PgRow>) -> Result<BTreeMap<u64, Vec<SliceCreditRow>>> {
+    let mut by_slice: BTreeMap<u64, Vec<SliceCreditRow>> = BTreeMap::new();
+    for r in rows {
+        let slice_id: i64 = r.try_get("slice_id")?;
+        let sp_id: Vec<u8> = r.try_get("sp_id")?;
+        by_slice
+            .entry(sats_u64(slice_id)?)
+            .or_default()
+            .push(SliceCreditRow {
+                sp_id: id32(&sp_id)?,
+                diff_sum: r.try_get("diff_sum")?,
+                diff_fee_sum: r.try_get("diff_fee_sum")?,
+            });
+    }
+    Ok(by_slice)
+}
+
+/// The watermark upsert, usable inside `settle`'s transaction so the ledger
+/// booking and its revision commit together (SPEC §7.4).
+async fn bump_front_rev_conn(tx: &mut sqlx::PgConnection) -> Result<u64> {
+    let row = sqlx::query(
+        "INSERT INTO front_event_state (id, rev)
+         VALUES (1, (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint)
+         ON CONFLICT (id) DO UPDATE
+            SET rev = GREATEST(front_event_state.rev + 1, EXCLUDED.rev)
+         RETURNING rev",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    let rev: i64 = row.try_get("rev")?;
+    u64::try_from(rev).map_err(|_| StoreError::Invalid("negative front rev"))
+}
+
+/// Read the watermark inside a transaction. A database that predates the
+/// 0002 migration has published no event, so rev 0 is correct; the
+/// `to_regclass` probe avoids aborting the surrounding transaction with an
+/// undefined-table error.
+async fn front_rev_conn(tx: &mut sqlx::PgConnection) -> Result<u64> {
+    let exists: bool =
+        sqlx::query_scalar("SELECT to_regclass('public.front_event_state') IS NOT NULL")
+            .fetch_one(&mut *tx)
+            .await?;
+    if !exists {
+        return Ok(0);
+    }
+    let row = sqlx::query("SELECT rev FROM front_event_state WHERE id = 1")
+        .fetch_optional(&mut *tx)
+        .await?;
+    match row {
+        Some(row) => {
+            let rev: i64 = row.try_get("rev")?;
+            u64::try_from(rev).map_err(|_| StoreError::Invalid("negative front rev"))
+        }
+        None => Ok(0),
     }
 }
 
