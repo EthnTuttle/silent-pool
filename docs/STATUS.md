@@ -12,24 +12,29 @@ reviews are recorded for risky packets, and the commit is pushed.
 | PPLNS-JD/SLICE accounting + settlement | `ses_e61952d7` | checkpoint `186d99e`; gate/review fixes `e2e9943`..`c403b7c` |
 | De-mock (metrics, per-height descriptor, ark role) | `ses_e61943da` | landed `3c3a19c`, `74807d3`, `65d87c1` |
 | Tor transport (spec and docs) | `ses_e60e6aac` | landed `8aca4be`, `914509f`; spec-ahead-of-code, closed |
-| Tor transport implementation | `ses_e5d9b9134` | dispatched 2026-11-03 on branch `tor-impl` |
+| Tor transport implementation | `ses_e5d9b9134` | landed `e919d35`..`57bd046`, merged `9be60a9` |
 | Stock bark Ark adapter | `ses_e5d9b9133` | dispatched 2026-11-03 on branch `bark-adapter` |
 | Amount-banded payouts analysis | `ses_e5d9b9192` | dispatched 2026-11-03, writes `docs/analysis/2026-11-03-amount-banded-payouts.md` |
 | rbitcoin node fork (testnet4) | `ses_e6195c6a` | separate repo `/home/ethan/code/rbitcoin`; not merged here |
 | Proxy/upstream analysis | `ses_e60f175c` | closed, `docs/analysis/2026-11-02-proxy-and-upstream-options.md` |
 | Multi-identifier analysis | `ses_e638a2e6` | closed, `docs/analysis/2026-11-02-multi-identifier-payouts.md` |
 
-## Wave 3 (in flight)
+## Wave 3 (2026-11-03)
 
-- Tor transport implementation (branch `tor-impl`, `e919d35`..): SPEC §3.8
-  lands in code - in-tree socks5h CONNECT dialer with per-connection
-  isolation credentials (no new dependency crates), `[reach]`/`[net]` config
-  on both binaries, onion-published listeners forced to loopback at startup,
-  `.onion` targets without a proxy rejected, and `GET /api/pool` publishing
-  `endpoints` verbatim from `[reach] advertise`. The agent's SV2 upstream and
-  JDP dials route through `[net]`; the ark role's in-process Ark gRPC and
-  mailbox readers do not exist yet (O13/Phase 7), and will dial through the
-  same egress when they land.
+- Tor transport (`e919d35`..`57bd046`, merged `9be60a9`): SPEC §3.8 lands in
+  code. In-tree socks5h CONNECT dialer with per-connection isolation
+  credentials (no new dependency crates, vendor hash untouched), `[reach]`/
+  `[net]` config on both binaries, onion-published listeners forced to
+  loopback at startup, `.onion` targets without a proxy rejected, and
+  `GET /api/pool` publishing `endpoints` verbatim from `[reach] advertise`.
+  The agent's SV2 upstream and JDP dials route through `[net]`.
+  **Residual:** the ark role's Ark gRPC and the mailbox reader do not exist
+  yet (O13/Phase 7); they will dial through the same egress when they land.
+- Amount-banded payouts analysis (`116ed34`): overage-to-Ark relocates exact
+  amounts to the Ark server and is not worth building; band + overage-to-
+  pending is feasible as a v2 mitigation that bounds the on-chain leak to
+  `ceil(log2 L)` bits per block. No code change.
+- Stock bark Ark adapter (branch `bark-adapter`): in progress.
 
 ## Current state
 
@@ -150,9 +155,9 @@ Both harnesses bind bitcoind on 18443, so they must be run sequentially.
 
 ## Remaining
 
-1. Tor transport implementation: `[reach]`/`[net]` parser, loopback binding
-   enforcement, SOCKS5 egress. SPEC §3.8 is the requirement; the binary does
-   not accept the keys yet. Dispatched 2026-11-03 (branch `tor-impl`).
+1. Tor transport residual: the ark role's Ark gRPC and the mailbox reader
+   must dial through `[net]`; both land with O13/Phase 7 (the config surface,
+   loopback enforcement and agent egress are merged in `9be60a9`).
 2. Replace the interim Ark command transport with the stock bark wallet
    adapter (order emission and verification are done). Dispatched 2026-11-03
    (branch `bark-adapter`).
