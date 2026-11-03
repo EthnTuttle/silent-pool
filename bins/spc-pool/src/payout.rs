@@ -75,6 +75,8 @@ pub enum PayoutError {
     Snapshot(&'static str),
     #[error("value exceeds i64")]
     Overflow,
+    #[error("ledger event: {0}")]
+    LedgerEvent(String),
 }
 
 /// A chain view failure never books anything; settlement waits and retries.
@@ -1068,7 +1070,7 @@ impl PayoutService {
             }
             if last_republish.elapsed() >= REPUBLISH_INTERVAL {
                 last_republish = Instant::now();
-                if let Err(e) = self.republish_ledger_events().await {
+                if let Err(e) = self.republish_unpublished_ledger_events().await {
                     tracing::error!(error = %e, "ledger republish failed");
                 }
             }
@@ -1176,11 +1178,20 @@ impl PayoutService {
         let e = BlockEvent::decode(payload)?;
 
         // Terminal states are absorbing (§7.4 idempotency); a redelivery
-        // then changes nothing and, unlike a fresh pass, emits nothing.
+        // then changes nothing. The one exception is a confirmed block whose
+        // `LedgerApplied` XADD never succeeded: that block stays unpublished
+        // and is retried here (and by the periodic bounded republish).
         match self.store.block_status(&e.block_hash).await? {
-            Some(BlockStatus::Confirmed) | Some(BlockStatus::Orphaned) => {
-                return Ok(Disposition::Done)
+            Some(BlockStatus::Confirmed) => {
+                if self.store.ledger_published(&e.block_hash).await? == Some(false) {
+                    self.republish_unpublished_ledger_events().await?;
+                    if self.store.ledger_published(&e.block_hash).await? == Some(false) {
+                        return Ok(Disposition::Retry);
+                    }
+                }
+                return Ok(Disposition::Done);
             }
+            Some(BlockStatus::Orphaned) => return Ok(Disposition::Done),
             Some(BlockStatus::Pending) | None => {}
         }
 
@@ -1324,9 +1335,18 @@ impl PayoutService {
             republish: true,
             pending_deltas: deltas,
         };
-        if let Ok(bytes) = event.encode() {
-            let _ = self.streams.add(&self.front_events_stream, &bytes).await;
+        let bytes = event
+            .encode()
+            .map_err(|e| PayoutError::LedgerEvent(e.to_string()))?;
+        if let Err(err) = self.streams.add(&self.front_events_stream, &bytes).await {
+            tracing::warn!(
+                error = %err,
+                block = %display_hash(&e.block_hash),
+                "LedgerApplied XADD failed; leaving the block unpublished for retry"
+            );
+            return Ok(Disposition::Retry);
         }
+        self.store.mark_ledger_published(&e.block_hash).await?;
         // The Ark rows are now in Postgres. Emit from the store, not from
         // this in-memory ledger, so a payout restart and a duplicate booking
         // take the same idempotent path (SPEC §11.3).
@@ -1554,20 +1574,20 @@ impl PayoutService {
         Ok(())
     }
 
-    /// Re-emit `LedgerApplied` for the most recent confirmed blocks
-    /// (SPEC §5.2, §7.4).
+    /// Re-emit `LedgerApplied` only for confirmed blocks whose event has not
+    /// been published yet (SPEC §5.2, §7.4).
     ///
-    /// `on_block` emits once after the atomic settle/rev commit, but the XADD
-    /// can fail or the event can be lost. This periodic replay is the
-    /// self-healing path; the front seeds its block-hash dedupe from
-    /// `bootstrap.applied_blocks` and ignores a block it already applied, so
-    /// a duplicate republish is harmless.
-    async fn republish_ledger_events(&self) -> Result<(), PayoutError> {
-        let recent = self
+    /// `block_found.ledger_published` is set only after a successful XADD, so
+    /// a dead front cursor cannot make this timer grow the stream: a healthy
+    /// front leaves the set empty. A failed XADD leaves the block unpublished
+    /// and the next pass retries it; the front's block-hash dedupe makes a
+    /// duplicate harmless.
+    async fn republish_unpublished_ledger_events(&self) -> Result<(), PayoutError> {
+        let unpublished = self
             .store
-            .recent_ledger_events(spc_store::postgres::APPLIED_BLOCKS_LIMIT)
+            .unpublished_ledger_events(spc_store::postgres::APPLIED_BLOCKS_LIMIT)
             .await?;
-        for (block_hash, pending_deltas) in recent {
+        for (block_hash, pending_deltas) in unpublished {
             let rev = self.store.bump_front_rev().await?;
             let event = FrontEvent::LedgerApplied {
                 rev,
@@ -1576,7 +1596,9 @@ impl PayoutService {
                 pending_deltas,
             };
             let Ok(bytes) = event.encode() else {
-                continue;
+                return Err(PayoutError::LedgerEvent(format!(
+                    "cannot encode LedgerApplied for {block_hash:?}"
+                )));
             };
             if let Err(e) = self.streams.add(&self.front_events_stream, &bytes).await {
                 tracing::warn!(
@@ -1584,7 +1606,9 @@ impl PayoutService {
                     block = %display_hash(&block_hash),
                     "ledger republish XADD failed; the next pass retries"
                 );
+                return Err(PayoutError::Redis(e));
             }
+            self.store.mark_ledger_published(&block_hash).await?;
         }
         Ok(())
     }
@@ -3143,7 +3167,7 @@ mod tests {
             0,
         )
         .with_front_events_stream(&events);
-        svc.republish_ledger_events().await.unwrap();
+        svc.republish_unpublished_ledger_events().await.unwrap();
 
         let entries = streams.read_group(&events, GROUP, "c", 256).await.unwrap();
         let (event_rev, deltas) = entries
@@ -3218,5 +3242,83 @@ mod tests {
             first,
             "a confirmed retry emits no duplicate delta"
         );
+    }
+
+    /// The republish set is bounded to blocks whose XADD has not succeeded:
+    /// once a block is marked published, a stalled front cursor cannot make
+    /// the timer append it again.
+    #[tokio::test]
+    async fn republish_is_bounded_to_unpublished_blocks() {
+        let Some((store, streams)) = ark_test_env().await else {
+            return;
+        };
+        let sp_id: [u8; 32] = rand::random();
+        let block: [u8; 32] = rand::random();
+        let fingerprint: [u8; 32] = rand::random();
+        store
+            .upsert_identity(&SpIdentityRow {
+                sp_id,
+                b_scan: vec![2; 33],
+                b_spend: vec![3; 33],
+                network: 3,
+            })
+            .await
+            .unwrap();
+        store
+            .insert_snapshot(&SnapshotRow {
+                fingerprint,
+                height: 800_001,
+                a_send_x: [4; 32],
+                distribution_id: None,
+                entries: serde_json::json!([]),
+                high_water: serde_json::json!({"0": "1"}),
+            })
+            .await
+            .unwrap();
+        store
+            .settle(
+                &Settlement {
+                    block_hash: block,
+                    height: 800_001,
+                    fingerprint: Some(fingerprint),
+                    status: BlockStatus::Confirmed,
+                    ledger: vec![LedgerRow {
+                        sp_id,
+                        rail: LedgerRail::Pending,
+                        paid_sats: 0,
+                        ark_due_sats: 0,
+                        forfeited_sats: 0,
+                        pending_delta: 11,
+                    }],
+                },
+                RETRY_DEPTH,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store.unpublished_ledger_events(1_000).await.unwrap().len(),
+            1
+        );
+        store.mark_ledger_published(&block).await.unwrap();
+        assert!(store
+            .unpublished_ledger_events(1_000)
+            .await
+            .unwrap()
+            .is_empty());
+
+        let events = unique_stream("front:events");
+        let svc = PayoutService::new(
+            store.clone(),
+            streams.clone(),
+            RETRY_DEPTH,
+            330,
+            Arc::new(LegacyChain),
+            None,
+            0,
+        )
+        .with_front_events_stream(&events);
+        svc.republish_unpublished_ledger_events().await.unwrap();
+        assert_eq!(streams.len(&events).await.unwrap(), 0);
     }
 }

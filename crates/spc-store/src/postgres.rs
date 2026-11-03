@@ -422,7 +422,11 @@ impl Store {
                             "UPDATE block_found
                              SET fingerprint = COALESCE($2, fingerprint),
                                  status = $3,
-                                 settled_at = now()
+                                 settled_at = now(),
+                                 ledger_published = CASE
+                                     WHEN $3 = 'confirmed' THEN false
+                                     ELSE ledger_published
+                                 END
                              WHERE block_hash = $1",
                         )
                         .bind(&s.block_hash[..])
@@ -436,13 +440,16 @@ impl Store {
             None => {
                 sqlx::query(
                     "INSERT INTO block_found
-                        (block_hash, height, fingerprint, status, settled_at)
-                     VALUES ($1, $2, $3, $4, now())",
+                        (block_hash, height, fingerprint, status, settled_at,
+                         ledger_published)
+                     VALUES ($1, $2, $3, $4, now(), $5)",
                 )
                 .bind(&s.block_hash[..])
                 .bind(height_i32(s.height)?)
                 .bind(s.fingerprint.as_ref().map(|f| &f[..]))
                 .bind(status.as_str())
+                // A confirmed booking is unpublished until the XADD succeeds.
+                .bind(status != BlockStatus::Confirmed)
                 .execute(&mut *tx)
                 .await?;
             }
@@ -924,6 +931,63 @@ impl Store {
                     deltas.push((id32(&sp_id)?, delta));
                 }
                 _ => out.push((block, vec![(id32(&sp_id)?, delta)])),
+            }
+        }
+        Ok(out)
+    }
+
+    /// Whether a confirmed block's `LedgerApplied` has been published.
+    pub async fn ledger_published(&self, block_hash: &[u8; 32]) -> Result<Option<bool>> {
+        let row = sqlx::query("SELECT ledger_published FROM block_found WHERE block_hash = $1")
+            .bind(&block_hash[..])
+            .fetch_optional(&self.pool)
+            .await?;
+        row.map(|r| r.try_get("ledger_published"))
+            .transpose()
+            .map_err(StoreError::from)
+    }
+
+    /// Mark a block's `LedgerApplied` as published. Called only after the
+    /// XADD succeeded, so the republish path is bounded to the unseen set.
+    pub async fn mark_ledger_published(&self, block_hash: &[u8; 32]) -> Result<()> {
+        sqlx::query("UPDATE block_found SET ledger_published = true WHERE block_hash = $1")
+            .bind(&block_hash[..])
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Confirmed blocks whose `LedgerApplied` has not yet been published,
+    /// oldest first. This is the bounded republish set: a healthy front marks
+    /// every block, so the timer only sees events a failed XADD left behind.
+    pub async fn unpublished_ledger_events(&self, limit: i64) -> Result<Vec<LedgerEvent>> {
+        let rows = sqlx::query(
+            "WITH recent AS (
+                 SELECT block_hash, height FROM block_found
+                 WHERE status = 'confirmed' AND ledger_published = false
+                 ORDER BY height ASC, block_hash
+                 LIMIT $1
+             )
+             SELECT recent.block_hash, lh.sp_id, lh.pending_delta
+             FROM recent
+             JOIN ledger_history lh ON lh.block_hash = recent.block_hash
+             ORDER BY recent.height ASC, recent.block_hash, lh.sp_id",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut out: Vec<LedgerEvent> = Vec::new();
+        for r in rows {
+            let delta: i64 = r.try_get("pending_delta")?;
+            if delta == 0 {
+                continue;
+            }
+            let block = id32(&r.try_get::<Vec<u8>, _>("block_hash")?)?;
+            let sp_id = id32(&r.try_get::<Vec<u8>, _>("sp_id")?)?;
+            match out.last_mut() {
+                Some((last, deltas)) if *last == block => deltas.push((sp_id, delta)),
+                _ => out.push((block, vec![(sp_id, delta)])),
             }
         }
         Ok(out)
