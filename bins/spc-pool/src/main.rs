@@ -209,12 +209,7 @@ async fn main() -> anyhow::Result<()> {
         store.migrate().await?;
         let backend = std::sync::Arc::new(StoreBackend::with_metrics_config(
             store,
-            serde_json::json!({
-                "network": config.pool.network,
-                "window_n": config.accounting.window_n,
-                "coinbase_threshold_sats": config.accounting.coinbase_threshold_sats,
-                "extensions": ["0x0001", "0x0003", "0x0020", "0x5350"],
-            }),
+            spc_pool::api_backend::pool_info(&config),
             serde_json::json!({
                 "budget_wu": config.budget.floor_wu,
                 "ceiling_wu": config.budget.ceiling_wu,
