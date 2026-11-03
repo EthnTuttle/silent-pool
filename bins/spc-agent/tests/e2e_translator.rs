@@ -102,6 +102,7 @@ async fn sv1_miner_reaches_the_pool_through_the_translator() {
             require_own_payout: "warn".into(),
             request_share_accounting: true,
         },
+        net: Default::default(),
         downstream: Downstream {
             listen: "127.0.0.1:0".into(),
         },

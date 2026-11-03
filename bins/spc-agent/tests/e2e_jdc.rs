@@ -19,7 +19,9 @@ async fn jdc_receives_the_published_distribution() {
         additional_outputs: vec![],
     };
     let id = server.publish(800_000, 1_000, dist.clone()).await.unwrap();
-    let jdc = spc_agent::jdc::Jdc::connect(addr).await.unwrap();
+    let jdc = spc_agent::jdc::Jdc::connect(&addr.into(), &spc_pool::net::Egress::DIRECT)
+        .await
+        .unwrap();
     let got = jdc.last().unwrap();
     assert_eq!(got.distribution_id, id);
     assert_eq!(got.payouts.len(), 1);
@@ -32,7 +34,9 @@ async fn jds_accepts_a_declaration_with_the_current_id() {
     let (addr, _h) = server.bind("127.0.0.1:0").await.unwrap();
     let dist = dist_for_build();
     let id = server.publish(1, 1_000, dist).await.unwrap();
-    let mut jdc = spc_agent::jdc::Jdc::connect(addr).await.unwrap();
+    let mut jdc = spc_agent::jdc::Jdc::connect(&addr.into(), &spc_pool::net::Egress::DIRECT)
+        .await
+        .unwrap();
     let token = jdc.allocate_token("dev").await.unwrap();
     let secp = bitcoin::secp256k1::Secp256k1::new();
     let b_scan = bitcoin::secp256k1::SecretKey::from_slice(&[0x11; 32]).unwrap();

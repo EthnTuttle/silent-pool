@@ -7,11 +7,11 @@
 //! does not answer within [`JD_NEGOTIATION_TIMEOUT`] makes the role fail
 //! closed instead.
 
-use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use bitcoin::secp256k1::{PublicKey, SecretKey};
 use spc_ext::{DistributionIdTlv, SetPayoutDistribution};
+use spc_pool::net::{Egress, Target};
 use stratum_apps::network_helpers::connect_with_noise;
 use stratum_apps::network_helpers::noise_stream::{NoiseTcpReadHalf, NoiseTcpWriteHalf};
 use stratum_core::binary_sv2::{self, Seq064K, Str0255, B0255, B064K, U256};
@@ -32,7 +32,6 @@ use stratum_core::job_declaration_sv2::{
     MESSAGE_TYPE_DECLARE_MINING_JOB,
 };
 use thiserror::Error;
-use tokio::net::TcpStream;
 use tokio::sync::watch;
 use tokio::time::timeout;
 
@@ -102,7 +101,8 @@ pub struct JdTemplate {
 /// Everything `run` needs, validated once at startup.
 #[derive(Clone, Debug)]
 pub struct JdPlan {
-    pub jds: SocketAddr,
+    pub jds: Target,
+    pub egress: Egress,
     pub own_keys: OwnKeys,
     pub template: JdTemplate,
     pub policy: Policy,
@@ -116,7 +116,13 @@ impl JdPlan {
             .as_ref()
             .filter(|jd| jd.enabled)
             .ok_or_else(|| JdcError::Config("[jd] is not enabled".into()))?;
-        let jds = jd.jds_addr().map_err(|e| JdcError::Config(e.to_string()))?;
+        let jds = jd
+            .jds_target()
+            .map_err(|e| JdcError::Config(e.to_string()))?;
+        let egress = config
+            .net
+            .egress()
+            .map_err(|e| JdcError::Config(e.to_string()))?;
         let b_scan = jd
             .scan_secret()
             .map_err(|e| JdcError::Config(e.to_string()))?;
@@ -133,6 +139,7 @@ impl JdPlan {
         };
         Ok(Self {
             jds,
+            egress,
             own_keys: OwnKeys::new(b_scan, parsed.b_spend),
             template: JdTemplate {
                 height,
@@ -181,7 +188,7 @@ pub async fn run_with_templates(
     mut templates: watch::Receiver<JdTemplate>,
     _keepalive: watch::Sender<JdTemplate>,
 ) -> anyhow::Result<()> {
-    let mut jdc = Jdc::connect(plan.jds).await?;
+    let mut jdc = Jdc::connect(&plan.jds, &plan.egress).await?;
     let token = jdc.allocate_token(&plan.user_identifier).await?;
     tracing::info!(jds = %plan.jds, "JDC connected; JD mode negotiated");
 
@@ -224,8 +231,9 @@ pub struct Jdc {
 }
 
 impl Jdc {
-    pub async fn connect(addr: SocketAddr) -> Result<Self, JdcError> {
-        let stream = TcpStream::connect(addr)
+    pub async fn connect(target: &Target, egress: &Egress) -> Result<Self, JdcError> {
+        let stream = egress
+            .connect(target)
             .await
             .map_err(|e| JdcError::Network(e.to_string()))?;
         let stream = connect_with_noise(stream, None)
@@ -892,7 +900,7 @@ mod tests {
         let dist = own_distribution(1, &a_x, &own_keys, 100);
         let id = server.publish(1, 1_000, dist).await.unwrap();
 
-        let mut jdc = Jdc::connect(addr).await.unwrap();
+        let mut jdc = Jdc::connect(&addr.into(), &Egress::DIRECT).await.unwrap();
         let token = jdc.allocate_token("jdc-test").await.unwrap();
         let template = JdTemplate {
             height: 1,
@@ -953,7 +961,8 @@ mod tests {
             .await
             .unwrap();
         let plan = JdPlan {
-            jds: addr,
+            jds: addr.into(),
+            egress: spc_pool::net::Egress::DIRECT,
             own_keys: own_keys.clone(),
             template: JdTemplate {
                 height: 1,
@@ -997,7 +1006,8 @@ mod tests {
             .await
             .unwrap();
         let plan = JdPlan {
-            jds: addr,
+            jds: addr.into(),
+            egress: spc_pool::net::Egress::DIRECT,
             own_keys: own_keys.clone(),
             template,
             policy: Policy::Refuse,
@@ -1050,6 +1060,7 @@ mod tests {
                 require_own_payout: "warn".into(),
                 request_share_accounting: true,
             },
+            net: spc_pool::net::Net::default(),
             downstream: Downstream::default(),
             jd: Some(Jd {
                 enabled: true,

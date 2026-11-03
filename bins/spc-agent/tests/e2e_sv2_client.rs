@@ -90,9 +90,14 @@ async fn agent_client_gets_a_job_and_submits_a_block() {
     let spend = bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &spend_sk);
     let address = spc_crypto::address::encode_sp_address(Network::Regtest, &scan, &spend).unwrap();
 
-    let mut client = Sv2Client::connect(addr, &address, Network::Regtest)
-        .await
-        .unwrap();
+    let mut client = Sv2Client::connect(
+        &addr.into(),
+        &spc_pool::net::Egress::DIRECT,
+        &address,
+        Network::Regtest,
+    )
+    .await
+    .unwrap();
     let job = client.next_job().await.unwrap();
     assert_eq!(client.extranonce_prefix.len(), 4);
     assert_eq!(client.extranonce_size, 4);
