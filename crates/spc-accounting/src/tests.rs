@@ -15,6 +15,42 @@ fn share(id: u8, d: u64, fees: u64, idx: u32) -> ShareRec {
     }
 }
 
+fn cfg(budget: u32, slots: usize) -> TierConfig {
+    TierConfig {
+        fee_bps: 100,
+        dust_limit_sats: 330,
+        coinbase_threshold_sats: 330,
+        max_payout_slots: slots,
+        budget_wu: budget,
+        overhead_wu: 0,
+    }
+}
+
+fn empty_raw() -> RawPayouts {
+    RawPayouts {
+        raw: BTreeMap::new(),
+        pool_sats: 0,
+        r_net: 0,
+        f_net: 0,
+    }
+}
+
+/// Apply a routing's ledger deltas to a prior pending map, the way the front
+/// (`advance_pending`) and settlement do: a balance that reaches zero is
+/// removed, never stored negative.
+fn apply(routing: &Routing, pending: &BTreeMap<SpId, u64>) -> BTreeMap<SpId, u64> {
+    let mut out = pending.clone();
+    for (id, delta) in &routing.pending_deltas {
+        let next = out.get(id).copied().unwrap_or(0) as i128 + *delta as i128;
+        if next > 0 {
+            out.insert(*id, u64::try_from(next).unwrap_or(u64::MAX));
+        } else {
+            out.remove(id);
+        }
+    }
+    out
+}
+
 fn worked_window() -> (Window, u64, u64) {
     let mut s1 = Slice::new(1, 800_000, [1; 32], 0, 1, 15_000_000);
     s1.push(share(1, 60, 15_000_000, 0)); // Alice
@@ -47,6 +83,71 @@ fn spec_4_5_worked_example_matches_to_the_sat() {
     assert_eq!(raw.f_net, 19_800_000);
 }
 
+/// SPEC §4.4 floors the subsidy term **once per identity across the whole
+/// window**: `floor(r_net * sum_s d_s / D_win)`. The pre-fix code floored per
+/// slice (`floor(r_net * d_s / D_win)` inside the slice loop), which loses every
+/// slice's remainder: this window yields 10, not 3 + 3 + 3 = 9.
+#[test]
+fn subsidy_term_floors_once_per_identity_across_the_window() {
+    let mut slices = Vec::new();
+    for i in 1..=3u64 {
+        let mut s = Slice::new(i, 800_000, [1; 32], 0, 1, 0);
+        s.push(share(1, 1, 0, (i - 1) as u32));
+        s.seal();
+        slices.push(s.agg());
+    }
+    let window = Window {
+        slices,
+        t: 3,
+        d_win: 3,
+        high_water: BTreeMap::new(),
+    };
+    // r_net = 10, one identity with d = 3 over the window, D_win = 3.
+    let raw = raw_payouts(&window, 10, 0, 0).unwrap();
+    assert_eq!(raw.raw.get(&[1; 32]), Some(&10));
+    assert_eq!(raw.pool_sats, 0);
+}
+
+/// The fee term stays per slice with its own floor. Two slices, `F_net = 3`,
+/// `t = 2`: `floor(3/2) + floor(3/2) = 2`, not the merged `floor(6/4) = 1`.
+#[test]
+fn fee_term_is_floored_per_slice() {
+    let mut s1 = Slice::new(1, 800_000, [1; 32], 0, 1, 1);
+    s1.push(share(1, 1, 1, 0));
+    s1.seal();
+    let mut s2 = Slice::new(2, 800_000, [1; 32], 0, 1, 1);
+    s2.push(share(1, 1, 1, 1));
+    s2.seal();
+    let window = Window {
+        slices: vec![s2.agg(), s1.agg()],
+        t: 2,
+        d_win: 2,
+        high_water: BTreeMap::new(),
+    };
+    let raw = raw_payouts(&window, 0, 3, 0).unwrap();
+    assert_eq!(raw.raw.get(&[1; 32]), Some(&2));
+    assert_eq!(raw.pool_sats, 1);
+}
+
+/// `DF_S = 0` (a window whose slices declared no fees) cannot attribute the
+/// found block's fees. The spec formula divides by `DF_S`, so the term is zero
+/// and the sats stay in the pool output rather than panicking.
+#[test]
+fn zero_slice_fees_leave_the_fee_term_to_the_pool() {
+    let mut s = Slice::new(1, 800_000, [1; 32], 0, 1, 0);
+    s.push(share(1, 100, 0, 0));
+    s.seal();
+    let window = Window {
+        slices: vec![s.agg()],
+        t: 1,
+        d_win: 100,
+        high_water: BTreeMap::new(),
+    };
+    let raw = raw_payouts(&window, 1_000, 500, 0).unwrap();
+    assert_eq!(raw.raw.get(&[1; 32]), Some(&1_000));
+    assert_eq!(raw.pool_sats, 500);
+}
+
 #[test]
 fn pool_template_collapse_equals_plain_pplns() {
     // One slice, constant fees: the fee term is a difficulty-weighted split.
@@ -69,16 +170,99 @@ fn pool_template_collapse_equals_plain_pplns() {
     assert_eq!(raw.raw.get(&[2; 32]), Some(&b));
 }
 
-fn cfg(budget: u32, slots: usize) -> TierConfig {
-    TierConfig {
-        fee_bps: 100,
-        dust_limit_sats: 330,
-        coinbase_threshold_sats: 330,
-        max_payout_slots: slots,
-        budget_wu: budget,
-        overhead_wu: 0,
+#[test]
+fn empty_window_and_bad_fee_bps_are_rejected() {
+    let window = Window {
+        slices: Vec::new(),
+        t: 0,
+        d_win: 0,
+        high_water: BTreeMap::new(),
+    };
+    assert_eq!(raw_payouts(&window, 1, 0, 0), Err(Error::EmptyWindow));
+    let (window, r, f) = worked_window();
+    assert_eq!(raw_payouts(&window, r, f, 10_001), Err(Error::FeeBps));
+}
+
+// ---------------------------------------------------------------------------
+// Independent plain-PPLNS oracle (SPEC §8.2, §4.4 pool-template collapse)
+// ---------------------------------------------------------------------------
+
+/// A window description: per slice, `(job_fees, [(sp_id, d)])`. Pool-template
+/// mode is modelled by one constant `job_fees` per slice (`delta = 0`).
+#[derive(Clone, Debug)]
+struct WindowSpec {
+    slices: Vec<(u64, Vec<(u8, u64)>)>,
+}
+
+fn build_window(spec: &WindowSpec) -> Window {
+    let mut slices = Vec::new();
+    let mut d_win = 0u128;
+    let mut idx = 0u32;
+    for (i, (fees, entries)) in spec.slices.iter().enumerate() {
+        let mut slice = Slice::new(i as u64 + 1, 800_000, [1; 32], 0, 1, *fees);
+        for (id, d) in entries {
+            slice.push(share(*id, *d, *fees, idx));
+            idx = idx.saturating_add(1);
+        }
+        slice.seal();
+        d_win = d_win.saturating_add(slice.difficulty);
+        slices.push(slice.agg());
+    }
+    Window {
+        t: slices.len(),
+        slices,
+        d_win,
+        high_water: BTreeMap::new(),
     }
 }
+
+/// Independent implementation of SPEC §4.4 for a pool-template window, written
+/// from the spec text without sharing `raw_payouts`'s code or helpers: it
+/// groups per identity outside-in, recomputes `D_win` from the slices, and
+/// applies exactly the spec's two floor positions (once per identity for the
+/// subsidy, once per slice for the fee).
+fn plain_pplns_oracle(
+    window: &Window,
+    subsidy: u64,
+    fees: u64,
+    fee_bps: u16,
+) -> BTreeMap<SpId, u64> {
+    let net = |v: u64| (v as u128) - (v as u128) * (fee_bps as u128) / 10_000;
+    let r_net = net(subsidy);
+    let f_net = net(fees);
+    let d_win: u128 = window.slices.iter().map(|s| s.difficulty).sum();
+    let t = window.slices.len() as u128;
+
+    let mut ids: BTreeSet<SpId> = BTreeSet::new();
+    for s in &window.slices {
+        ids.extend(s.per_id.keys().copied());
+    }
+
+    let mut out = BTreeMap::new();
+    for id in ids {
+        let d_total: u128 = window
+            .slices
+            .iter()
+            .filter_map(|s| s.per_id.get(&id).map(|(d, _)| *d))
+            .sum();
+        // One floor over the whole window.
+        let subsidy_term = r_net * d_total / d_win;
+        // One floor per (identity, slice); with delta = 0 the constant fee
+        // cancels out of `d*f / DF_S`, so the score is `d / D_S`.
+        let mut fee_term = 0u128;
+        for s in &window.slices {
+            if let Some((d, _)) = s.per_id.get(&id) {
+                fee_term += f_net * d / (t * s.difficulty);
+            }
+        }
+        out.insert(id, u64::try_from(subsidy_term + fee_term).unwrap());
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Tier routing
+// ---------------------------------------------------------------------------
 
 #[test]
 fn tiers_are_disjoint_and_conservation_holds() {
@@ -130,6 +314,270 @@ fn tiers_are_disjoint_and_conservation_holds() {
     sorted.sort();
     sorted.dedup();
     assert_eq!(sorted.len(), ids.len());
+}
+
+/// SPEC §4.6: `owed(id) = raw(id) + pending(id)` for every id that has either.
+/// A prior pending balance with no shares in the current window MUST still be
+/// routed; the pre-fix code only looked at `raw.raw` and stranded it.
+#[test]
+fn pending_only_identity_is_routed_not_stranded() {
+    let raw = RawPayouts {
+        raw: BTreeMap::from([([1; 32], 1_000)]),
+        pool_sats: 0,
+        r_net: 1_000,
+        f_net: 0,
+    };
+    let pending = BTreeMap::from([
+        ([2; 32], 5_000), // no shares this window, clears C
+        ([3; 32], 100),   // registered, below C
+        ([4; 32], 900),   // above C, trimmed by the budget
+    ]);
+    let ark = BTreeMap::from([(
+        [3; 32],
+        ArkCapability {
+            registered: true,
+            dest_known: true,
+        },
+    )]);
+    let r = route_tiers(&raw, &pending, &ark, &cfg(172 * 2, 2), 6_100).unwrap();
+
+    assert_eq!(r.kept, vec![([2; 32], 5_000), ([1; 32], 1_000)]);
+    assert_eq!(r.pending, vec![([4; 32], 900)]);
+    assert_eq!(r.ark_due, vec![([3; 32], 100)]);
+    assert!(r.forfeited.is_empty());
+    assert_eq!(r.pay_p, 6_100 - 6_000);
+
+    // Ledger deltas: a kept id clears its prior balance (the coinbase pays it),
+    // a pending id carries the whole owed forward, and an Ark id moves its
+    // balance out of pending into `ark_due`.
+    assert_eq!(r.pending_deltas.get(&[2; 32]), Some(&-5_000));
+    assert_eq!(r.pending_deltas.get(&[1; 32]), Some(&0));
+    assert_eq!(r.pending_deltas.get(&[3; 32]), Some(&-100));
+    assert_eq!(r.pending_deltas.get(&[4; 32]), Some(&0));
+}
+
+/// A pending-only identity below `C` with no Ark registration keeps its
+/// balance. `pending` is owed by the pool (trimming, failed sends, an
+/// unpropagated registration) and SPEC §11.1 says it is never forfeited.
+#[test]
+fn pending_only_unregistered_below_threshold_is_retained() {
+    let raw = empty_raw();
+    let pending = BTreeMap::from([([7; 32], 100)]);
+    let r = route_tiers(&raw, &pending, &BTreeMap::new(), &cfg(1_000, 10), 0).unwrap();
+    assert!(r.forfeited.is_empty());
+    assert_eq!(r.pending, vec![([7; 32], 100)]);
+    assert_eq!(r.pending_deltas.get(&[7; 32]), Some(&0));
+    assert!(r.kept.is_empty() && r.ark_due.is_empty());
+    assert_eq!(r.pay_p, 0);
+    assert_eq!(apply(&r, &pending).get(&[7; 32]).copied(), Some(100));
+}
+
+/// Mixed case: only this block's 40 sats are forfeited; the prior 60 stays
+/// owed. The distribution carries one entry per `sp_id`, so the retained
+/// balance rides `pending_deltas` instead of a second `pending` entry.
+#[test]
+fn forfeit_takes_only_the_current_block_raw_portion() {
+    let raw = RawPayouts {
+        raw: BTreeMap::from([([1; 32], 40)]),
+        pool_sats: 0,
+        r_net: 40,
+        f_net: 0,
+    };
+    let pending = BTreeMap::from([([1; 32], 60)]);
+    let r = route_tiers(&raw, &pending, &BTreeMap::new(), &cfg(10_000, 10), 40).unwrap();
+    assert_eq!(r.forfeited, vec![([1; 32], 40)], "raw only, never 100");
+    assert!(r.pending.is_empty() && r.kept.is_empty() && r.ark_due.is_empty());
+    assert_eq!(r.pending_deltas.get(&[1; 32]), Some(&0));
+    assert_eq!(apply(&r, &pending).get(&[1; 32]).copied(), Some(60));
+    assert_eq!(r.pay_p, 40);
+}
+
+/// Registered cases keep the §11.1 behaviour: the whole owed is routed, and
+/// the prior balance moves out of the pending ledger.
+#[test]
+fn registered_below_threshold_cases_are_unchanged() {
+    let raw = RawPayouts {
+        raw: BTreeMap::from([([1; 32], 40), ([2; 32], 40)]),
+        pool_sats: 0,
+        r_net: 80,
+        f_net: 0,
+    };
+    let pending = BTreeMap::from([([1; 32], 60), ([2; 32], 60), ([3; 32], 70)]);
+    let ark = BTreeMap::from([
+        (
+            [1; 32],
+            ArkCapability {
+                registered: true,
+                dest_known: true,
+            },
+        ),
+        (
+            [2; 32],
+            ArkCapability {
+                registered: true,
+                dest_known: false,
+            },
+        ),
+        (
+            [3; 32],
+            ArkCapability {
+                registered: true,
+                dest_known: true,
+            },
+        ),
+    ]);
+    let r = route_tiers(&raw, &pending, &ark, &cfg(10_000, 10), 80).unwrap();
+    // Known destination: the whole owed becomes an Ark send due.
+    assert_eq!(r.ark_due, vec![([1; 32], 100), ([3; 32], 70)]);
+    assert_eq!(r.pending_deltas.get(&[1; 32]), Some(&-60));
+    assert_eq!(r.pending_deltas.get(&[3; 32]), Some(&-70));
+    // Committed registration without a propagated destination: pending.
+    assert_eq!(r.pending, vec![([2; 32], 100)]);
+    assert_eq!(r.pending_deltas.get(&[2; 32]), Some(&40));
+    assert!(r.forfeited.is_empty() && r.kept.is_empty());
+    let after = apply(&r, &pending);
+    assert_eq!(after.get(&[1; 32]).copied(), None);
+    assert_eq!(after.get(&[2; 32]).copied(), Some(100));
+    assert_eq!(after.get(&[3; 32]).copied(), None);
+}
+
+/// SPEC §4.6(a): the coinbase can never exceed the block reward. With more
+/// owed than `T`, the largest balance is paid what fits and the rest waits.
+#[test]
+fn coinbase_is_capped_at_total_and_the_excess_is_pending() {
+    let raw = RawPayouts {
+        raw: BTreeMap::from([([1; 32], 100), ([2; 32], 100)]),
+        pool_sats: 0,
+        r_net: 200,
+        f_net: 0,
+    };
+    let pending = BTreeMap::from([([1; 32], 150)]);
+    let mut tier = cfg(10_000, 8);
+    tier.dust_limit_sats = 1;
+    tier.coinbase_threshold_sats = 1;
+    let r = route_tiers(&raw, &pending, &BTreeMap::new(), &tier, 200).unwrap();
+
+    // A owes 250 > T: pay T against it, one output, no negative balance.
+    assert_eq!(r.kept, vec![([1; 32], 200)]);
+    let paid: u64 = r.kept.iter().map(|(_, v)| *v).sum();
+    assert_eq!(paid + r.pay_p, 200);
+    assert_eq!(r.pay_p, 0);
+    // The excess waits for the next coinbase: A keeps 50, B keeps its 100.
+    let after = apply(&r, &pending);
+    assert_eq!(after.get(&[1; 32]).copied(), Some(50));
+    assert_eq!(after.get(&[2; 32]).copied(), Some(100));
+    assert_eq!(r.pending, vec![([2; 32], 100)]);
+    assert_eq!(r.pending_deltas.get(&[1; 32]), Some(&-100));
+    assert_eq!(r.pending_deltas.get(&[2; 32]), Some(&100));
+    // One rail per id: A rides the kept rail, B the pending rail.
+    assert!(r.forfeited.is_empty() && r.ark_due.is_empty());
+}
+
+/// Once one balance would overflow the coinbase, the walk stops: smaller
+/// balances do not get a partial coinbase, they wait (deterministic prefix).
+#[test]
+fn coinbase_cap_stops_the_walk_deterministically() {
+    let raw = RawPayouts {
+        raw: BTreeMap::from([([1; 32], 150), ([2; 32], 60), ([3; 32], 40)]),
+        pool_sats: 0,
+        r_net: 250,
+        f_net: 0,
+    };
+    let mut tier = cfg(10_000, 8);
+    tier.dust_limit_sats = 1;
+    tier.coinbase_threshold_sats = 1;
+    let r = route_tiers(&raw, &BTreeMap::new(), &BTreeMap::new(), &tier, 200).unwrap();
+    // 150 fits; the next 60 would exceed the remaining 50, so the walk stops
+    // even though the 40 would still fit.
+    assert_eq!(r.kept, vec![([1; 32], 150)]);
+    assert_eq!(r.pay_p, 50);
+    assert_eq!(r.pending, vec![([2; 32], 60), ([3; 32], 40)]);
+    // Re-running is byte-identical (deterministic order).
+    assert_eq!(
+        route_tiers(&raw, &BTreeMap::new(), &BTreeMap::new(), &tier, 200).unwrap(),
+        r
+    );
+}
+
+/// A partial coinbase below `C` would be dust-unsafe, so nothing is paid.
+#[test]
+fn cap_never_emits_a_sub_threshold_output() {
+    let raw = RawPayouts {
+        raw: BTreeMap::from([([1; 32], 100)]),
+        pool_sats: 0,
+        r_net: 100,
+        f_net: 0,
+    };
+    let pending = BTreeMap::from([([1; 32], 500)]);
+    // T = 200 < C = 330: the whole balance waits, pay_p keeps the block.
+    let r = route_tiers(&raw, &pending, &BTreeMap::new(), &cfg(10_000, 8), 200).unwrap();
+    assert!(r.kept.is_empty());
+    assert_eq!(r.pay_p, 200);
+    assert_eq!(r.pending, vec![([1; 32], 600)]);
+    assert_eq!(apply(&r, &pending).get(&[1; 32]).copied(), Some(600));
+}
+
+/// The cap reserves the pool fee: with one balance far above `T`, the coinbase
+/// pays `T − pool_sats`, never the whole `T`, so the fee cannot be handed to a
+/// miner by the over-`T` path.
+#[test]
+fn cap_reserves_the_pool_fee() {
+    // r_net = 990 of a 1 000 block at fee_bps = 100: pool_sats = 10.
+    let raw = RawPayouts {
+        raw: BTreeMap::from([([1; 32], 990)]),
+        pool_sats: 10,
+        r_net: 990,
+        f_net: 0,
+    };
+    let pending = BTreeMap::from([([1; 32], 500)]);
+    let mut tier = cfg(10_000, 8);
+    tier.dust_limit_sats = 1;
+    tier.coinbase_threshold_sats = 1;
+    let r = route_tiers(&raw, &pending, &BTreeMap::new(), &tier, 1_000).unwrap();
+
+    // owed = 1 490 > T, but the payable capacity is T - pool_sats = 990.
+    assert_eq!(r.kept, vec![([1; 32], 990)]);
+    assert_eq!(r.owed.get(&[1; 32]), Some(&1_490));
+    assert_eq!(r.pay_p, 10);
+    assert!(r.pay_p >= raw.pool_sats);
+    let paid: u64 = r.kept.iter().map(|(_, v)| *v).sum();
+    assert_eq!(paid + r.pay_p, 1_000);
+    // 1 490 - 990 = 500, exactly the prior balance: nothing lost, nothing new.
+    assert_eq!(apply(&r, &pending).get(&[1; 32]).copied(), Some(500));
+    assert_eq!(r.pending_deltas.get(&[1; 32]), Some(&0));
+}
+
+/// When the fee consumes the whole block there is no payable capacity.
+#[test]
+fn cap_pays_nothing_when_the_fee_covers_the_block() {
+    let raw = RawPayouts {
+        raw: BTreeMap::new(),
+        pool_sats: 500,
+        r_net: 500,
+        f_net: 0,
+    };
+    let pending = BTreeMap::from([([1; 32], 400)]);
+    let r = route_tiers(&raw, &pending, &BTreeMap::new(), &cfg(10_000, 8), 500).unwrap();
+    assert!(r.kept.is_empty());
+    assert_eq!(r.pay_p, 500);
+    assert!(r.pay_p >= raw.pool_sats);
+    assert_eq!(r.pending, vec![([1; 32], 400)]);
+    assert_eq!(apply(&r, &pending).get(&[1; 32]).copied(), Some(400));
+}
+
+/// A zero balance is on no rail at all (no 0-sat entries).
+#[test]
+fn zero_balances_are_dropped() {
+    let raw = RawPayouts {
+        raw: BTreeMap::from([([1; 32], 0)]),
+        pool_sats: 0,
+        r_net: 0,
+        f_net: 0,
+    };
+    let pending = BTreeMap::from([([2; 32], 0)]);
+    let r = route_tiers(&raw, &pending, &BTreeMap::new(), &cfg(1_000, 10), 0).unwrap();
+    assert!(r.kept.is_empty() && r.pending.is_empty() && r.ark_due.is_empty());
+    assert!(r.forfeited.is_empty());
 }
 
 #[test]
@@ -200,6 +648,10 @@ fn autoscaler_debounces_and_clamps() {
     assert_eq!(down, 100_000);
 }
 
+// ---------------------------------------------------------------------------
+// JD claims and weights (O11, SPEC §4.7)
+// ---------------------------------------------------------------------------
+
 #[test]
 fn claim_formula_is_revenue_scaled() {
     // T_actual != T: the JDC paid at its own revenue, the pool books the rest.
@@ -215,17 +667,173 @@ fn claim_formula_is_revenue_scaled() {
     );
 }
 
+/// `W` is the whole distribution weight (`Σ weight_id + weight_P`) and `F` is
+/// the fixed-output total, not the pool weight.
 #[test]
-fn distribution_builds_p2tr_outputs_and_entries() {
+fn claim_jd_scales_by_total_weight_and_subtracts_fixed_outputs() {
+    // A two-way split: the miner's weight 400, weight_P 600, W = 1_000.
+    assert_eq!(claim_jd(400, 1_000, 0, 1_000).unwrap(), 400);
+    // T_actual = 800: the claim is revenue-scaled to 320.
+    assert_eq!(claim_jd(400, 800, 0, 1_000).unwrap(), 320);
+    // Leaving weight_P out of W would over-credit the miner to 800.
+    assert_eq!(claim_jd(400, 800, 0, 400).unwrap(), 800);
+    // F is subtracted from T_actual before scaling.
+    assert_eq!(claim_jd(400, 1_000, 100, 1_000).unwrap(), 360);
+    // Claim is monotone in T_actual (the JDC may also beat the pool's
+    // template revenue, in which case claim exceeds owed by the same factor).
+    let mut last = 0u64;
+    for t_actual in [0u64, 1, 100, 500, 700, 1_000, 10_000] {
+        let claim = claim_jd(700, t_actual, 0, 1_000).unwrap();
+        assert!(claim >= last, "claim must not shrink with revenue");
+        last = claim;
+    }
+    assert_eq!(claim_jd(700, 1_000, 0, 1_000).unwrap(), 700);
+    assert_eq!(claim_jd(700, 10_000, 0, 1_000).unwrap(), 7_000);
+    // Error paths: zero total weight, F > T_actual.
+    assert_eq!(claim_jd(1, 1, 0, 0), Err(Error::Overflow));
+    assert_eq!(claim_jd(1, 100, 101, 100), Err(Error::Overflow));
+}
+
+/// Settlement reads the mined coinbase: dust-pruned, underpaid, exact and
+/// over-paid ids all keep the ledger unsigned.
+#[test]
+fn settle_jd_handles_dust_pruned_underpaid_and_overpaid_ids() {
+    // Dust-pruned by the JDC: nothing on chain, the whole claim is pending.
+    assert_eq!(settle_jd(1_000, 0, 900, 0, 1_000).unwrap(), (900, 900));
+    // Underpaid: the shortfall is pending.
+    assert_eq!(settle_jd(1_000, 700, 900, 0, 1_000).unwrap(), (900, 200));
+    // Exact.
+    assert_eq!(settle_jd(1_000, 900, 900, 0, 1_000).unwrap(), (900, 0));
+    // paid > claim: zero pending, never a debit.
+    assert_eq!(settle_jd(1_000, 950, 900, 0, 1_000).unwrap(), (900, 0));
+    // pending'(id) is bounded by claim(id) for every paid value.
+    for paid in [0u64, 1, 899, 900, 901, 5_000] {
+        let (claim, pending) = settle_jd(1_000, paid, 900, 0, 1_000).unwrap();
+        assert!(pending <= claim);
+    }
+}
+
+#[test]
+fn build_weights_matches_the_routing() {
+    let raw = RawPayouts {
+        raw: BTreeMap::from([([1; 32], 1_000), ([4; 32], 900)]),
+        pool_sats: 50,
+        r_net: 2_000,
+        f_net: 0,
+    };
+    let pending = BTreeMap::from([([2; 32], 200), ([9; 32], 50)]);
+    let ark = BTreeMap::from([(
+        [2; 32],
+        ArkCapability {
+            registered: true,
+            dest_known: true,
+        },
+    )]);
+    let routing = route_tiers(&raw, &pending, &ark, &cfg(172, 1), 2_500).unwrap();
+    // kept: id 1. Ark: id 2. Trimmed: id 4. Pending-only: id 9 (never forfeited).
+    assert_eq!(routing.kept, vec![([1; 32], 1_000)]);
+    let weights = build_weights(&routing, 60);
+    assert_eq!(weights.weights, vec![([1; 32], 1_000)]);
+    assert_eq!(weights.pool_weight, 60 + 200 + 900 + 50);
+    // Conservation: Σ weights + weight_P = fee weight + Σ owed.
+    let not_kept: u64 = routing
+        .pending
+        .iter()
+        .chain(routing.ark_due.iter())
+        .chain(routing.forfeited.iter())
+        .map(|(_, v)| *v)
+        .sum();
+    assert_eq!(
+        weights.weights.iter().map(|(_, v)| *v).sum::<u64>() + weights.pool_weight,
+        60 + 1_000 + not_kept
+    );
+    // Entries mirror the rails: Coinbase, Pending (sorted by sp_id), Ark.
+    let rails: Vec<Rail> = weights.entries.iter().map(|e| e.rail).collect();
+    assert_eq!(
+        rails,
+        vec![Rail::Coinbase, Rail::Pending, Rail::Pending, Rail::Ark]
+    );
+    // Weights are the routing's owed for the kept ids, sorted by sp_id.
+    assert_eq!(weights.weights, sorted_by_id(&routing.kept));
+}
+
+/// JD and pool-template mode share everything but the final scaling: a
+/// pool-template distribution must yield the same `owed` as the weights.
+#[test]
+fn distribution_and_weights_agree_on_kept_ids() {
+    let raw = RawPayouts {
+        raw: BTreeMap::from([([1; 32], 1_000), ([2; 32], 900), ([3; 32], 100)]),
+        pool_sats: 10,
+        r_net: 2_000,
+        f_net: 0,
+    };
+    let pending = BTreeMap::from([([2; 32], 100)]);
+    let routing = route_tiers(&raw, &pending, &BTreeMap::new(), &cfg(172 * 2, 2), 2_100).unwrap();
+    assert_eq!(routing.kept, vec![([1; 32], 1_000), ([2; 32], 1_000)]);
+    let weights = build_weights(&routing, 25);
+    assert_eq!(weights.weights, routing.kept);
+    // id 3 (100) is below C and unregistered -> forfeited -> weight_P.
+    assert_eq!(weights.pool_weight, 25 + 100);
+}
+
+/// JD weights are not capped by the pool-template `T`: a partially paid id
+/// keeps its full `owed` weight and O11 scales it at settlement.
+#[test]
+fn jd_weights_use_full_owed_not_the_capped_coinbase() {
+    let raw = RawPayouts {
+        raw: BTreeMap::from([([1; 32], 100), ([2; 32], 100)]),
+        pool_sats: 0,
+        r_net: 200,
+        f_net: 0,
+    };
+    let pending = BTreeMap::from([([1; 32], 150)]);
+    let mut tier = cfg(10_000, 8);
+    tier.dust_limit_sats = 1;
+    tier.coinbase_threshold_sats = 1;
+    let routing = route_tiers(&raw, &pending, &BTreeMap::new(), &tier, 200).unwrap();
+
+    // The pool-template coinbase can only pay A 200 of its 250 owed.
+    assert_eq!(routing.kept, vec![([1; 32], 200)]);
+    assert_eq!(routing.owed.get(&[1; 32]), Some(&250));
+    assert_eq!(routing.owed.get(&[2; 32]), Some(&100));
+
+    // The JD weight is the full 250; B's 100 is withheld weight, plus the fee.
+    let weights = build_weights(&routing, 5);
+    assert_eq!(weights.weights, vec![([1; 32], 250)]);
+    assert_eq!(weights.pool_weight, 5 + 100);
+    let w: u64 = weights.weights.iter().map(|(_, v)| *v).sum::<u64>() + weights.pool_weight;
+    assert_eq!(w, 355);
+    // At the JD template revenue the claim is the full weight.
+    assert_eq!(claim_jd(weights.weights[0].1, w, 0, w).unwrap(), 250);
+}
+
+// ---------------------------------------------------------------------------
+// Distribution builder
+// ---------------------------------------------------------------------------
+
+fn key_pair(scan_byte: u8, spend_byte: u8) -> (MinerKeys, SpId) {
     let secp = bitcoin::secp256k1::Secp256k1::new();
-    let b_scan_sk = bitcoin::secp256k1::SecretKey::from_slice(&[0x11; 32]).unwrap();
-    let b_spend_sk = bitcoin::secp256k1::SecretKey::from_slice(&[0x12; 32]).unwrap();
+    let b_scan_sk = bitcoin::secp256k1::SecretKey::from_slice(&[scan_byte; 32]).unwrap();
+    let b_spend_sk = bitcoin::secp256k1::SecretKey::from_slice(&[spend_byte; 32]).unwrap();
     let b_scan = bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &b_scan_sk);
     let b_spend = bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &b_spend_sk);
     let id = spc_crypto::sp_id(&b_scan, &b_spend);
+    (
+        MinerKeys {
+            sp_id: id,
+            b_scan,
+            b_spend,
+        },
+        id,
+    )
+}
 
+#[test]
+fn distribution_builds_p2tr_outputs_and_entries() {
+    let (keys, id) = key_pair(0x11, 0x12);
     let send = SendKey::generate(800_000).unwrap();
     let routing = Routing {
+        owed: BTreeMap::from([(id, 1_000)]),
         kept: vec![(id, 1_000)],
         pending: vec![],
         ark_due: vec![],
@@ -235,14 +843,7 @@ fn distribution_builds_p2tr_outputs_and_entries() {
         total: 1_100,
         pool_fee: 100,
     };
-    let miners = BTreeMap::from([(
-        id,
-        MinerKeys {
-            sp_id: id,
-            b_scan,
-            b_spend,
-        },
-    )]);
+    let miners = BTreeMap::from([(id, keys)]);
     let d = build_distribution(
         800_000,
         &send,
@@ -263,6 +864,78 @@ fn distribution_builds_p2tr_outputs_and_entries() {
     assert_eq!(
         d.fingerprint,
         super::fingerprint(800_000, send.x_only(), &d.outputs)
+    );
+}
+
+/// SPEC §4.7: `outputs = [pool] ++ [P2TR(P_id, pay(id)) sorted by sp_id]`.
+/// The trim order (owed descending) must not leak into the coinbase order.
+#[test]
+fn distribution_outputs_are_sorted_by_sp_id() {
+    let (k1, id1) = key_pair(0x11, 0x12);
+    let (k2, id2) = key_pair(0x21, 0x22);
+    let (k3, id3) = key_pair(0x31, 0x32);
+    let miners = BTreeMap::from([(id1, k1), (id2, k2), (id3, k3)]);
+    let send = SendKey::generate(800_000).unwrap();
+    let mut ids = [id1, id2, id3];
+    ids.sort();
+    // Trim order: descending owed, so the sp_id order is not the payout order.
+    let routing = Routing {
+        owed: BTreeMap::from([(ids[2], 330), (ids[1], 240), (ids[0], 150)]),
+        kept: vec![(ids[2], 300), (ids[1], 200), (ids[0], 100)],
+        pending: vec![(ids[0], 50)],
+        ark_due: vec![(ids[1], 40)],
+        forfeited: vec![(ids[2], 30)],
+        pending_deltas: BTreeMap::new(),
+        pay_p: 7,
+        total: 727,
+        pool_fee: 7,
+    };
+    let d = build_distribution(
+        800_000,
+        &send,
+        &routing,
+        &miners,
+        &p2tr_script(&[9; 32]),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    // Pool output first, then exactly one output per kept id.
+    assert_eq!(d.outputs.len(), 4);
+    assert_eq!(d.pay_p, 7);
+    for (i, id) in ids.iter().enumerate() {
+        let entry = &d.entries[i];
+        assert_eq!(entry.rail, Rail::Coinbase);
+        assert_eq!(entry.sp_id, *id);
+        let p_x = entry.p_x.expect("coinbase entry carries P_id");
+        // The output at index i + 1 belongs to ids[i].
+        let expected = {
+            let keys = &miners[id];
+            let ecdh = send.derive_pool_side(&keys.b_scan).unwrap();
+            let tweaks = tier_tweaks(&ecdh, 0).unwrap();
+            spc_output_pubkey(&keys.b_spend, &tweaks.t_onchain)
+                .unwrap()
+                .x_only_public_key()
+                .0
+                .serialize()
+        };
+        assert_eq!(p_x, expected);
+        assert_eq!(
+            d.outputs[i + 1],
+            (p2tr_script(&expected), d.entries[i].sats)
+        );
+    }
+    // Non-kept rails ride along in entries only, sorted by sp_id, no outputs.
+    let rest: Vec<(Rail, SpId)> = d.entries[ids.len()..]
+        .iter()
+        .map(|e| (e.rail, e.sp_id))
+        .collect();
+    assert_eq!(
+        rest,
+        vec![
+            (Rail::Pending, ids[0]),
+            (Rail::Ark, ids[1]),
+            (Rail::Forfeit, ids[2]),
+        ]
     );
 }
 
@@ -292,38 +965,482 @@ fn merkle_root_is_deterministic_and_empty_is_zero() {
     assert_eq!(merkle_root(&l), merkle_root(&l));
 }
 
+#[test]
+fn select_window_skips_the_finding_slice_and_crosses_the_target() {
+    let aggs: Vec<SliceAgg> = (0..5u64)
+        .map(|i| SliceAgg {
+            slice_id: i,
+            height: 1,
+            prev_hash: [0u8; 32],
+            front_id: 0,
+            difficulty: 100,
+            diff_fee_sum: 0,
+            per_id: BTreeMap::new(),
+            root: [0u8; 32],
+        })
+        .collect();
+    // Whole slices newest-first until the target is crossed.
+    let w = select_window(&aggs, 2, 250, BTreeMap::new());
+    assert_eq!(w.t, 3);
+    assert_eq!(w.d_win, 300);
+    assert!(!w.slices.iter().any(|s| s.slice_id == 2));
+    // A target above the whole chain still excludes only the finding slice.
+    let w = select_window(&aggs, 4, u128::MAX, BTreeMap::new());
+    assert_eq!(w.t, 4);
+    assert!(!w.slices.iter().any(|s| s.slice_id == 4));
+}
+
+// ---------------------------------------------------------------------------
+// Property tests (SPEC §8.2)
+// ---------------------------------------------------------------------------
+
+/// Random pool-template window: 1-6 slices, 1-8 identities, one constant
+/// `job_fees` per slice (`delta = 0`).
+fn arb_window_spec() -> impl Strategy<Value = WindowSpec> {
+    (1usize..=6, 1usize..=8)
+        .prop_flat_map(|(n_slices, n_ids)| {
+            let slice = (
+                1u64..=10_000_000u64, // f_s: constant within the slice
+                proptest::collection::vec((0u8..=1u8, 1u64..=10_000u64), n_ids),
+            );
+            proptest::collection::vec(slice, n_slices).prop_map(|slices| WindowSpec {
+                slices: slices
+                    .into_iter()
+                    .map(|(fees, entries)| {
+                        let entries = entries
+                            .into_iter()
+                            .enumerate()
+                            .filter(|(_, (present, _))| *present == 1)
+                            .map(|(i, (_, d))| ((i + 1) as u8, d))
+                            .collect();
+                        (fees, entries)
+                    })
+                    .collect(),
+            })
+        })
+        .prop_filter("a window needs at least one share", |w| {
+            w.slices.iter().any(|(_, entries)| !entries.is_empty())
+        })
+}
+
+fn owed_of(raw: &RawPayouts, pending: &BTreeMap<SpId, u64>, id: SpId) -> u64 {
+    raw.raw
+        .get(&id)
+        .copied()
+        .unwrap_or(0)
+        .saturating_add(pending.get(&id).copied().unwrap_or(0))
+}
+
+fn rails(routing: &Routing) -> Vec<(&[(SpId, u64)], Rail)> {
+    vec![
+        (&routing.kept, Rail::Coinbase),
+        (&routing.pending, Rail::Pending),
+        (&routing.ark_due, Rail::Ark),
+        (&routing.forfeited, Rail::Forfeit),
+    ]
+}
+
 proptest! {
+    #![proptest_config(ProptestConfig { cases: 256, ..ProptestConfig::default() })]
+
+    /// SPEC §4.4 pool-template collapse: with `delta = 0` the result equals an
+    /// independent plain-PPLNS oracle to the sat, and within the spec's per-term
+    /// floors it is ordinary difficulty-weighted PPLNS.
     #[test]
-    fn conservation_and_tier_disjointness(
-        r in 1u64..100_000_000,
-        f in 0u64..10_000_000,
-        n in 1usize..20,
-        budget in 172u32..10_000,
+    fn pool_template_collapse_matches_independent_pplns_oracle(
+        spec in arb_window_spec(),
+        subsidy in 1u64..=100_000_000_000,
+        fees in 0u64..=1_000_000_000,
+        fee_bps in 0u16..=10_000,
     ) {
-        let mut raw = BTreeMap::new();
-        for i in 0..n {
-            raw.insert([i as u8; 32], (i as u64 + 1) * 1_000);
+        let window = build_window(&spec);
+        let raw = raw_payouts(&window, subsidy, fees, fee_bps).unwrap();
+        let oracle = plain_pplns_oracle(&window, subsidy, fees, fee_bps);
+        prop_assert_eq!(&raw.raw, &oracle);
+
+        // Floors only ever return sats to the pool output, and the pool output
+        // is exactly the remainder of the block reward.
+        let net = |v: u64| (v as u128) - (v as u128) * (fee_bps as u128) / 10_000;
+        let combined = net(subsidy) + net(fees);
+        let distributed = raw
+            .raw
+            .values()
+            .fold(0u128, |acc, v| acc + *v as u128);
+        prop_assert!(distributed <= combined);
+        prop_assert_eq!(
+            raw.pool_sats as u128,
+            subsidy as u128 + fees as u128 - distributed
+        );
+
+        // A single-slice window is ordinary difficulty-weighted PPLNS of the
+        // whole reward, to within the one sat its two terms can floor away.
+        if window.slices.len() == 1 {
+            for (id, v) in &raw.raw {
+                let d: u128 = window.slices[0]
+                    .per_id
+                    .get(id)
+                    .map(|(d, _)| *d)
+                    .unwrap_or(0);
+                let pure = combined * d / window.d_win;
+                prop_assert!(*v as u128 <= pure, "{} > plain PPLNS {}", v, pure);
+                prop_assert!(*v as u128 + 1 >= pure, "{} floors >1 sat below {}", v, pure);
+            }
         }
-        let raw = RawPayouts { raw, pool_sats: 0, r_net: r, f_net: f };
-        let total = r + f;
-        let c = TierConfig {
+    }
+
+    /// SPEC §4.6 (a)-(e), trim bounds, rail disjointness and ordering, run
+    /// through both `raw_payouts` and `route_tiers`.
+    #[test]
+    fn routing_invariants_hold(
+        spec in arb_window_spec(),
+        subsidy in 1_000_000u64..=1_000_000_000,
+        fees in 0u64..=10_000_000,
+        fee_bps in 100u16..=500,
+        budget_wu in 0u32..=4_000,
+        overhead_wu in 0u32..=1_000,
+        slots in 0usize..=8,
+        threshold in 330u64..=5_000,
+        pending_bits in proptest::collection::vec((0u8..=1u8, 0u64..=50u64), 8),
+        ark_bits in proptest::collection::vec(0u8..=2u8, 8),
+    ) {
+        let window = build_window(&spec);
+        let raw = raw_payouts(&window, subsidy, fees, fee_bps).unwrap();
+        let total = subsidy + fees;
+
+        let mut pending = BTreeMap::new();
+        for (i, (present, amount)) in pending_bits.iter().enumerate() {
+            if *present == 1 {
+                pending.insert([(i + 1) as u8; 32], *amount);
+            }
+        }
+        let mut ark = BTreeMap::new();
+        for (i, code) in ark_bits.iter().enumerate() {
+            let id = [(i + 1) as u8; 32];
+            match code {
+                1 => { ark.insert(id, ArkCapability { registered: true, dest_known: true }); }
+                2 => { ark.insert(id, ArkCapability { registered: true, dest_known: false }); }
+                _ => {}
+            }
+        }
+        let tier = TierConfig {
             fee_bps: 100,
             dust_limit_sats: 330,
-            coinbase_threshold_sats: 330,
-            max_payout_slots: 256,
-            budget_wu: budget,
-            overhead_wu: 0,
+            coinbase_threshold_sats: threshold,
+            max_payout_slots: slots,
+            budget_wu,
+            overhead_wu,
         };
-        let routing = route_tiers(&raw, &BTreeMap::new(), &BTreeMap::new(), &c, total).unwrap();
+        let routing = route_tiers(&raw, &pending, &ark, &tier, total).unwrap();
+
+        // (a) SPEC §4.6(a): the coinbase never exceeds the block reward.
         let paid: u64 = routing.kept.iter().map(|(_, v)| *v).sum();
+        prop_assert!(paid <= total);
         prop_assert_eq!(paid + routing.pay_p, total);
-        let mut ids = Vec::new();
-        for group in [&routing.kept, &routing.pending, &routing.ark_due, &routing.forfeited] {
-            for (id, _) in group { ids.push(*id); }
+
+        // (b) one output per (sp_id, H): `kept` is keyed by sp_id.
+        let kept_ids: BTreeSet<SpId> = routing.kept.iter().map(|(id, _)| *id).collect();
+        prop_assert_eq!(kept_ids.len(), routing.kept.len());
+
+        // (e) an id is on exactly one rail, and every id with a non-zero owed
+        // balance is routed exactly once.
+        let mut seen: BTreeSet<SpId> = BTreeSet::new();
+        for (group, _) in rails(&routing) {
+            for (id, _) in group {
+                prop_assert!(seen.insert(*id), "id on two rails");
+            }
         }
-        let mut sorted = ids.clone();
-        sorted.sort();
-        sorted.dedup();
-        prop_assert_eq!(sorted.len(), ids.len());
+        let mut expected: BTreeSet<SpId> = BTreeSet::new();
+        for id in raw.raw.keys().chain(pending.keys()) {
+            if owed_of(&raw, &pending, *id) > 0 {
+                expected.insert(*id);
+            }
+        }
+        prop_assert_eq!(&seen, &expected);
+        prop_assert_eq!(
+            routing.owed.keys().copied().collect::<BTreeSet<SpId>>(),
+            expected.clone(),
+            "`owed` covers every routed id"
+        );
+        for (id, amount) in &routing.owed {
+            prop_assert_eq!(*amount, owed_of(&raw, &pending, *id));
+        }
+
+        // Per-id partition: the rail amounts plus the new ledger balance equal
+        // `owed` exactly, and each rail carries what its rule says. This is
+        // what keeps an over-`T` balance from producing an invalid coinbase.
+        let applied = apply(&routing, &pending);
+        for id in &expected {
+            let owed = owed_of(&raw, &pending, *id);
+            let raw_part = raw.raw.get(id).copied().unwrap_or(0);
+            let old = pending.get(id).copied().unwrap_or(0);
+            let new_pending = applied.get(id).copied().unwrap_or(0);
+            let kept_sats = routing.kept.iter().find(|(k, _)| k == id).map(|(_, v)| *v);
+            let ark_sats = routing.ark_due.iter().find(|(k, _)| k == id).map(|(_, v)| *v);
+            let forfeit_sats = routing.forfeited.iter().find(|(k, _)| k == id).map(|(_, v)| *v);
+            let pending_sats = routing.pending.iter().find(|(k, _)| k == id).map(|(_, v)| *v);
+
+            if let Some(p) = pending_sats {
+                prop_assert_eq!(p, owed, "the pending rail carries the whole balance");
+                prop_assert_eq!(new_pending, owed);
+            }
+            if let Some(f) = forfeit_sats {
+                prop_assert_eq!(f, raw_part, "only this block's raw is forfeited");
+                prop_assert!(owed < threshold);
+                prop_assert_eq!(new_pending, old, "prior pending is never forfeited");
+            }
+            if let Some(a) = ark_sats {
+                prop_assert_eq!(a, owed);
+                prop_assert_eq!(new_pending, 0);
+            }
+            if let Some(p) = kept_sats {
+                prop_assert!(p >= threshold);
+                prop_assert!(p <= owed);
+                prop_assert_eq!(new_pending, owed - p, "the excess waits for the next coinbase");
+            }
+            prop_assert_eq!(
+                kept_sats.unwrap_or(0)
+                    + ark_sats.unwrap_or(0)
+                    + forfeit_sats.unwrap_or(0)
+                    + new_pending,
+                owed,
+                "rails + new pending must partition owed"
+            );
+            let delta = routing.pending_deltas.get(id).copied().unwrap_or(0);
+            prop_assert_eq!(new_pending as i128, old as i128 + delta as i128);
+        }
+
+        // The coinbase is a prefix of the owed order: once one balance does not
+        // fit, nothing smaller is paid (deterministic cap).
+        let mut order: Vec<SpId> = expected.iter().copied().collect();
+        order.sort_by(|a, b| {
+            owed_of(&raw, &pending, *b)
+                .cmp(&owed_of(&raw, &pending, *a))
+                .then_with(|| a.cmp(b))
+        });
+        let kept_order: Vec<SpId> = routing.kept.iter().map(|(id, _)| *id).collect();
+        prop_assert_eq!(kept_order.as_slice(), &order[..routing.kept.len()]);
+
+        // (c) Generalized ledger identity:
+        //   Σ held' + Σ forfeited − Σ pending_old = Σ raw − Σ kept paid
+        // where held' = pending' + ark_due'. With every kept id fully paid this
+        // is SPEC §4.6(c) verbatim; the extra `Σ kept paid` term is the capped
+        // coinbase's partial payment.
+        let held: i128 = applied.values().fold(0i128, |acc, v| acc + *v as i128)
+            + routing
+                .ark_due
+                .iter()
+                .fold(0i128, |acc, (_, v)| acc + *v as i128);
+        let forfeited: i128 = routing.forfeited.iter().fold(0i128, |acc, (_, v)| acc + *v as i128);
+        let pending_old: i128 = pending.values().fold(0i128, |acc, v| acc + *v as i128);
+        let lhs = held + forfeited - pending_old;
+        let rhs =
+            raw.raw.values().fold(0i128, |acc, v| acc + *v as i128) - paid as i128;
+        prop_assert_eq!(lhs, rhs);
+
+        // Ledger apply matches §4.6/§11.1 exactly, and re-running the routing is
+        // deterministic (d).
+        for (id, amount) in &routing.pending {
+            prop_assert_eq!(applied.get(id).copied().unwrap_or(0), *amount);
+        }
+        for (id, amount) in &routing.kept {
+            let owed = owed_of(&raw, &pending, *id);
+            prop_assert_eq!(applied.get(id).copied().unwrap_or(0), owed - amount);
+        }
+        for (id, _) in &routing.ark_due {
+            prop_assert_eq!(applied.get(id).copied().unwrap_or(0), 0);
+        }
+        for (id, _) in &routing.forfeited {
+            prop_assert_eq!(applied.get(id).copied().unwrap_or(0), pending.get(id).copied().unwrap_or(0));
+        }
+        prop_assert_eq!(
+            route_tiers(&raw, &pending, &ark, &tier, total).unwrap(),
+            routing.clone()
+        );
+
+        // Trim never exceeds the slot cap or the weight budget (§4.8).
+        prop_assert!(routing.kept.len() <= slots);
+        if !routing.kept.is_empty() {
+            let used = overhead_wu as u64 + 172 * routing.kept.len() as u64;
+            prop_assert!(used <= budget_wu as u64);
+            prop_assert!(overhead_wu <= budget_wu);
+        }
+
+        // Deterministic order: owed descending, ties broken by sp_id ascending.
+        for pair in routing.kept.windows(2) {
+            prop_assert!(
+                pair[0].1 > pair[1].1 || (pair[0].1 == pair[1].1 && pair[0].0 < pair[1].0)
+            );
+        }
+
+        // JD weights come from the full owed, never from the capped coinbase
+        // amounts (§4.7; O11 scales them at settlement).
+        let fee_weight = 7u64;
+        let weights = build_weights(&routing, fee_weight);
+        let expected_weights: Vec<(SpId, u64)> = sorted_by_id(&routing.kept)
+            .into_iter()
+            .map(|(id, _)| (id, routing.owed[&id]))
+            .collect();
+        prop_assert_eq!(&weights.weights, &expected_weights);
+        let sum_weights: u64 = weights.weights.iter().map(|(_, v)| *v).sum();
+        let all_owed: u64 = routing.owed.values().fold(0u64, |acc, v| acc + *v);
+        prop_assert_eq!(sum_weights + weights.pool_weight, fee_weight + all_owed);
+        prop_assert_eq!(
+            weights.pool_weight,
+            fee_weight + all_owed - sum_weights,
+            "weight_P is the fee plus every not-kept owed"
+        );
+
+        // O11 settlement keeps the ledger unsigned for every mined amount.
+        let w = sum_weights + weights.pool_weight;
+        for (id, owed) in &weights.weights {
+            for paid_actual in [0u64, *owed / 2, *owed, owed + 1] {
+                let (claim, pending_next) = settle_jd(*owed, paid_actual, total, 0, w).unwrap();
+                prop_assert!(pending_next <= claim);
+                let _ = id;
+            }
+        }
+    }
+
+    /// SPEC §4.6(a) under carried balances larger than the block reward: the
+    /// pre-fix code could emit `Σ kept > T`, a consensus-invalid coinbase.
+    /// Conservation, rail disjointness and the per-id partition must hold.
+    #[test]
+    fn cap_keeps_the_coinbase_within_the_block_reward(
+        spec in arb_window_spec(),
+        subsidy in 1_000_000u64..=1_000_000_000,
+        fees in 0u64..=10_000_000,
+        budget_wu in 172u32..=4_000,
+        overhead_wu in 0u32..=1_000,
+        slots in 1usize..=8,
+        threshold in 1u64..=1_000,
+        pending_bits in proptest::collection::vec((0u8..=1u8, 0u64..=100u64), 8),
+        excess in 1u64..=3,
+    ) {
+        let window = build_window(&spec);
+        let raw = raw_payouts(&window, subsidy, fees, 100).unwrap();
+        let total = subsidy + fees;
+
+        // Pending balances at or above the block revenue, so owed overflows T
+        // for every identity that carries one.
+        let mut pending = BTreeMap::new();
+        for (i, (present, extra)) in pending_bits.iter().enumerate() {
+            if *present == 1 {
+                pending.insert(
+                    [(i + 1) as u8; 32],
+                    total.saturating_mul(excess).saturating_add(*extra),
+                );
+            }
+        }
+        let tier = TierConfig {
+            fee_bps: 100,
+            dust_limit_sats: 1,
+            coinbase_threshold_sats: threshold,
+            max_payout_slots: slots,
+            budget_wu,
+            overhead_wu,
+        };
+        let routing = route_tiers(&raw, &pending, &BTreeMap::new(), &tier, total).unwrap();
+
+        // Conservation: never more than the block reward, and the pool fee is
+        // always reserved in `pay_p`.
+        let paid: u64 = routing.kept.iter().map(|(_, v)| *v).sum();
+        prop_assert!(paid <= total);
+        prop_assert_eq!(paid + routing.pay_p, total);
+        prop_assert_eq!(routing.pay_p, total - paid);
+        prop_assert!(routing.pay_p >= raw.pool_sats, "the fee must stay in pay_p");
+        prop_assert!(paid <= total - raw.pool_sats);
+
+        // One rail per id (settlement rejects duplicate `sp_id` entries).
+        let mut seen: BTreeSet<SpId> = BTreeSet::new();
+        for (group, _) in rails(&routing) {
+            for (id, _) in group {
+                prop_assert!(seen.insert(*id), "id on two rails");
+            }
+        }
+        let mut expected: BTreeSet<SpId> = BTreeSet::new();
+        for id in raw.raw.keys().chain(pending.keys()) {
+            if owed_of(&raw, &pending, *id) > 0 {
+                expected.insert(*id);
+            }
+        }
+        prop_assert_eq!(&seen, &expected);
+        prop_assert_eq!(
+            routing.owed.keys().copied().collect::<BTreeSet<SpId>>(),
+            expected.clone(),
+            "`owed` covers every routed id"
+        );
+
+        // Every owed balance is partitioned by the rails plus the new pending
+        // balance; a capped coinbase leaves the excess carried, not lost.
+        let applied = apply(&routing, &pending);
+        for id in &expected {
+            let owed = owed_of(&raw, &pending, *id);
+            let kept_sats = routing.kept.iter().find(|(k, _)| k == id).map(|(_, v)| *v);
+            let ark_sats = routing.ark_due.iter().find(|(k, _)| k == id).map(|(_, v)| *v);
+            let forfeit_sats = routing.forfeited.iter().find(|(k, _)| k == id).map(|(_, v)| *v);
+            let new_pending = applied.get(id).copied().unwrap_or(0);
+            if let Some(p) = kept_sats {
+                prop_assert!(p >= threshold, "coinbase output below C");
+                prop_assert!(p <= owed);
+                prop_assert_eq!(new_pending, owed - p);
+            }
+            if let Some(a) = ark_sats {
+                prop_assert_eq!(a, owed);
+            }
+            if let Some(f) = forfeit_sats {
+                prop_assert_eq!(f, raw.raw.get(id).copied().unwrap_or(0));
+            }
+            prop_assert_eq!(
+                kept_sats.unwrap_or(0)
+                    + ark_sats.unwrap_or(0)
+                    + forfeit_sats.unwrap_or(0)
+                    + new_pending,
+                owed,
+                "rails + new pending must partition owed"
+            );
+        }
+        prop_assert!(routing.kept.len() <= slots);
+        if !routing.kept.is_empty() {
+            let used = overhead_wu as u64 + 172 * routing.kept.len() as u64;
+            prop_assert!(used <= budget_wu as u64);
+        }
+        prop_assert_eq!(
+            route_tiers(&raw, &pending, &BTreeMap::new(), &tier, total).unwrap(),
+            routing.clone()
+        );
+    }
+
+    /// Raising `C` moves value from the coinbase to the Ark/forfeit rails and
+    /// never changes `Σ owed` (§11.9); the kept set only shrinks.
+    #[test]
+    fn raising_the_threshold_moves_value_but_not_owed(
+        spec in arb_window_spec(),
+        subsidy in 1_000_000u64..=1_000_000_000,
+        fees in 0u64..=10_000_000,
+        low_c in 330u64..=1_000,
+        delta_c in 1u64..=1_000,
+        budget_wu in 0u32..=4_000,
+        slots in 0usize..=8,
+    ) {
+        let window = build_window(&spec);
+        let raw = raw_payouts(&window, subsidy, fees, 100).unwrap();
+        let total = subsidy + fees;
+        let high_c = low_c.saturating_add(delta_c);
+        let mut low_cfg = cfg(budget_wu, slots);
+        low_cfg.coinbase_threshold_sats = low_c;
+        let mut high_cfg = low_cfg.clone();
+        high_cfg.coinbase_threshold_sats = high_c;
+        let low = route_tiers(&raw, &BTreeMap::new(), &BTreeMap::new(), &low_cfg, total).unwrap();
+        let high = route_tiers(&raw, &BTreeMap::new(), &BTreeMap::new(), &high_cfg, total).unwrap();
+
+        let owed = |r: &Routing| -> u64 {
+            r.kept.iter().chain(r.pending.iter()).chain(r.ark_due.iter()).chain(r.forfeited.iter())
+                .map(|(_, v)| *v).sum()
+        };
+        prop_assert_eq!(owed(&low), owed(&high));
+        let low_kept: BTreeSet<SpId> = low.kept.iter().map(|(id, _)| *id).collect();
+        for (id, _) in &high.kept {
+            prop_assert!(low_kept.contains(id));
+        }
     }
 }

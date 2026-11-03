@@ -5,7 +5,7 @@
 
 #![deny(unsafe_code)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use spc_crypto::{spc_output_pubkey, tier_tweaks, SendKey};
@@ -114,11 +114,14 @@ impl Slice {
 
     pub fn agg(&self) -> SliceAgg {
         let mut per_id = BTreeMap::new();
+        let mut diff_fee_sum = 0u128;
         for s in &self.shares {
+            let d = s.d as u128;
+            let df = d.saturating_mul(s.job_fees as u128);
             let e = per_id.entry(s.sp_id).or_insert((0u128, 0u128));
-            e.0 = e.0.saturating_add(s.d as u128);
-            e.1 =
-                e.1.saturating_add((s.d as u128).saturating_mul(s.job_fees as u128));
+            e.0 = e.0.saturating_add(d);
+            e.1 = e.1.saturating_add(df);
+            diff_fee_sum = diff_fee_sum.saturating_add(df);
         }
         SliceAgg {
             slice_id: self.slice_id,
@@ -126,11 +129,7 @@ impl Slice {
             prev_hash: self.prev_hash,
             front_id: self.front_id,
             difficulty: self.difficulty,
-            diff_fee_sum: self
-                .shares
-                .iter()
-                .map(|s| (s.d as u128).saturating_mul(s.job_fees as u128))
-                .sum(),
+            diff_fee_sum,
             per_id,
             root: self.root,
         }
@@ -157,7 +156,9 @@ pub fn merkle_root(leaves: &[[u8; 32]]) -> [u8; 32] {
     let mut level = leaves.to_vec();
     while level.len() > 1 {
         if !level.len().is_multiple_of(2) {
-            level.push(*level.last().expect("non-empty"));
+            if let Some(last) = level.last().copied() {
+                level.push(last);
+            }
         }
         level = level
             .chunks_exact(2)
@@ -230,13 +231,25 @@ pub struct RawPayouts {
     pub f_net: u64,
 }
 
+/// Raw payouts before pending and tier routing (SPEC §4.4).
+///
+/// Floors follow the spec exactly:
+///
+/// ```text
+/// raw(id) = floor(r_net * Σ_{s in id} d_s / D_win)                     // once per identity
+///         + Σ_S floor((F_net / t) * Σ_{s in id, s in S} d_s*f_s / DF_S) // once per slice
+/// ```
+///
+/// The subsidy floor is taken **once per identity over the whole window**; a
+/// per-slice floor would lose the accumulated remainder (SPEC §4.4). The fee
+/// term keeps its per-slice floor.
 pub fn raw_payouts(
     window: &Window,
     subsidy: u64,
     fees: u64,
     fee_bps: u16,
 ) -> Result<RawPayouts, Error> {
-    if window.t == 0 || window.d_win == 0 {
+    if window.d_win == 0 || window.slices.is_empty() {
         return Err(Error::EmptyWindow);
     }
     if fee_bps > 10_000 {
@@ -247,25 +260,41 @@ pub fn raw_payouts(
         (subsidy as u128).saturating_sub((subsidy as u128).saturating_mul(fee_bps) / 10_000);
     let f_net = (fees as u128).saturating_sub((fees as u128).saturating_mul(fee_bps) / 10_000);
 
-    let mut raw: BTreeMap<SpId, u128> = BTreeMap::new();
+    // `t` is the number of whole slices in the window; the slice vector is
+    // authoritative so a stale `t` field cannot skew the fee split.
+    let t = window.slices.len() as u128;
+
+    let mut per_id_diff: BTreeMap<SpId, u128> = BTreeMap::new();
+    let mut per_id_fee: BTreeMap<SpId, u128> = BTreeMap::new();
     for s in &window.slices {
         for (id, (d, df)) in &s.per_id {
-            let subsidy_term = r_net.saturating_mul(*d) / window.d_win;
+            let e = per_id_diff.entry(*id).or_insert(0);
+            *e = e.saturating_add(*d);
+
+            // fee_term(S, id) = floor((F_net / t) * df / DF_S), one floor per
+            // (identity, slice) term.
             let fee_term = if s.diff_fee_sum == 0 {
                 0
             } else {
-                f_net.saturating_mul(*df) / ((window.t as u128).saturating_mul(s.diff_fee_sum))
+                f_net.saturating_mul(*df) / t.saturating_mul(s.diff_fee_sum)
             };
-            let e = raw.entry(*id).or_insert(0);
-            *e = e.saturating_add(subsidy_term).saturating_add(fee_term);
+            let e = per_id_fee.entry(*id).or_insert(0);
+            *e = e.saturating_add(fee_term);
         }
     }
-    let raw: BTreeMap<SpId, u64> = raw
-        .into_iter()
-        .map(|(id, v)| (id, u64::try_from(v).unwrap_or(u64::MAX)))
-        .collect();
-    let total: u128 = raw.values().map(|v| *v as u128).sum();
-    let reward = subsidy as u128 + fees as u128;
+
+    let mut raw: BTreeMap<SpId, u64> = BTreeMap::new();
+    for (id, d_window) in per_id_diff {
+        let subsidy_term = r_net.saturating_mul(d_window) / window.d_win;
+        let fee_term = per_id_fee.get(&id).copied().unwrap_or(0);
+        let v = subsidy_term.saturating_add(fee_term);
+        raw.insert(id, u64::try_from(v).unwrap_or(u64::MAX));
+    }
+
+    let total = raw
+        .values()
+        .fold(0u128, |acc, v| acc.saturating_add(*v as u128));
+    let reward = (subsidy as u128).saturating_add(fees as u128);
     let pool_sats = reward.saturating_sub(total);
     Ok(RawPayouts {
         raw,
@@ -307,10 +336,31 @@ pub struct ArkCapability {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Routing {
+    /// Full `owed(id) = raw(id) + prior_pending(id)` for every routed id,
+    /// **before** the pool-template coinbase cap. JD weights are built from
+    /// this map (SPEC §4.7 `weight_id = owed(id)`), so a balance that the
+    /// coinbase can only partly pay still carries its full weight and O11
+    /// scales it at settlement.
+    pub owed: BTreeMap<SpId, u64>,
+    /// Coinbase outputs: `(sp_id, sats actually paid)`. Sum is at most
+    /// `T − pool_sats`, so `pay_p` always covers the pool fee.
     pub kept: Vec<(SpId, u64)>,
+    /// Balances that wait in full for a later coinbase (trimmed, over-cap,
+    /// pending-only, or registered without a propagated destination).
     pub pending: Vec<(SpId, u64)>,
+    /// Balances that become an Ark send due at `H_f + confirmation_depth`.
     pub ark_due: Vec<(SpId, u64)>,
+    /// Current-block earnings confiscated from an unregistered miner below
+    /// `C`. A prior pending balance is never forfeited, so this is the
+    /// block's raw portion only (SPEC §11.1).
     pub forfeited: Vec<(SpId, u64)>,
+    /// Delta to apply to the prior pending balance to obtain the new one.
+    ///
+    /// The `pending` rail lists balances that wait in full; a kept id the
+    /// coinbase could only partly cover, and a forfeited id with a prior
+    /// balance, carry their remainder on this delta rather than a second rail
+    /// entry, because the distribution carries exactly one entry per `sp_id`
+    /// (SPEC §4.7; settlement rejects duplicate entries).
     pub pending_deltas: BTreeMap<SpId, i64>,
     pub pay_p: u64,
     pub total: u64,
@@ -318,6 +368,40 @@ pub struct Routing {
 }
 
 /// SPEC §4.6 + §11.1. `pending` is the prior balance per id.
+///
+/// `owed(id) = raw(id) + pending(id)` is computed for every id present in
+/// **either** map (SPEC §4.6), so an id that only carries a prior pending
+/// balance is still routed. Ids whose owed is zero are dropped (there is
+/// nothing to route and no rail should carry a 0-sat entry).
+///
+/// # Coinbase cap (SPEC §4.6(a))
+///
+/// `Σ kept + pay_p = T` must hold, and the pool's own fee must stay in the
+/// pool output, so `kept` is capped at `T − pool_sats` (`pool_sats` is the fee
+/// plus rounding remainder from [`raw_payouts`]):
+///
+/// 1. Walk `owed` descending (ties by `sp_id`). Keep an id only when its whole
+///    owed fits in the remaining capacity; the first id that does not fit
+///    closes the coinbase, and it plus every smaller balance goes to its
+///    non-coinbase rail (pending above `C`, Ark/retained/forfeited below).
+/// 2. If the *largest* owed exceeds the capacity (`Σ kept == 0`), the coinbase
+///    pays the whole capacity against it (only when that still clears `C`) and
+///    the remainder is carried as pending. The cap therefore never produces a
+///    negative or unsigned balance, and `pay_p >= pool_sats` always, so an
+///    over-`T` balance cannot hand the pool fee to a miner.
+/// 3. If `T <= pool_sats` the coinbase pays nothing and every balance waits.
+///
+/// `total` is the found block's revenue `T` (subsidy + fees); `pay_p` is
+/// exactly `T − Σ kept`.
+///
+/// # Forfeiture (SPEC §11.1)
+///
+/// An unregistered id below `C` forfeits **this block's raw portion only**.
+/// `pending` arises from the pool's own side (trimming, failed Ark sends, a
+/// registration not yet propagated) and §11.1 says it is never forfeited, so a
+/// prior balance is left on the pending ledger (`pending_delta = 0`). A
+/// pending-only id below `C` therefore routes to the `pending` rail with
+/// `pending_delta = 0`.
 pub fn route_tiers(
     raw: &RawPayouts,
     pending: &BTreeMap<SpId, u64>,
@@ -327,14 +411,18 @@ pub fn route_tiers(
 ) -> Result<Routing, Error> {
     cfg.validate()?;
 
-    let mut owed: Vec<(SpId, u64)> = raw
-        .raw
-        .iter()
-        .map(|(id, r)| {
-            let p = pending.get(id).copied().unwrap_or(0);
-            (*id, r.saturating_add(p))
+    let mut ids: BTreeSet<SpId> = raw.raw.keys().copied().collect();
+    ids.extend(pending.keys().copied());
+    let mut owed: Vec<(SpId, u64)> = ids
+        .into_iter()
+        .map(|id| {
+            let r = raw.raw.get(&id).copied().unwrap_or(0);
+            let p = pending.get(&id).copied().unwrap_or(0);
+            (id, r.saturating_add(p))
         })
+        .filter(|(_, amount)| *amount > 0)
         .collect();
+    // Largest first; ties break on sp_id so the result is deterministic.
     owed.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
     let mut kept = Vec::new();
@@ -343,76 +431,148 @@ pub fn route_tiers(
     let mut forfeited = Vec::new();
     let mut pending_deltas = BTreeMap::new();
     let mut used_wu = cfg.overhead_wu;
-    let mut kept_ids = Vec::new();
+    let mut paid: u64 = 0;
+    // The pool keeps at least `pool_sats` (fee + rounding) in `pay_p`: cap the
+    // coinbase at `T − pool_sats` so an over-`T` balance cannot pay the fee out.
+    let capacity = total.saturating_sub(raw.pool_sats);
+    // Set once no further id can be paid by this coinbase (sats, slots or
+    // weight exhausted): the walk is a prefix of the owed order.
+    let mut coinbase_closed = false;
 
     for (id, amount) in &owed {
-        let old = pending.get(id).copied().unwrap_or(0) as i64;
-        if *amount >= cfg.coinbase_threshold_sats {
+        let raw_part = raw.raw.get(id).copied().unwrap_or(0);
+        let old = pending.get(id).copied().unwrap_or(0);
+
+        if !coinbase_closed && *amount >= cfg.coinbase_threshold_sats {
             let next_wu = used_wu.saturating_add(172);
             if kept.len() < cfg.max_payout_slots && next_wu <= cfg.budget_wu {
-                used_wu = next_wu;
-                kept.push((*id, *amount));
-                kept_ids.push(*id);
-                pending_deltas.insert(*id, -old);
-                continue;
+                let available = capacity.saturating_sub(paid);
+                if *amount <= available {
+                    used_wu = next_wu;
+                    paid = paid.saturating_add(*amount);
+                    kept.push((*id, *amount));
+                    // Fully paid: the prior balance is consumed.
+                    pending_deltas.insert(*id, pending_delta(0, old));
+                    continue;
+                }
+                if paid == 0 && available > 0 && available >= cfg.coinbase_threshold_sats {
+                    // A single balance larger than the payable capacity: pay
+                    // what the coinbase can carry and keep the rest as pending
+                    // (one output per id, SPEC §4.6(a)).
+                    used_wu = next_wu;
+                    paid = capacity;
+                    kept.push((*id, available));
+                    pending_deltas
+                        .insert(*id, pending_delta(amount.saturating_sub(available), old));
+                    coinbase_closed = true;
+                    continue;
+                }
             }
-            // Trimmed above C waits for the next coinbase.
+            // No further coinbase payment is possible this block.
+            coinbase_closed = true;
+        }
+
+        if *amount >= cfg.coinbase_threshold_sats {
+            // Trimmed above C waits for the next coinbase (SPEC §4.8).
             pending_out.push((*id, *amount));
-            pending_deltas.insert(*id, *amount as i64 - old);
+            pending_deltas.insert(*id, pending_delta(*amount, old));
             continue;
         }
 
         match ark.get(id) {
             Some(cap) if cap.registered && cap.dest_known => {
                 ark_due.push((*id, *amount));
-                pending_deltas.insert(*id, *amount as i64 - old);
+                // The balance leaves the pending ledger and becomes an Ark
+                // send due; `failed_to_pending` re-credits it if the send
+                // fails (§11.3), so it must not sit in both places.
+                pending_deltas.insert(*id, pending_delta(0, old));
             }
             Some(cap) if cap.registered => {
+                // Committed registration, destination not propagated yet.
                 pending_out.push((*id, *amount));
-                pending_deltas.insert(*id, *amount as i64 - old);
+                pending_deltas.insert(*id, pending_delta(*amount, old));
             }
             _ => {
-                forfeited.push((*id, *amount));
-                // A forfeited balance is not owed; its prior pending, if any,
-                // is released so the ledger stays consistent.
-                pending_deltas.insert(*id, -old);
+                // Never forfeit a prior pending balance: only this block's
+                // raw earnings are confiscated (SPEC §11.1).
+                if raw_part > 0 {
+                    forfeited.push((*id, raw_part));
+                } else if old > 0 {
+                    // Pending-only: the balance simply keeps waiting.
+                    pending_out.push((*id, old));
+                }
+                pending_deltas.insert(*id, pending_delta(old, old));
             }
         }
     }
 
-    let paid: u128 = kept.iter().map(|(_, v)| *v as u128).sum();
-    let pay_p = (total as u128).saturating_sub(paid);
+    let pay_p = total.saturating_sub(paid);
     let pool_fee = raw.pool_sats;
     Ok(Routing {
+        // Full owed per id, before the cap; JD weights use this.
+        owed: owed.iter().copied().collect(),
         kept,
         pending: pending_out,
         ark_due,
         forfeited,
         pending_deltas,
-        pay_p: u64::try_from(pay_p).unwrap_or(u64::MAX),
+        pay_p,
         total,
         pool_fee,
     })
 }
 
-/// O11: `claim(id) = floor(owed * (T_actual - F) / W)`.
-pub fn claim_jd(owed: u64, t_actual: u64, fixed: u64, weight_total: u64) -> Result<u64, Error> {
-    if weight_total == 0 || fixed > t_actual {
+/// Saturating `u64 -> i64` for the pending-delta ledger (no wrap, no panic).
+fn to_i64(v: u64) -> i64 {
+    i64::try_from(v).unwrap_or(i64::MAX)
+}
+
+/// `new_pending - old_pending` as a saturating `i64` (never wraps).
+fn pending_delta(new_pending: u64, old_pending: u64) -> i64 {
+    to_i64(new_pending).saturating_sub(to_i64(old_pending))
+}
+
+/// O11 claim: `claim(id) = floor(owed * (T_actual - F) / W)`.
+///
+/// * `t_actual` is `T_actual`, the sum of the **mined** coinbase outputs.
+/// * `fixed_outputs_sats` is `F`, the fixed-output total of PR #203 §4 exactly
+///   as in the SPEC §3.5 validation (0 when `additional_outputs` is only the
+///   0-sat `OP_RETURN` carrier). It is **not** the pool weight: `F` is
+///   subtracted before scaling.
+/// * `weight_total` is `W = Σ weight_id + weight_P`, i.e. it **includes** the
+///   pool weight. Passing only `Σ weight_id` here would over-credit every
+///   miner.
+///
+/// `docs/decisions/2026-10-14-o11-claim-formula.md` is authoritative.
+pub fn claim_jd(
+    owed: u64,
+    t_actual: u64,
+    fixed_outputs_sats: u64,
+    weight_total: u64,
+) -> Result<u64, Error> {
+    if weight_total == 0 || fixed_outputs_sats > t_actual {
         return Err(Error::Overflow);
     }
-    let v = (owed as u128).saturating_mul((t_actual - fixed) as u128) / weight_total as u128;
+    // u64 × u64 always fits u128, so this cannot saturate or wrap.
+    let scaled = (owed as u128) * ((t_actual - fixed_outputs_sats) as u128);
+    let v = scaled / weight_total as u128;
     Ok(u64::try_from(v).unwrap_or(u64::MAX))
 }
 
 /// JD settlement for one id. `paid` is read from the mined coinbase.
+///
+/// `pending'(id) = claim(id) - paid(id)` and is unsigned: a miner the JDC
+/// overpaid (`paid > claim`, e.g. a distribution the pool did not build) books
+/// zero pending rather than a debit. A dust-pruned id (`paid = 0`) books the
+/// whole claim as pending. See the parameter docs on [`claim_jd`].
 pub fn settle_jd(
     owed: u64,
     paid: u64,
     t_actual: u64,
-    fixed: u64,
+    fixed_outputs_sats: u64,
     weight_total: u64,
 ) -> Result<(u64, u64), Error> {
-    let claim = claim_jd(owed, t_actual, fixed, weight_total)?;
+    let claim = claim_jd(owed, t_actual, fixed_outputs_sats, weight_total)?;
     let pending = claim.saturating_sub(paid);
     Ok((claim, pending))
 }
@@ -530,6 +690,9 @@ pub struct MinerKeys {
 }
 
 /// Build the pool-template (sats) distribution (SPEC §4.7).
+///
+/// Output order is `[pool output] ++ [miner outputs sorted by sp_id]` as the
+/// spec requires, so the fingerprint is independent of the trim order.
 pub fn build_distribution(
     height: u32,
     send: &SendKey,
@@ -538,11 +701,12 @@ pub fn build_distribution(
     pool_script: &[u8],
     ark_dest: &BTreeMap<SpId, Vec<u8>>,
 ) -> Result<Distribution, Error> {
-    let mut outputs = Vec::with_capacity(routing.kept.len() + 1);
+    let kept = sorted_by_id(&routing.kept);
+    let mut outputs = Vec::with_capacity(kept.len() + 1);
     outputs.push((pool_script.to_vec(), routing.pay_p));
     let mut entries = Vec::new();
 
-    for (id, sats) in &routing.kept {
+    for (id, sats) in &kept {
         let keys = miners.get(id).ok_or(Error::Derivation(*id))?;
         let ecdh = send
             .derive_pool_side(&keys.b_scan)
@@ -560,31 +724,31 @@ pub fn build_distribution(
             sats: *sats,
         });
     }
-    for (id, sats) in &routing.pending {
+    for (id, sats) in sorted_by_id(&routing.pending) {
         entries.push(Entry {
-            sp_id: *id,
+            sp_id: id,
             rail: Rail::Pending,
             p_x: None,
             dest_id: None,
-            sats: *sats,
+            sats,
         });
     }
-    for (id, sats) in &routing.ark_due {
+    for (id, sats) in sorted_by_id(&routing.ark_due) {
         entries.push(Entry {
-            sp_id: *id,
+            sp_id: id,
             rail: Rail::Ark,
             p_x: None,
-            dest_id: ark_dest.get(id).cloned(),
-            sats: *sats,
+            dest_id: ark_dest.get(&id).cloned(),
+            sats,
         });
     }
-    for (id, sats) in &routing.forfeited {
+    for (id, sats) in sorted_by_id(&routing.forfeited) {
         entries.push(Entry {
-            sp_id: *id,
+            sp_id: id,
             rail: Rail::Forfeit,
             p_x: None,
             dest_id: None,
-            sats: *sats,
+            sats,
         });
     }
 
@@ -599,7 +763,15 @@ pub fn build_distribution(
     })
 }
 
-/// JD weights: `weight_id = owed`, `weight_P = fee + sum(not kept owed)`.
+/// Copy a routing rail sorted by `sp_id` (deterministic, spec order).
+fn sorted_by_id(rail: &[(SpId, u64)]) -> Vec<(SpId, u64)> {
+    let mut out = rail.to_vec();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// JD weights: `weight_id = owed(id)` for every kept id,
+/// `weight_P = fee_weight + Σ_{not kept} owed(id)` (SPEC §4.7, §11.2).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Weights {
     pub pool_weight: u64,
@@ -607,16 +779,39 @@ pub struct Weights {
     pub entries: Vec<Entry>,
 }
 
+/// Build the JD weights from the same routing that produced the payout tiers
+/// (SPEC §4.7: "the two modes share everything except the final scaling").
+///
+/// `weights` carries each kept id's **full owed** (`Routing::owed`) in `sp_id`
+/// order; `pool_weight` folds `fee_weight` plus the owed of every id that is
+/// not in the coinbase, which is what the pool output is worth in JD mode
+/// (§11.2).
+///
+/// The pool-template coinbase cap (SPEC §4.6(a)) does **not** apply here: JD
+/// weights are not sats, and the JDC/O11 scales them by
+/// `(T_actual − F) / W` at settlement, so a balance the pool-template coinbase
+/// could only partly pay keeps its full weight. The rail lists are still used
+/// for `entries`, because they describe what the snapshot actually allocated.
 pub fn build_weights(routing: &Routing, fee_weight: u64) -> Weights {
-    let held: u64 = routing
-        .pending
+    let kept = sorted_by_id(&routing.kept);
+    let kept_ids: BTreeSet<SpId> = kept.iter().map(|(id, _)| *id).collect();
+    let held = routing
+        .owed
         .iter()
-        .chain(routing.ark_due.iter())
-        .chain(routing.forfeited.iter())
-        .map(|(_, v)| *v)
-        .sum();
-    let mut entries = Vec::new();
-    for (id, sats) in &routing.kept {
+        .filter(|(id, _)| !kept_ids.contains(*id))
+        .fold(0u64, |acc, (_, v)| acc.saturating_add(*v));
+
+    // `Routing::owed` is authoritative; the rail amount is a fallback for a
+    // hand-built routing that does not populate it.
+    let weights: Vec<(SpId, u64)> = kept
+        .iter()
+        .map(|(id, sats)| (*id, routing.owed.get(id).copied().unwrap_or(*sats)))
+        .collect();
+
+    let mut entries = Vec::with_capacity(
+        kept.len() + routing.pending.len() + routing.ark_due.len() + routing.forfeited.len(),
+    );
+    for (id, sats) in &kept {
         entries.push(Entry {
             sp_id: *id,
             rail: Rail::Coinbase,
@@ -625,9 +820,25 @@ pub fn build_weights(routing: &Routing, fee_weight: u64) -> Weights {
             sats: *sats,
         });
     }
+    for (rail, group) in [
+        (Rail::Pending, &routing.pending),
+        (Rail::Ark, &routing.ark_due),
+        (Rail::Forfeit, &routing.forfeited),
+    ] {
+        for (id, sats) in sorted_by_id(group) {
+            entries.push(Entry {
+                sp_id: id,
+                rail,
+                p_x: None,
+                dest_id: None,
+                sats,
+            });
+        }
+    }
+
     Weights {
         pool_weight: fee_weight.saturating_add(held),
-        weights: routing.kept.clone(),
+        weights,
         entries,
     }
 }
