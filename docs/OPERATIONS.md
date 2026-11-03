@@ -35,10 +35,12 @@ What the flake provides:
 (`testing/regtest-e2e.sh`), `ark-e2e` (needs `captaind` in `PATH` and
 `SPC_ARK_E2E=1`).
 
-Production template sources: `[template] source` is `"rpc"` (built behind the
-`rpc` cargo feature) or `"mock"` in this build. The spec'd `"ipc"` and
-`"sv2-tp"` TDP sources are not implemented yet - the binary refuses to start
-with them (§9).
+Production template sources: `[template] source` MUST be `"rpc"` (built
+behind the `rpc` cargo feature). This build refuses to start on any other
+value except `"mock"`, which is accepted only on regtest/signet when
+`[accounting] allow_unchecked_chain = true`. The spec'd `"ipc"` and `"sv2-tp"`
+TDP sources are not implemented in this build; they land with the
+rbitcoin/TP packet. Do not configure them expecting startup.
 
 ## 2. Roles and ports
 
@@ -242,8 +244,38 @@ transport.
 ## 7. Metrics and alarms
 
 The `api` role serves `GET /healthz` (liveness) and `GET /metrics`
-(Prometheus). The alarm set below is the SPEC §9 contract; the metric names
-are normative. Page-worthy items are marked.
+(Prometheus text 0.0.4). **The exporter is the source of truth:** scrape
+`/metrics` to discover what this build actually emits, and only build
+dashboards or alert rules on the families in "Exported today". A family whose
+store query failed is omitted from the scrape - a missing series means
+"unknown", never "empty" - and the failure counts in
+`spc_metrics_scrape_errors_total` (alarm on any growth). Page-worthy items
+are marked.
+
+### Exported today
+
+Every family in this table is emitted by `bins/spc-pool/src/metrics.rs` in
+this build.
+
+| Metric | Type | Alarm |
+|---|---|---|
+| `spc_blocks_total{status}` | counter | any `orphaned`/`pending` growth |
+| `spc_pending_liability_sats` | gauge | reconcile against `/api/pool/liability` |
+| `spc_ark_due_sats` | gauge | growth without `spc_ark_payouts_total{status="sent"}` |
+| `spc_ark_payouts_total{status}` | counter | `failed_to_pending` growth |
+| `spc_forfeited_sats_total` | counter | growth beyond expected unregistered miners |
+| `spc_config_window_n` | gauge | capacity review |
+| `spc_config_coinbase_threshold_sats` | gauge | config audit |
+| `spc_config_budget_floor_wu` | gauge | compare with ceiling |
+| `spc_config_budget_ceiling_wu` | gauge | pinned at ceiling |
+| `spc_process_uptime_seconds` | gauge | restart detection |
+| `spc_metrics_scrape_errors_total` | counter | any growth - a source query failed |
+
+### Planned (not exported in this build)
+
+These are the SPEC §9 contract names sourced by roles that are not yet
+instrumented in this build. They are **not** emitted by `/metrics`; do not
+assume them in a dashboard. Wire the alarm rules as each lands.
 
 | Metric | Alarm |
 |---|---|
@@ -253,14 +285,9 @@ are normative. Page-worthy items are marked.
 | `spc_slices_sealed_total{reason}` | unexpected `reason` mix |
 | `spc_distribution_slots{kept,trimmed,dust}` | sustained all-`trimmed` |
 | `spc_budget_wu`, `spc_budget_utilisation` | pinned at ceiling |
-| `spc_blocks_total{status}` | any `orphaned`/`pending` growth |
-| `spc_pending_liability_sats` | reconcile against `/api/pool/liability` |
-| `spc_ark_due_sats` | growth without `spc_ark_payouts_total{status="sent"}` |
-| `spc_ark_payouts_total{status}` | `failed` growth |
 | `spc_ark_overdue_total` | **page** - scheduled past `due_height + ark_retry_blocks` |
 | `spc_ark_float_sats` | below `float_target_sats` - refill needed at next matured pool output |
 | `spc_ark_surplus_sats` | operator tooling |
-| `spc_forfeited_sats_total` | growth beyond expected unregistered miners |
 | `spc_ark_orders_rejected_total{reason}` | any `bad-signature` - **page** |
 | `spc_channel_reject_total{reason}` | identity-parse rejects trending up |
 | `spc_jd_declaration_reject_total{code}` | any single code trending |
@@ -271,19 +298,7 @@ are normative. Page-worthy items are marked.
 | `spc_registration_lag_revs` | rising |
 | `spc_orphaned_settlement_total{reason}` | any `missing_block_event` - reconstruct from the on-chain coinbase (SPEC §7.4) |
 
-Served today by the `api` role (Prometheus text 0.0.4 on `GET /metrics`):
-the store-sourced families `spc_blocks_total{status}`,
-`spc_pending_liability_sats`, `spc_ark_due_sats`,
-`spc_ark_payouts_total{status}` and `spc_forfeited_sats_total`; the
-config gauges `spc_config_window_n`, `spc_config_coinbase_threshold_sats`,
-`spc_config_budget_floor_wu` and `spc_config_budget_ceiling_wu`; plus
-`spc_process_uptime_seconds` and `spc_metrics_scrape_errors_total`. A
-family whose store query failed is omitted from the scrape - a missing
-series means "unknown", never "empty" - and the failure counts in
-`spc_metrics_scrape_errors_total` (alarm on any growth). The remaining
-families in the table above are sourced by other roles and are not
-exported yet; wire those alarm rules as they land. `GET /healthz` is the
-liveness probe.
+`GET /healthz` is the liveness probe.
 ## 8. What is deliberately not complete
 
 From `docs/STATUS.md` "Remaining"; these are the gaps an operator must know
