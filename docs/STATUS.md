@@ -12,6 +12,9 @@ reviews are recorded for risky packets, and the commit is pushed.
 | PPLNS-JD/SLICE accounting + settlement | `ses_e61952d7` | checkpoint `186d99e`; gate/review fixes `e2e9943`..`c403b7c` |
 | De-mock (metrics, per-height descriptor, ark role) | `ses_e61943da` | landed `3c3a19c`, `74807d3`, `65d87c1` |
 | Tor transport (spec and docs) | `ses_e60e6aac` | landed `8aca4be`, `914509f`; spec-ahead-of-code, closed |
+| Tor transport implementation | `ses_e5d9b9134` | dispatched 2026-11-03 on branch `tor-impl` |
+| Stock bark Ark adapter | `ses_e5d9b9133` | dispatched 2026-11-03 on branch `bark-adapter` |
+| Amount-banded payouts analysis | `ses_e5d9b9192` | dispatched 2026-11-03, writes `docs/analysis/2026-11-03-amount-banded-payouts.md` |
 | rbitcoin node fork (testnet4) | `ses_e6195c6a` | separate repo `/home/ethan/code/rbitcoin`; not merged here |
 | Proxy/upstream analysis | `ses_e60f175c` | closed, `docs/analysis/2026-11-02-proxy-and-upstream-options.md` |
 | Multi-identifier analysis | `ses_e638a2e6` | closed, `docs/analysis/2026-11-02-multi-identifier-payouts.md` |
@@ -137,9 +140,10 @@ Both harnesses bind bitcoind on 18443, so they must be run sequentially.
 
 1. Tor transport implementation: `[reach]`/`[net]` parser, loopback binding
    enforcement, SOCKS5 egress. SPEC §3.8 is the requirement; the binary does
-   not accept the keys yet.
+   not accept the keys yet. Dispatched 2026-11-03 (branch `tor-impl`).
 2. Replace the interim Ark command transport with the stock bark wallet
-   adapter (order emission and verification are done).
+   adapter (order emission and verification are done). Dispatched 2026-11-03
+   (branch `bark-adapter`).
 3. JD fallback rules (JDS declines, 10 s silence) and the full-template rebuild
    path in the JDC.
 4. Persist the window target in `distribution_snapshot` so settlement survives
