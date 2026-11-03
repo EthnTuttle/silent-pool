@@ -27,6 +27,11 @@ use spc_store::redis::Streams;
 use spc_store::Store;
 use tokio::sync::mpsc;
 
+/// Hard bound on a startup Postgres connect. Without it, an absent database
+/// can leave `PgPoolOptions::connect` retrying forever and the front never
+/// reaches `refresh()` (front-only regtest is the common case).
+const STORE_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+
 #[derive(Parser)]
 #[command(name = "spc-pool", version = spc_pool::VERSION)]
 struct Cli {
@@ -162,7 +167,8 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(0);
 
     let payout_task = if roles.contains(&Role::Payout) {
-        let store = Store::connect(&config.storage.postgres).await?;
+        let store =
+            Store::connect_with_timeout(&config.storage.postgres, STORE_CONNECT_TIMEOUT).await?;
         let streams = Streams::connect(&config.storage.redis).await?;
         let svc = spc_pool::payout::PayoutService::new(
             store,
@@ -198,7 +204,8 @@ async fn main() -> anyhow::Result<()> {
     };
 
     if roles.contains(&Role::Api) {
-        let store = Store::connect(&config.storage.postgres).await?;
+        let store =
+            Store::connect_with_timeout(&config.storage.postgres, STORE_CONNECT_TIMEOUT).await?;
         store.migrate().await?;
         let backend = std::sync::Arc::new(StoreBackend::with_metrics_config(
             store,
@@ -569,7 +576,9 @@ async fn main() -> anyhow::Result<()> {
 async fn load_bootstrap(
     config: &Config,
 ) -> anyhow::Result<Option<spc_store::models::BootstrapSnapshot>> {
-    let store = match Store::connect(&config.storage.postgres).await {
+    let store = match Store::connect_with_timeout(&config.storage.postgres, STORE_CONNECT_TIMEOUT)
+        .await
+    {
         Ok(store) => store,
         Err(e) => {
             tracing::warn!(error = %e, "postgres unavailable; front starts without a bootstrap snapshot");

@@ -13,6 +13,8 @@ use crate::models::*;
 pub enum StoreError {
     #[error("database error: {0}")]
     Db(#[from] sqlx::Error),
+    #[error("database connect timed out after {0:?}")]
+    Timeout(std::time::Duration),
     #[error("invalid column value: {0}")]
     Invalid(&'static str),
     #[error("block {0:?} is already settled")]
@@ -65,6 +67,21 @@ impl Store {
             .connect(url)
             .await?;
         Ok(Self { pool })
+    }
+
+    /// Connect with a hard wall-clock bound.
+    ///
+    /// `PgPoolOptions::connect` retries an unreachable host indefinitely on
+    /// some platforms (a TCP `EINPROGRESS` loop), so a front-only process can
+    /// hang before it reaches `refresh()`. Startup must turn that into a
+    /// terminal error instead; the caller decides whether an absent database
+    /// is fatal (`payout`/`api`) or a dev-only empty bootstrap (`front` on
+    /// regtest with `allow_unchecked_chain`).
+    pub async fn connect_with_timeout(url: &str, timeout: std::time::Duration) -> Result<Self> {
+        match tokio::time::timeout(timeout, Self::connect(url)).await {
+            Ok(result) => result,
+            Err(_) => Err(StoreError::Timeout(timeout)),
+        }
     }
 
     pub fn from_pool(pool: PgPool) -> Self {
@@ -1193,4 +1210,39 @@ fn ark_payout_from_row(row: PgRow) -> Result<ArkPayoutRow> {
         vtxo_id: row.try_get("vtxo_id")?,
         expiry_height: expiry_height.map(height_u32).transpose()?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+    use tokio::net::TcpListener;
+
+    /// A TCP endpoint that accepts but never speaks Postgres. The old
+    /// `PgPoolOptions::connect` path can retry this indefinitely; startup must
+    /// turn it into a bounded error so a front-only process reaches `refresh`.
+    #[tokio::test]
+    async fn connect_with_timeout_bounds_a_silent_database() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                held.push(socket);
+            }
+        });
+
+        let url = format!("postgres://spc:spc@{addr}/spc");
+        let started = Instant::now();
+        let result = Store::connect_with_timeout(&url, Duration::from_millis(250)).await;
+        let Err(err) = result else {
+            panic!("a silent database must not produce a Store");
+        };
+        assert!(matches!(err, StoreError::Timeout(_)));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "bounded connect took {:?}",
+            started.elapsed()
+        );
+    }
 }
