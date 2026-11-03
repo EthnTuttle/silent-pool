@@ -67,6 +67,12 @@ rpc_user = "$RPC_USER"
 rpc_pass = "$RPC_PASS"
 extranonce_bytes = 16
 
+# Regtest-only harness: no Postgres/Redis are expected to be running, so the
+# front starts from an empty bootstrap snapshot instead of failing closed.
+# NEVER set this on a network that matters.
+[accounting]
+allow_unchecked_chain = true
+
 [sv1]
 enabled = true
 listen = "127.0.0.1:$SV1_PORT"

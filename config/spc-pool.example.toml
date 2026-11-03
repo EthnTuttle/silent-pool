@@ -21,6 +21,9 @@ rpc_url = "http://127.0.0.1:18443"
 rpc_user = "user"
 rpc_pass = "pass"
 extranonce_bytes = 16
+# How often the front polls for a new template (ms). Bounds how long an
+# external new block leaves miner jobs and the JDS distribution stale.
+refresh_interval_ms = 1000
 
 [sv1]
 enabled = true
@@ -31,6 +34,11 @@ vardiff = true
 
 [accounting]
 window_n = 8
+# Pool share difficulty (SPEC §3.4, decision 2026-11-02-share-target-policy).
+# Both ingresses accept shares at this difficulty's target (never harder than
+# the network target), and the front credits
+# `min(share_difficulty, max(1, round(network_difficulty)))` per share.
+share_difficulty = 1
 slice_fee_delta_sats = 0
 max_slice_shares = 65000
 dust_limit_sats = 330

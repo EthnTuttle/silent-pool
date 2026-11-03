@@ -85,6 +85,11 @@ pub struct Template {
     pub socket_path: PathBuf,
     #[serde(default = "default_extranonce_bytes")]
     pub extranonce_bytes: usize,
+    /// How often the front polls the template source, in milliseconds. Bounds
+    /// how long an external new block leaves the JDS and miner jobs stale
+    /// (SPEC §2.2/§3.5).
+    #[serde(default = "default_refresh_interval_ms")]
+    pub refresh_interval_ms: u64,
     #[serde(default = "default_rpc_url")]
     pub rpc_url: String,
     #[serde(default)]
@@ -113,6 +118,12 @@ pub struct Sv1 {
 pub struct Accounting {
     #[serde(default = "default_window_n")]
     pub window_n: u32,
+    /// Pool share difficulty (SPEC §3.4, decision 2026-11-02-share-target-policy).
+    /// Every ingress validates shares against this difficulty's target (never
+    /// harder than the network target) and the front credits
+    /// `min(share_difficulty, max(1, round(network_difficulty)))`.
+    #[serde(default = "default_share_difficulty")]
+    pub share_difficulty: u64,
     #[serde(default)]
     pub slice_fee_delta_sats: u64,
     #[serde(default = "default_max_slice_shares")]
@@ -129,6 +140,10 @@ pub struct Accounting {
     pub scrub_after_blocks: u32,
     #[serde(default = "default_confirmation_depth")]
     pub confirmation_depth: u32,
+    /// Dev-only: allow the payout chain gate to pass without an RPC chain view.
+    /// MUST only be used on regtest/signet. Production requires `template.source = "rpc"`.
+    #[serde(default)]
+    pub allow_unchecked_chain: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -225,6 +240,13 @@ pub struct Ark {
     pub retry_blocks: u32,
     #[serde(default)]
     pub server_is_self: bool,
+    /// External command to execute Ark sends. The command receives the address
+    /// and sats as JSON on stdin: `{"address": "<ark1...>", "sats": 12345}`.
+    /// It MUST return `{"vtxo_id": "<hex>", "expiry_height": <u32>}` on stdout.
+    /// Non-zero exit, timeout, invalid JSON, or wrong types are treated as
+    /// transport failures. This is a real operator integration point, not a mock.
+    #[serde(default)]
+    pub send_command: Option<String>,
 }
 
 fn default_roles() -> Vec<String> {
@@ -248,6 +270,9 @@ fn default_socket() -> PathBuf {
 fn default_extranonce_bytes() -> usize {
     16
 }
+fn default_refresh_interval_ms() -> u64 {
+    1_000
+}
 fn default_rpc_url() -> String {
     "http://127.0.0.1:18443".into()
 }
@@ -265,6 +290,9 @@ fn default_extranonce2_bytes() -> usize {
 }
 fn default_window_n() -> u32 {
     8
+}
+fn default_share_difficulty() -> u64 {
+    1
 }
 fn default_max_slice_shares() -> usize {
     65_000
@@ -357,6 +385,7 @@ impl Default for Template {
             source: default_template_source(),
             socket_path: default_socket(),
             extranonce_bytes: default_extranonce_bytes(),
+            refresh_interval_ms: default_refresh_interval_ms(),
             rpc_url: default_rpc_url(),
             rpc_user: String::new(),
             rpc_pass: String::new(),
@@ -378,6 +407,7 @@ impl Default for Accounting {
     fn default() -> Self {
         Self {
             window_n: default_window_n(),
+            share_difficulty: default_share_difficulty(),
             slice_fee_delta_sats: 0,
             max_slice_shares: default_max_slice_shares(),
             dust_limit_sats: default_dust(),
@@ -386,6 +416,7 @@ impl Default for Accounting {
             retain_windows: default_retain(),
             scrub_after_blocks: default_scrub(),
             confirmation_depth: default_confirmation_depth(),
+            allow_unchecked_chain: false,
         }
     }
 }
@@ -454,6 +485,7 @@ impl Default for Ark {
             min_remaining_blocks: default_min_remaining(),
             retry_blocks: default_retry_blocks(),
             server_is_self: false,
+            send_command: None,
         }
     }
 }
@@ -472,12 +504,16 @@ pub enum ConfigError {
     FeeBps,
     #[error("window_n must be > 0")]
     WindowN,
+    #[error("share_difficulty must be > 0")]
+    ShareDifficulty,
     #[error("max_payout_slots must be > 0")]
     Slots,
     #[error("coinbase_threshold_sats must be >= dust_limit_sats")]
     Threshold,
     #[error("confirmation_depth must be > 0")]
     ConfirmationDepth,
+    #[error("template.refresh_interval_ms must be > 0")]
+    RefreshInterval,
     #[error("grace_same_height_only MUST be true (SPEC §3.5)")]
     Grace,
     #[error("invalid pool_payout_descriptor: {0}")]
@@ -530,6 +566,9 @@ impl Config {
         if self.accounting.window_n == 0 {
             return Err(ConfigError::WindowN);
         }
+        if self.accounting.share_difficulty == 0 {
+            return Err(ConfigError::ShareDifficulty);
+        }
         if self.accounting.max_payout_slots == 0 {
             return Err(ConfigError::Slots);
         }
@@ -538,6 +577,9 @@ impl Config {
         }
         if self.accounting.confirmation_depth == 0 {
             return Err(ConfigError::ConfirmationDepth);
+        }
+        if self.template.refresh_interval_ms == 0 {
+            return Err(ConfigError::RefreshInterval);
         }
         if !self.jd.grace_same_height_only {
             return Err(ConfigError::Grace);
@@ -582,10 +624,41 @@ impl Config {
                 if ark.order_pubkey.is_empty() {
                     return Err(ConfigError::ArkMissing("order_pubkey"));
                 }
+                if ark.float_target_sats == 0 {
+                    return Err(ConfigError::ArkMissing("float_target_sats"));
+                }
+                if ark.retry_blocks == 0 {
+                    return Err(ConfigError::ArkMissing("retry_blocks"));
+                }
+                if ark.send_command.is_none() {
+                    return Err(ConfigError::ArkMissing("send_command"));
+                }
                 if ark.server_is_self && self.pool.network == "mainnet" {
                     return Err(ConfigError::ArkSelfMainnet);
                 }
+                // server_is_self is only permitted on regtest/signet (SPEC §11.3, §11.9)
+                if ark.server_is_self && !matches!(self.pool.network.as_str(), "regtest" | "signet")
+                {
+                    return Err(ConfigError::ArkSelfMainnet);
+                }
             }
+        }
+
+        // Dev-only guards: mock template source and unchecked chain gate are only
+        // permitted on regtest/signet with explicit opt-in (SPEC §7.4, §11.10).
+        let is_dev_network = matches!(self.pool.network.as_str(), "regtest" | "signet");
+        if self.template.source == "mock"
+            && (!is_dev_network || !self.accounting.allow_unchecked_chain)
+        {
+            return Err(ConfigError::Listen(
+                "template source 'mock' requires regtest/signet AND accounting.allow_unchecked_chain = true"
+                    .into(),
+            ));
+        }
+        if self.accounting.allow_unchecked_chain && !is_dev_network {
+            return Err(ConfigError::Listen(
+                "accounting.allow_unchecked_chain is only permitted on regtest/signet".into(),
+            ));
         }
         Ok(())
     }
@@ -698,6 +771,27 @@ listen = "127.0.0.1:8080"
             assert!(validate_pool_descriptor(d).is_err(), "{d} should fail");
         }
         assert!(validate_pool_descriptor("tr(tpubD6NzVbkrYhZ4YTest/0/*)").is_ok());
+    }
+
+    #[test]
+    fn share_difficulty_defaults_to_one_and_must_be_positive() {
+        let cfg = sample();
+        assert_eq!(cfg.accounting.share_difficulty, 1);
+        let mut cfg = sample();
+        cfg.accounting.share_difficulty = 0;
+        assert_eq!(cfg.validate(), Err(ConfigError::ShareDifficulty));
+        let mut cfg = sample();
+        cfg.accounting.share_difficulty = 16_384;
+        cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn refresh_interval_defaults_and_must_be_positive() {
+        let cfg = sample();
+        assert_eq!(cfg.template.refresh_interval_ms, 1_000);
+        let mut cfg = sample();
+        cfg.template.refresh_interval_ms = 0;
+        assert_eq!(cfg.validate(), Err(ConfigError::RefreshInterval));
     }
 
     #[test]

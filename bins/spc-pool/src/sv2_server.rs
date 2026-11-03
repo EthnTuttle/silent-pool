@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use bitcoin::hashes::{sha256d, Hash};
-use bitcoin::pow::{CompactTarget, Target};
+use bitcoin::pow::Target;
 use bitcoin::BlockHash;
 use stratum_apps::key_utils::{Secp256k1PublicKey, Secp256k1SecretKey};
 use stratum_core::binary_sv2::{self, Seq0255, Str0255, Sv2Option, B032, B064K, U256};
@@ -18,18 +18,19 @@ use stratum_core::framing_sv2::framing::MessageFrame;
 use stratum_core::mining_sv2::NewExtendedMiningJob;
 use stratum_core::mining_sv2::{
     OpenExtendedMiningChannel, OpenExtendedMiningChannelSuccess, OpenMiningChannelError,
-    SetNewPrevHash, SubmitSharesExtended, SubmitSharesSuccess,
+    SetNewPrevHash, SubmitSharesError, SubmitSharesExtended, SubmitSharesSuccess,
     CHANNEL_BIT_MINING_SET_NEW_PREV_HASH, CHANNEL_BIT_NEW_EXTENDED_MINING_JOB,
-    CHANNEL_BIT_SUBMIT_SHARES_SUCCESS, MESSAGE_TYPE_MINING_SET_NEW_PREV_HASH,
-    MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB, MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
-    MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL_SUCCESS, MESSAGE_TYPE_OPEN_MINING_CHANNEL_ERROR,
+    CHANNEL_BIT_SUBMIT_SHARES_ERROR, CHANNEL_BIT_SUBMIT_SHARES_SUCCESS,
+    MESSAGE_TYPE_MINING_SET_NEW_PREV_HASH, MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB,
+    MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL, MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL_SUCCESS,
+    MESSAGE_TYPE_OPEN_MINING_CHANNEL_ERROR, MESSAGE_TYPE_SUBMIT_SHARES_ERROR,
     MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED, MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS,
 };
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc, Mutex};
 
 use crate::identity::{parse_identity, ChannelIdentity};
-use crate::sv1::{Job, Share};
+use crate::sv1::{effective_share_target, ntime_allowed, nullifier, version_allowed, Job, Share};
 use crate::type32::Type32Store;
 use spc_share_ext::{Message as Type32Message, EXTENSION_TYPE};
 
@@ -42,6 +43,13 @@ pub struct Sv2Server {
     jobs: broadcast::Sender<Job>,
     shares: mpsc::Sender<Share>,
     type32: Arc<std::sync::Mutex<Type32Store>>,
+    /// Non-coinbase txids of the published job, for the type-32
+    /// `GetTransactionsInJob` response (SPEC §3.7).
+    job_txids: Arc<Mutex<Vec<[u8; 32]>>>,
+    /// Pool share difficulty: the channel target announced on open and the
+    /// difficulty every extended share is validated against (decision
+    /// 2026-11-02-share-target-policy).
+    share_difficulty: u64,
     /// Total extranonce length the coinbase is built for (SPEC §2.4.1):
     /// SV1 `extranonce1 + extranonce2`, here `extranonce_prefix` +
     /// miner-chosen `extranonce_size`. Every channel must offer exactly
@@ -76,13 +84,34 @@ impl Sv2Server {
             jobs,
             shares,
             type32,
+            job_txids: Arc::new(Mutex::new(Vec::new())),
+            share_difficulty: 1,
             expected_extranonce_len,
         }
+    }
+
+    /// Set the pool share difficulty used for the channel target and for share
+    /// validation. Zero clamps to 1; use the configured
+    /// `[accounting] share_difficulty` (validated `> 0`).
+    pub fn with_share_difficulty(mut self, share_difficulty: u64) -> Self {
+        self.share_difficulty = share_difficulty.max(1);
+        self
+    }
+
+    /// The share difficulty this listener announces and enforces.
+    pub fn share_difficulty(&self) -> u64 {
+        self.share_difficulty
     }
 
     pub async fn publish(&self, job: Job) {
         *self.current.lock().await = Some(job.clone());
         let _ = self.jobs.send(job);
+    }
+
+    /// Publish the non-coinbase txids of the current job for the type-32
+    /// `GetTransactionsInJob` response.
+    pub async fn set_job_txids(&self, txids: Vec<[u8; 32]>) {
+        *self.job_txids.lock().await = txids;
     }
 
     pub async fn bind(
@@ -116,6 +145,10 @@ impl Sv2Server {
         let mut jobs = self.jobs.subscribe();
         let mut channel: Option<Channel> = None;
         let mut setup_done = false;
+        // Per-connection replay guard, cleared whenever the job changes
+        // (SPEC §3.4). The front keeps the process-wide set.
+        let mut seen: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
+        let mut seen_job: Option<String> = None;
 
         loop {
             tokio::select! {
@@ -191,7 +224,20 @@ impl Sv2Server {
                                 identity,
                                 extranonce_prefix: prefix.clone(),
                             };
-                            let target_bytes = [0xffu8; 32];
+                            // The announced target is the pool share target for
+                            // the current template: never harder than the
+                            // network target (decision
+                            // 2026-11-02-share-target-policy). Before the first
+                            // template exists there is no network target to
+                            // derive from; announce the easiest possible target
+                            // (the submit-time check below is authoritative and
+                            // still rejects anything below the pool target).
+                            let job = self.current.lock().await.clone();
+                            let share_target = match &job {
+                                Some(job) => effective_share_target(self.share_difficulty, job.nbits),
+                                None => Target::from_be_bytes([0xff; 32]),
+                            };
+                            let target_bytes = share_target.to_be_bytes();
                             let target = U256::from(&target_bytes);
                             let success = OpenExtendedMiningChannelSuccess {
                                 request_id: msg.request_id,
@@ -202,7 +248,7 @@ impl Sv2Server {
                                 group_channel_id: 0,
                             };
                             write_msg(&mut write, success, MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL_SUCCESS, false).await?;
-                            if let Some(job) = self.current.lock().await.clone() {
+                            if let Some(job) = job {
                                 send_job(&mut write, &ch, &job).await?;
                             }
                             channel = Some(ch);
@@ -210,14 +256,28 @@ impl Sv2Server {
                         MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED => {
                             let msg: SubmitSharesExtended = binary_sv2::from_bytes(&mut payload)
                                 .map_err(|e| format!("submit: {e}"))?;
-                            let Some(ch) = &channel else { continue };
-                            if msg.channel_id != ch.channel_id || msg.job_id != self.current_job_id().await {
+                            // Every rejection answers with an explicit
+                            // `SubmitSharesError`; nothing is silently dropped
+                            // (SPEC §3.4, §3.6).
+                            let Some(ch) = channel.as_ref() else {
+                                send_submit_error(&mut write, msg.channel_id, msg.sequence_number, "invalid-channel-id").await?;
+                                continue;
+                            };
+                            let Some(job) = self.current.lock().await.clone() else {
+                                send_submit_error(&mut write, ch.channel_id, msg.sequence_number, "invalid-job-id").await?;
+                                continue;
+                            };
+                            if let Some(code) = submission_error(
+                                msg.channel_id,
+                                ch.channel_id,
+                                &job,
+                                msg.job_id,
+                                msg.ntime,
+                                msg.version,
+                            ) {
+                                send_submit_error(&mut write, ch.channel_id, msg.sequence_number, code).await?;
                                 continue;
                             }
-                            let job = match self.current.lock().await.clone() {
-                                Some(j) => j,
-                                None => continue,
-                            };
                             let mut extranonce = ch.extranonce_prefix.clone();
                             extranonce.extend_from_slice(msg.extranonce.as_bytes());
                             let mut coinbase = job.coinb1.clone();
@@ -238,11 +298,37 @@ impl Sv2Server {
                             header.extend_from_slice(&job.nbits.to_le_bytes());
                             header.extend_from_slice(&msg.nonce.to_le_bytes());
                             let share_hash = sha256d::Hash::hash(&header).to_byte_array();
+                            // Fail closed: only shares meeting the pool share
+                            // target for this job reach accounting.
+                            let share_target = effective_share_target(self.share_difficulty, job.nbits);
+                            if !share_target.is_met_by(BlockHash::from_byte_array(share_hash)) {
+                                send_submit_error(&mut write, ch.channel_id, msg.sequence_number, "difficulty-too-low").await?;
+                                continue;
+                            }
+                            // Per-connection replay guard (defence in depth;
+                            // the front keeps the process-wide set).
+                            if seen_job.as_deref() != Some(job.job_id.as_str()) {
+                                seen.clear();
+                                seen_job = Some(job.job_id.clone());
+                            }
+                            let nullifier = nullifier(
+                                ch.channel_id,
+                                &job.job_id,
+                                msg.nonce,
+                                msg.ntime,
+                                msg.version,
+                                &extranonce,
+                            );
+                            if !seen.insert(nullifier) {
+                                send_submit_error(&mut write, ch.channel_id, msg.sequence_number, "duplicate-share").await?;
+                                continue;
+                            }
                             let share = Share {
                                 sp_id: ch.identity.sp_id,
                                 b_scan: ch.identity.b_scan,
                                 b_spend: ch.identity.b_spend,
-                                job_id: format!("{:08x}", msg.job_id),
+                                channel_id: ch.channel_id,
+                                job_id: job.job_id.clone(),
                                 nonce: msg.nonce,
                                 ntime: msg.ntime,
                                 version: msg.version,
@@ -321,7 +407,7 @@ impl Sv2Server {
             Type32Message::GetTransactionsInJob { request_id, .. } => {
                 Type32Message::GetTransactionsInJobSuccess {
                     request_id,
-                    txids: Vec::new(),
+                    txids: self.job_txids.lock().await.clone(),
                 }
             }
             Type32Message::NewBlockFound { .. } => return Ok(()),
@@ -331,15 +417,6 @@ impl Sv2Server {
             },
         };
         write_type32(write, &response).await
-    }
-
-    async fn current_job_id(&self) -> u32 {
-        self.current
-            .lock()
-            .await
-            .as_ref()
-            .map(|j| parse_job_id(&j.job_id))
-            .unwrap_or(0)
     }
 }
 
@@ -379,6 +456,60 @@ async fn send_job(
         job_msg,
         MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB,
         CHANNEL_BIT_NEW_EXTENDED_MINING_JOB,
+    )
+    .await
+}
+
+/// Cheap pre-hash validation of an extended submission (SPEC §3.4, §3.6).
+///
+/// Returns the SV2 error code to send, or `None` when the submission is
+/// well-formed for `job` on `expected_channel`. Never silently ignored: an
+/// unknown or stale job, a rolled version outside the BIP 320 mask and an
+/// `ntime` outside the job's roll window are all explicit rejections.
+fn submission_error(
+    channel_id: u32,
+    expected_channel: u32,
+    job: &Job,
+    job_id: u32,
+    ntime: u32,
+    version: u32,
+) -> Option<&'static str> {
+    if channel_id != expected_channel {
+        return Some("invalid-channel-id");
+    }
+    if job_id != parse_job_id(&job.job_id) {
+        return Some("stale-share");
+    }
+    if !ntime_allowed(job.ntime, ntime) {
+        return Some("invalid-ntime");
+    }
+    if !version_allowed(job.version, version) {
+        return Some("invalid-version");
+    }
+    None
+}
+
+/// Answer a rejected submission with the SV2 error code from the spec's list
+/// (`stale-share`, `difficulty-too-low`, ...) rather than dropping it.
+async fn send_submit_error(
+    write: &mut stratum_apps::network_helpers::noise_stream::NoiseTcpWriteHalf,
+    channel_id: u32,
+    sequence_number: u32,
+    code: &'static str,
+) -> Result<(), String> {
+    let Ok(error_code) = Str0255::try_from(code) else {
+        return Ok(());
+    };
+    let err = SubmitSharesError {
+        channel_id,
+        sequence_number,
+        error_code,
+    };
+    write_msg(
+        write,
+        err,
+        MESSAGE_TYPE_SUBMIT_SHARES_ERROR,
+        CHANNEL_BIT_SUBMIT_SHARES_ERROR,
     )
     .await
 }
@@ -440,13 +571,20 @@ fn identity_conflicts(conn: Option<[u8; 32]>, candidate: [u8; 32]) -> bool {
     conn.is_some_and(|existing| existing != candidate)
 }
 
-/// Target helper for tests.
+/// Target helper for tests (the consensus target for `bits`).
 pub fn target_from_bits(bits: u32) -> Target {
-    Target::from_compact(CompactTarget::from_consensus(bits))
+    crate::sv1::network_target(bits)
 }
 
 pub fn hash_meets_target(hash: [u8; 32], bits: u32) -> bool {
     target_from_bits(bits).is_met_by(BlockHash::from_byte_array(hash))
+}
+
+/// The target this listener puts in
+/// `OpenExtendedMiningChannelSuccess.target` for `share_difficulty` at the
+/// current template's `bits`, as big-endian bytes.
+pub fn announced_share_target(share_difficulty: u64, bits: u32) -> [u8; 32] {
+    effective_share_target(share_difficulty, bits).to_be_bytes()
 }
 
 #[cfg(test)]
@@ -507,5 +645,118 @@ mod tests {
         let err = open_channel_error(7, "invalid-user-identity");
         assert_eq!(err.request_id, 7);
         assert_eq!(err.error_code.as_bytes(), b"invalid-user-identity");
+    }
+
+    #[test]
+    fn announced_target_is_the_pool_share_target() {
+        // Network difficulty 256: the pool share target is the easier one and
+        // is what the channel is opened with.
+        let bits = 0x1c00_ffff;
+        let announced = announced_share_target(4, bits);
+        let expected = crate::sv1::target_for_difficulty(4).to_be_bytes();
+        assert_eq!(announced, expected);
+
+        // Regtest bits: the announced target is never harder than the network
+        // target, so a regtest miner is not asked for mainnet work.
+        let regtest = announced_share_target(u64::MAX, 0x207f_ffff);
+        assert_eq!(
+            regtest,
+            crate::sv1::network_target(0x207f_ffff).to_be_bytes()
+        );
+        // And it is never the old all-ones placeholder.
+        assert_ne!(regtest, [0xffu8; 32]);
+    }
+
+    fn job() -> Job {
+        Job {
+            job_id: "00000005".into(),
+            prev_hash: [0x11; 32],
+            height: 800_000,
+            version: 0x2000_0000,
+            nbits: 0x207f_ffff,
+            ntime: 1_700_000_000,
+            coinb1: vec![0x01, 0x00, 0x00, 0x00],
+            coinb2: vec![0xff; 8],
+            merkle_branches: vec![],
+            clean_jobs: true,
+        }
+    }
+
+    #[test]
+    fn submissions_are_rejected_with_explicit_codes() {
+        let j = job();
+        // Well-formed for the current job and channel.
+        assert_eq!(submission_error(1, 1, &j, 5, j.ntime, j.version), None);
+        // Wrong channel.
+        assert_eq!(
+            submission_error(2, 1, &j, 5, j.ntime, j.version),
+            Some("invalid-channel-id")
+        );
+        // Stale/unknown job id.
+        assert_eq!(
+            submission_error(1, 1, &j, 6, j.ntime, j.version),
+            Some("stale-share")
+        );
+        // ntime far before the job (beyond the +/- roll window).
+        assert_eq!(
+            submission_error(
+                1,
+                1,
+                &j,
+                5,
+                j.ntime - crate::sv1::MAX_NTIME_ROLL_SECS - 1,
+                j.version
+            ),
+            Some("invalid-ntime")
+        );
+        // A job that predates by a few seconds is still honest work.
+        assert_eq!(submission_error(1, 1, &j, 5, j.ntime - 5, j.version), None);
+        assert_eq!(
+            submission_error(
+                1,
+                1,
+                &j,
+                5,
+                j.ntime + crate::sv1::MAX_NTIME_ROLL_SECS + 1,
+                j.version
+            ),
+            Some("invalid-ntime")
+        );
+        // Rolled bits outside the BIP 320 mask.
+        assert_eq!(
+            submission_error(1, 1, &j, 5, j.ntime, j.version | 0x0000_0001),
+            Some("invalid-version")
+        );
+        // A legal roll passes.
+        assert_eq!(
+            submission_error(1, 1, &j, 5, j.ntime + 30, j.version ^ 0x0000_2000),
+            None
+        );
+    }
+
+    #[test]
+    fn per_connection_replay_set_rejects_a_second_identical_share() {
+        let j = job();
+        let mut seen: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
+        let key = |nonce: u32| nullifier(1, &j.job_id, nonce, j.ntime, j.version, &[0xaa; 8]);
+        assert!(seen.insert(key(7)));
+        assert!(!seen.insert(key(7)), "the same share must not replay");
+        assert!(seen.insert(key(8)));
+    }
+
+    #[test]
+    fn share_difficulty_builder_clamps_to_one() {
+        let (tx, _rx) = mpsc::channel(1);
+        let server = Sv2Server::new(
+            spc_crypto::Network::Regtest,
+            tx,
+            std::sync::Arc::new(std::sync::Mutex::new(Type32Store::default())),
+            8,
+        );
+        assert_eq!(server.share_difficulty(), 1);
+        let server = server.with_share_difficulty(0);
+        assert_eq!(server.share_difficulty(), 1);
+        let server = server.with_share_difficulty(4_096);
+        assert_eq!(server.share_difficulty(), 4_096);
     }
 }

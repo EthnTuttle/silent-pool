@@ -35,6 +35,51 @@ pub enum TemplateError {
     Rejected(String),
 }
 
+/// `Some(true)` when any input of the serialized transaction carries witness
+/// data, `Some(false)` when it is witness-free, `None` when it cannot be
+/// decoded.
+///
+/// A witness transaction needs a witness commitment output in the coinbase
+/// (BIP 141), which this pool does not build yet, so a template containing one
+/// is refused rather than mined as an invalid block.
+pub fn tx_has_witness(raw: &[u8]) -> Option<bool> {
+    let tx: bitcoin::Transaction = bitcoin::consensus::deserialize(raw).ok()?;
+    Some(tx.input.iter().any(|input| !input.witness.is_empty()))
+}
+
+/// `txid` (witness-stripped hash) of a serialized transaction.
+pub fn txid_of(raw: &[u8]) -> Option<[u8; 32]> {
+    use bitcoin::hashes::Hash;
+    let tx: bitcoin::Transaction = bitcoin::consensus::deserialize(raw).ok()?;
+    Some(tx.compute_txid().to_byte_array())
+}
+
+/// Validate the non-coinbase transactions of a template: every one must decode
+/// and be witness-free. Returns the txids in template order.
+pub fn template_txids(transactions: &[Vec<u8>]) -> Result<Vec<[u8; 32]>, TemplateError> {
+    let mut txids = Vec::with_capacity(transactions.len());
+    for (i, raw) in transactions.iter().enumerate() {
+        match tx_has_witness(raw) {
+            Some(false) => {}
+            Some(true) => {
+                return Err(TemplateError::Unavailable(format!(
+                    "template transaction {i} carries witness data (no witness commitment support)"
+                )))
+            }
+            None => {
+                return Err(TemplateError::Unavailable(format!(
+                    "template transaction {i} does not decode"
+                )))
+            }
+        }
+        let txid = txid_of(raw).ok_or_else(|| {
+            TemplateError::Unavailable(format!("template transaction {i} has no txid"))
+        })?;
+        txids.push(txid);
+    }
+    Ok(txids)
+}
+
 #[async_trait]
 pub trait TemplateSource: Send + Sync + 'static {
     async fn get_template(&self) -> Result<Template, TemplateError>;
@@ -78,6 +123,51 @@ impl TemplateSource for MockTemplateSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitcoin::absolute::LockTime;
+    use bitcoin::hashes::Hash;
+    use bitcoin::transaction::Version;
+    use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness};
+
+    fn raw_tx(witness: bool) -> Vec<u8> {
+        let tx = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::null(),
+                script_sig: ScriptBuf::new(),
+                sequence: Sequence::MAX,
+                witness: if witness {
+                    Witness::from_slice(&[vec![0u8; 4]])
+                } else {
+                    Witness::default()
+                },
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(1),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+        bitcoin::consensus::serialize(&tx)
+    }
+
+    #[test]
+    fn witness_transactions_are_refused() {
+        assert_eq!(tx_has_witness(&raw_tx(false)), Some(false));
+        assert_eq!(tx_has_witness(&raw_tx(true)), Some(true));
+        assert_eq!(tx_has_witness(&[0x00, 0x01]), None);
+
+        assert!(template_txids(&[raw_tx(false)]).is_ok());
+        let err = template_txids(&[raw_tx(false), raw_tx(true)]).unwrap_err();
+        assert!(err.to_string().contains("witness"), "{err}");
+        assert!(template_txids(&[vec![0u8; 3]]).is_err());
+    }
+
+    #[test]
+    fn txids_match_the_witness_stripped_hash() {
+        let raw = raw_tx(false);
+        let tx: Transaction = bitcoin::consensus::deserialize(&raw).unwrap();
+        assert_eq!(txid_of(&raw), Some(tx.compute_txid().to_byte_array()));
+    }
 
     fn template() -> Template {
         Template {
