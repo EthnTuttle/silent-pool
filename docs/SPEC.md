@@ -10,7 +10,7 @@ status: current
 supersedes: none
 changelog:
   - "2026-11-02 (f): Tor is a supported transport in both directions, with no protocol change. §3.8 added: `[reach]` publishes onion endpoints and forces every onion-published listener onto loopback (fail closed); `[net] proxy` routes `spc-agent`'s upstream/JDP/Ark traffic and the `ark` role's gRPC through a remote-resolution SOCKS5 proxy with per-connection stream isolation; a `.onion` target with no proxy is a startup error; downstream SV1 stays plain TCP. §6.1 `/api/pool` publishes `endpoints`; §6.3 `[reach]` and `[net]`; §9 one onion address per front (or OnionBalance) with the onion key backed up; §11.3/§11.7/§11.10 Ark-role and mailbox egress, one connection per epoch read; `/api/pool` and abuse controls no longer assume a peer IP. See docs/decisions/2026-11-02-tor-transport.md."
-  - "2026-11-02 (e): front/settlement/JDS integration. §4.3 `high_water` is the newest *sealed* slice the window consumed (`0` when the window holds none), never the still-open finding slice, so the settlement retry heuristic is gone. §5.1 `slice_id = front_id << 56 | local_seq`, `local_seq = max(last + 1, unix_ms)` masked to 56 bits (same composition as the §3.5 distribution id), seeded from the bootstrap tail so restarts never reuse or collide. §5.3 the bootstrap snapshot's `window_tail` rebuilds the live window (credits parsed, newest first, truncated to `retain_windows`; rows without credits are skipped, never zero-filled) and the high-water mark/sequence come from the newest restored id; a restored balance whose miner keys are unknown is held on the `pending` rail rather than paid to a guessed output. §4.7/§11.2 JD weights come from the same routing as the coinbase distribution (`build_weights`) and are published as `distribution_from_weights(weights, p_x_by_id, pool_script, a_send_x, dust_limit)`; the sats-as-weights conversion is removed. §2.2/§3.5 the front refreshes the template on `[template] refresh_interval_ms` (default 1000, MUST be > 0) and republishes jobs plus the JDS distribution only when `(height, prev_hash, fingerprint)` changed, so an external new block cannot leave them stale. See docs/decisions/2026-11-02-share-target-policy.md."
+  - "2026-11-02 (e): front/settlement/JDS integration. §4.3 `high_water` is the newest *sealed* slice the window consumed (`0` when the window holds none), never the still-open finding slice, so the settlement retry heuristic is gone. §5.1 `slice_id = front_id << 56 | local_seq`, `local_seq = max(last + 1, unix_ms)` masked to 56 bits (same composition as the §3.5 distribution id), seeded from the bootstrap tail so restarts never reuse or collide. §5.3 the bootstrap snapshot's `window_tail` rebuilds the live window (credits parsed, newest first, truncated to the configured `[accounting] retain_windows`; rows without credits are skipped, never zero-filled) and the high-water mark/sequence come from the newest restored id; a restored balance whose miner keys are unknown is held on the `pending` rail rather than paid to a guessed output. §4.7/§11.2 JD weights come from the same routing as the coinbase distribution (`build_weights`) and are published as `distribution_from_weights(weights, p_x_by_id, pool_script, a_send_x, dust_limit)`; the sats-as-weights conversion is removed. §2.2/§3.5 the front refreshes the template on `[template] refresh_interval_ms` (default 1000, MUST be > 0) and republishes jobs plus the JDS distribution only when `(height, prev_hash, fingerprint)` changed, so an external new block cannot leave them stale. See docs/decisions/2026-11-02-share-target-policy.md."
   - "2026-11-02 (d): share target/difficulty policy added. `[accounting] share_difficulty` (default 1, MUST be > 0) defines the pool share difficulty; every ingress validates a share against `effective_target = max(target_for_difficulty(share_difficulty), network_target)` (never harder than the network target) and the front credits `d = min(share_difficulty, max(1, round(network_difficulty)))`, which is never 0. The same `d` is used for the `ShareRec`, the §4.3 window target (`N x d`, was `N x network difficulty`) and the slice aggregates; block detection still requires the consensus target. §3.4 is amended: SV1 sends `mining.set_difficulty` and rejects a submission below its target (`low difficulty share`), SV2 announces `effective_target` in `OpenExtendedMiningChannelSuccess.target` and rejects with `SubmitSharesError{difficulty-too-low}`; the front re-checks before accounting. Share `job_fees` are used when non-zero (JD mode), falling back to the template fees in pool-template mode. `front` now applies the bootstrap snapshot (pending balances, Ark registrations) and `spc:front:events` (`LedgerApplied` deltas, `ArkRegApplied`) and carries trimmed/held balances into the next distribution. See docs/decisions/2026-11-02-share-target-policy.md."
   - "2026-11-02 (c): O13 resolved - the agent's SP-aware wallet is a thin in-tree wallet over `ark-lib` + `bark-server-rpc` (no upstream bark patch or bark-wallet fork for v0.1), exactly as `spc_ark_client` validated against a stock server. Recorded gap: in-round refresh and unilateral exit of `u_i`-keyed VTXOs ride stock bark key lookups, so v0.1 Ark-tier VTXOs cannot be refreshed in a round or exited; durability paths are arkoor spend, cooperative offboard and the §11.5 shutdown warning. Pool-side transport is a stock `bark-wallet` send-only adapter plus a separate board/maturity loop. bark pinned at `ark-bitcoin/bark @ c419159fa54085572f8ca72d2ba1716556a9d3eb` (UPSTREAM_DEPS.md; pool uses stock `bark-wallet` + `ark-lib`, agent uses `ark-lib` + `bark-server-rpc`). See docs/decisions/2026-11-02-bark-adapter.md."
   - "2026-11-02 (b): API challenge signature defined as BIP340 by `b_scan` over `hash_SPc/Api(nonce bytes)` (was the informal `schnorr_sig(b_scan, \"SPc/api\" ‖ nonce)`); `spc:slices` payload added to WIRE-FORMATS §3.6."
@@ -287,6 +287,8 @@ Distribution recomputation is bounded: weights change with every share, but the 
 
 ### 3.4 Share handling
 
+Share target validation follows changelog (d) and `docs/decisions/2026-11-02-share-target-policy.md`: every ingress validates a share against `effective_target = max(target_for_difficulty(share_difficulty), network_target)`. SV1 sends `mining.set_difficulty` and rejects a submission below its target (`low difficulty share`); SV2 announces `effective_target` in `OpenExtendedMiningChannelSuccess.target` and rejects with `SubmitSharesError{difficulty-too-low}`. The front re-checks the target before accounting.
+
 Validate as SRI does (target, job, ntime, version mask), then:
 
 ```
@@ -376,7 +378,7 @@ Tor is a **transport option, not a protocol mode**. It changes no message, no en
 
 | Name | Default | Meaning |
 |---|---|---|
-| `N` | 8 | window target `= N × D`, `D` = network difficulty at the found block (TIDES and SLICE both use 8, [PPLNS-JD](research/wiki/concepts/pplns-jd.md)) |
+| `N` | 8 | window target `= N × d`, `d` = credited share difficulty (changelog (d)); TIDES and SLICE both use 8, [PPLNS-JD](research/wiki/concepts/pplns-jd.md) |
 | `δ` (`slice_fee_delta_sats`) | 0 in pool-template mode; 50 000 under JD | new slice when a share's job fees `≥ f_ref + δ` |
 | `max_slice_shares` | 65 000 | hard seal (keeps `GetShares` payloads bounded) |
 | `fee_bps` | 100 | pool fee, taken from both subsidy and fees |
@@ -406,14 +408,16 @@ Leaves contain no `sp_id`, so `GetShares` responses and retained share blobs car
 ### 4.3 Window
 
 ```
-select_window(slices_desc_from_finding_slice, D):
+select_window(slices_desc_from_finding_slice, d):
     skip the slice containing the block-finding share            # excluded from reward (extension.md)
-    take whole slices while Σ difficulty < N × D; include the slice that crosses the threshold
+    take whole slices while Σ difficulty < N × d; include the slice that crosses the threshold
     t = slices taken
     high_water = {front_id: last_slice_stream_id} for each front whose slices are in the window    # settlement and the type-32 window reconstruct exactly the slices at or below the vector; fork-ineligibility per MULTI-REGION §1 stale-fork rule
 ```
 
-Whole-slice granularity makes the window slightly larger than `N × D`; this matches `extension.md`'s definition and keeps `GetWindow` exact.
+The window target is `N × d`, where `d = min(share_difficulty, max(1, round(network_difficulty)))`; the same `d` is used in `ShareRec`, the window target and the slice aggregates (changelog (d), `docs/decisions/2026-11-02-share-target-policy.md`). Block detection still requires the consensus target.
+
+Whole-slice granularity makes the window slightly larger than `N × d`; this matches `extension.md`'s definition and keeps `GetWindow` exact.
 
 ### 4.4 Scores and payout (lorbax formula)
 

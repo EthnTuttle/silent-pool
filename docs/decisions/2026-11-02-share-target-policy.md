@@ -86,9 +86,8 @@ window target `N x D` rounded to nothing so the window could not fill.
 
 ## Edits applied
 
-- `docs/SPEC.md` frontmatter changelog (2026-11-02 (d)): §3.4 share validation
-  and §4.3 window target amended as above. The §3.4/§4.3 prose bodies still
-  need the same sentence inline; the changelog records the amendment.
+- `docs/SPEC.md`: frontmatter changelog (2026-11-02 (d)) and the §3.4/§4.3
+  prose bodies now state the share-target and window-target policy inline.
 - `bins/spc-pool/src/sv1.rs`: policy functions and SV1 enforcement.
 - `bins/spc-pool/src/sv1_server.rs`, `bins/spc-pool/src/sv2_server.rs`: announced
   difficulty/target and share validation.
@@ -122,7 +121,8 @@ found a block, so an external new block left the JDS and miner jobs stale.
    or collides with an id settlement has already seen.
 3. **The bootstrap snapshot restores the window.** Each `SliceRow` with
    per-identity credits becomes a `SliceAgg` (credits parsed, `n` newest first,
-   truncated to `keep_slices`); rows without credits, with duplicate credits or
+   truncated to the configured `[accounting] retain_windows`); rows without
+   credits, with duplicate credits or
    whose stored difficulty disagrees with the credits are skipped rather than
    zero-filled. `high_water` and the local sequence come from the newest
    restored id. A restored balance whose miner keys are not known (the snapshot
