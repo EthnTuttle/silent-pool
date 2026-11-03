@@ -28,10 +28,11 @@
           cargoLock.lockFile = ./Cargo.lock;
           doCheck = false;
         };
-        mkBinary = name: pkgs.rustPlatform.buildRustPackage (common // {
+        mkBinary = name: features: pkgs.rustPlatform.buildRustPackage (common // {
           pname = name;
           version = "0.1.0";
-          cargoBuildFlags = [ "-p" name ];
+          cargoBuildFlags = [ "-p" name ]
+            ++ pkgs.lib.optional (features != "") [ "--features" features ];
           meta.mainProgram = name;
         });
         mkCargoCheck = name: buildPhase: pkgs.rustPlatform.buildRustPackage (common // {
@@ -46,10 +47,10 @@
         };
       in {
         packages = {
-          spc-pool = mkBinary "spc-pool";
-          spc-agent = mkBinary "spc-agent";
-          spc-scan = mkBinary "spc-scan";
-          default = mkBinary "spc-pool";
+          spc-pool = mkBinary "spc-pool" "rpc";
+          spc-agent = mkBinary "spc-agent" "";
+          spc-scan = mkBinary "spc-scan" "";
+          default = mkBinary "spc-pool" "rpc";
         };
 
         checks = {
@@ -79,7 +80,7 @@
             checkPhase = ''
               runHook preCheck
               cargo test -p spc-crypto --features ark --offline
-              cargo test -p spc-pool --features ark --offline
+              cargo test -p spc-pool --features rpc,ark --offline
               runHook postCheck
             '';
           });
