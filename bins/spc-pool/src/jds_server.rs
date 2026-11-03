@@ -279,7 +279,7 @@ impl JdsServerRef {
                                                 // The pool allows mining on
                                                 // the declared job with the
                                                 // same token.
-                                                new_mining_job_token: msg.mining_job_token.clone(),
+                                                new_mining_job_token: msg.mining_job_token,
                                             };
                                             write_msg(
                                                 &mut write,
