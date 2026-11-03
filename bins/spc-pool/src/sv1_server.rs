@@ -39,11 +39,23 @@ impl Sv1Server {
         shares: mpsc::Sender<Share>,
     ) -> Self {
         let (jobs, _) = broadcast::channel(16);
+        // A configured value is validated upstream; this path only sees a
+        // direct (test/dev) caller. An invalid value is logged rather than
+        // silently announced as difficulty 1. Runtime VarDiff updates go
+        // through `Session::apply_share_difficulty`, which keeps the last good
+        // value instead of accepting the bad one.
+        let share_difficulty = match share_difficulty_from_float(difficulty) {
+            Some(d) => d,
+            None => {
+                tracing::warn!(difficulty, "invalid configured share difficulty; using 1");
+                1
+            }
+        };
         Self {
             network,
             extranonce1_len,
             extranonce2_len,
-            share_difficulty: share_difficulty_from_float(difficulty),
+            share_difficulty,
             current: Arc::new(Mutex::new(None)),
             jobs,
             shares,

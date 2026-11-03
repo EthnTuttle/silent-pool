@@ -115,16 +115,21 @@ pub fn meets_target(hash: [u8; 32], target: Target) -> bool {
 }
 
 /// Interpret the SV1 `mining.set_difficulty` value as a share difficulty.
-/// A non-finite or sub-1 value clamps to 1 (fail closed: a pool never asks for
-/// less than difficulty 1).
-pub fn share_difficulty_from_float(difficulty: f64) -> u64 {
+///
+/// `None` means the value is not a usable difficulty: non-finite, NaN, or
+/// below 1. Callers must not coerce that to 1 — a broken VarDiff response is
+/// a bug, not a request to mine at difficulty 1. A runtime caller should drop
+/// the tweak, keep its last good difficulty, and log. The startup constructor
+/// has no previous value, so it logs and uses 1 only to keep a direct
+/// (non-validated) API call running.
+pub fn share_difficulty_from_float(difficulty: f64) -> Option<u64> {
     if !difficulty.is_finite() || difficulty < 1.0 {
-        return 1;
+        return None;
     }
     if difficulty >= u64::MAX as f64 {
-        return u64::MAX;
+        return Some(u64::MAX);
     }
-    difficulty.round() as u64
+    Some(difficulty.round() as u64)
 }
 
 /// BIP 320 version-rolling mask: the header bits a miner may change without
@@ -252,6 +257,27 @@ impl Session {
     /// The pool share difficulty this session announces and enforces.
     pub fn share_difficulty(&self) -> u64 {
         self.share_difficulty
+    }
+
+    /// Apply a VarDiff response. An invalid value is rejected, the current
+    /// difficulty is kept, and the reason is logged; the caller may send a
+    /// fresh `mining.set_difficulty` with the retained value if it wants to
+    /// resynchronise.
+    pub fn apply_share_difficulty(&mut self, difficulty: f64) -> bool {
+        match share_difficulty_from_float(difficulty) {
+            Some(next) => {
+                self.share_difficulty = next;
+                true
+            }
+            None => {
+                tracing::warn!(
+                    difficulty,
+                    keep = self.share_difficulty,
+                    "invalid mining.set_difficulty; keeping the last good value"
+                );
+                false
+            }
+        }
     }
 
     pub fn sp_id(&self) -> Option<[u8; 32]> {
@@ -772,14 +798,27 @@ mod tests {
     }
 
     #[test]
-    fn set_difficulty_float_clamps_to_at_least_one() {
-        assert_eq!(share_difficulty_from_float(1.0), 1);
-        assert_eq!(share_difficulty_from_float(7.4), 7);
-        assert_eq!(share_difficulty_from_float(0.0), 1);
-        assert_eq!(share_difficulty_from_float(-3.0), 1);
-        assert_eq!(share_difficulty_from_float(f64::NAN), 1);
-        assert_eq!(share_difficulty_from_float(f64::INFINITY), 1);
-        assert_eq!(share_difficulty_from_float(1e30), u64::MAX);
+    fn set_difficulty_float_rejects_non_finite_and_sub_one() {
+        assert_eq!(share_difficulty_from_float(1.0), Some(1));
+        assert_eq!(share_difficulty_from_float(7.4), Some(7));
+        assert_eq!(share_difficulty_from_float(0.0), None);
+        assert_eq!(share_difficulty_from_float(-3.0), None);
+        assert_eq!(share_difficulty_from_float(f64::NAN), None);
+        assert_eq!(share_difficulty_from_float(f64::INFINITY), None);
+        assert_eq!(share_difficulty_from_float(f64::NEG_INFINITY), None);
+        assert_eq!(share_difficulty_from_float(1e30), Some(u64::MAX));
+    }
+
+    #[test]
+    fn invalid_set_difficulty_keeps_the_last_good_value() {
+        let mut s = session();
+        assert_eq!(s.share_difficulty(), 1);
+        assert!(s.apply_share_difficulty(8.0));
+        assert_eq!(s.share_difficulty(), 8);
+        assert!(!s.apply_share_difficulty(f64::NAN));
+        assert_eq!(s.share_difficulty(), 8, "NaN must not drop to 1");
+        assert!(!s.apply_share_difficulty(0.5));
+        assert_eq!(s.share_difficulty(), 8, "sub-1 must not drop to 1");
     }
 
     /// Add one to a 32-byte big-endian integer (saturating).
