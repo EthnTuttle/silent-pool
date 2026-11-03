@@ -2,11 +2,26 @@
 //! pool's float. The role deliberately sees no identity data (SPEC §11.3).
 
 use std::str::FromStr;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use secp256k1::XOnlyPublicKey;
 use spc_ext::{ArkSendOrder, ArkSendReceipt, ReceiptStatus};
 use spc_store::redis::{RedisError, Streams};
 use thiserror::Error;
+use tokio::process::Command;
+
+/// Production stream names (SPEC §5.2). Tests can override them with
+/// [`ArkService::with_names`] so a shared Redis is not polluted.
+pub const ORDERS_STREAM: &str = "spc:ark:orders";
+pub const RECEIPTS_STREAM: &str = "spc:ark:receipts";
+pub const GROUP: &str = "ark";
+pub const CONSUMER: &str = "ark-0";
+
+/// How often this consumer re-reads its own pending entries: the retry path
+/// for a `Hold`ed order once the tip reaches `not_before_height`.
+const PENDING_RETRY_INTERVAL: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Error)]
 pub enum ArkError {
@@ -18,6 +33,8 @@ pub enum ArkError {
     NotDue,
     #[error("duplicate order")]
     Duplicate,
+    #[error("order outcome is ambiguous; operator or receipt required")]
+    Ambiguous,
     #[error("daily cap reached")]
     DailyCap,
     #[error("bad address")]
@@ -34,6 +51,19 @@ pub enum ArkError {
 pub enum Action {
     Send,
     Hold,
+}
+
+/// What happened to one order. `Held` must stay unacknowledged: its stream
+/// entry is retried from this consumer's pending list when the tip advances.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Processed {
+    Sent,
+    Held,
+}
+
+/// The only acknowledgement decision: a held order is never acked.
+fn should_ack(outcome: Processed) -> bool {
+    matches!(outcome, Processed::Sent)
 }
 
 pub struct OrderVerifier {
@@ -118,6 +148,18 @@ pub trait OrderDedupe: Send + Sync {
     /// Mark `order_id` as seen. `Ok(true)` on the first sighting inside the
     /// retry window, `Ok(false)` on a duplicate.
     async fn mark(&self, order_id: &[u8; 16]) -> Result<bool, ArkError>;
+
+    /// Pin an order whose send outcome is unknown (a duplicate outside the
+    /// retry window, a lost receipt). Pinned orders are never re-sent until a
+    /// receipt or an operator clears the pin.
+    async fn pin(&self, _order_id: &[u8; 16]) -> Result<(), ArkError> {
+        Ok(())
+    }
+
+    /// True when `order_id` is pinned as ambiguous.
+    async fn is_pinned(&self, _order_id: &[u8; 16]) -> Result<bool, ArkError> {
+        Ok(false)
+    }
 }
 
 /// Redis-backed dedupe set with a TTL of `retry_blocks * 600` s, refreshed
@@ -131,6 +173,11 @@ pub struct SeenOrders {
 impl SeenOrders {
     /// One set per pool; members are the raw 16-byte order ids.
     pub const KEY: &'static str = "spc:ark:seen";
+    /// Orders whose send outcome is unknown. No TTL: the fail-closed state
+    /// must outlive the dedupe retry window (a multi-day outage must not
+    /// turn an ambiguous order into a second send). `payout` clears an entry
+    /// when a receipt resolves it.
+    pub const AMBIGUOUS_KEY: &'static str = "spc:ark:ambiguous";
 
     pub fn new(streams: Streams, retry_blocks: u32) -> Self {
         Self {
@@ -150,6 +197,20 @@ impl OrderDedupe for SeenOrders {
         self.streams.expire(Self::KEY, self.ttl_secs).await?;
         Ok(added)
     }
+
+    async fn pin(&self, order_id: &[u8; 16]) -> Result<(), ArkError> {
+        self.streams
+            .sadd(Self::AMBIGUOUS_KEY, &order_id[..])
+            .await?;
+        Ok(())
+    }
+
+    async fn is_pinned(&self, order_id: &[u8; 16]) -> Result<bool, ArkError> {
+        Ok(self
+            .streams
+            .sismember(Self::AMBIGUOUS_KEY, &order_id[..])
+            .await?)
+    }
 }
 
 /// The verified, deduped send decision, before the receipt is emitted.
@@ -162,6 +223,9 @@ async fn decide_send<T: ArkTransport, D: OrderDedupe>(
     order: &ArkSendOrder,
     tip: u32,
 ) -> Result<Option<(Vec<u8>, u32)>, ArkError> {
+    if dedupe.is_pinned(&order.order_id).await? {
+        return Err(ArkError::Ambiguous);
+    }
     match verifier.check(order, tip)? {
         Action::Hold => Ok(None),
         Action::Send => {
@@ -186,12 +250,124 @@ pub trait ArkTransport: Send + Sync + 'static {
     async fn send(&self, address: &str, sats: u64) -> Result<(Vec<u8>, u32), String>;
 }
 
+/// Blanket implementation for Box<dyn ArkTransport>
+#[async_trait::async_trait]
+impl ArkTransport for Box<dyn ArkTransport> {
+    async fn send(&self, address: &str, sats: u64) -> Result<(Vec<u8>, u32), String> {
+        (**self).send(address, sats).await
+    }
+}
+
+/// External command transport for Ark sends.
+/// The command receives JSON on stdin: `{"address": "<ark1...>", "sats": 12345}`
+/// It MUST return JSON on stdout: `{"vtxo_id": "<hex>", "expiry_height": <u32>}`
+/// Non-zero exit, timeout, invalid JSON, or wrong types are treated as transport failures.
+pub struct ExternalCommandTransport {
+    command: String,
+    timeout: Duration,
+}
+
+impl ExternalCommandTransport {
+    pub fn new(command: String, timeout_secs: u64) -> Self {
+        Self {
+            command,
+            timeout: Duration::from_secs(timeout_secs),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ArkTransport for ExternalCommandTransport {
+    async fn send(&self, address: &str, sats: u64) -> Result<(Vec<u8>, u32), String> {
+        // Defensive re-parse of the address to ensure it's valid before sending
+        let _parsed: ark::Address = address
+            .parse()
+            .map_err(|e| format!("transport: address parse failed: {e}"))?;
+
+        let input = serde_json::json!({
+            "address": address,
+            "sats": sats,
+        });
+
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg(&self.command)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("transport: failed to spawn command: {e}"))?;
+
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "transport: failed to open stdin".to_string())?;
+        use tokio::io::AsyncWriteExt;
+        let mut stdin = stdin;
+        stdin
+            .write_all(input.to_string().as_bytes())
+            .await
+            .map_err(|e| format!("transport: failed to write stdin: {e}"))?;
+        stdin
+            .shutdown()
+            .await
+            .map_err(|e| format!("transport: failed to close stdin: {e}"))?;
+
+        let output = tokio::time::timeout(self.timeout, child.wait_with_output())
+            .await
+            .map_err(|_| format!("transport: command timed out after {:?}", self.timeout))?
+            .map_err(|e| format!("transport: command failed: {e}"))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!(
+                "transport: command exited with {}: {}",
+                output.status, stderr
+            ));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let result: serde_json::Value = serde_json::from_str(&stdout)
+            .map_err(|e| format!("transport: invalid JSON output: {e}"))?;
+
+        let vtxo_id_hex = result
+            .get("vtxo_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "transport: missing or invalid 'vtxo_id' field".to_string())?;
+        let expiry_height = result
+            .get("expiry_height")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| "transport: missing or invalid 'expiry_height' field".to_string())?;
+
+        let vtxo_id_bytes =
+            hex::decode(vtxo_id_hex).map_err(|e| format!("transport: invalid vtxo_id hex: {e}"))?;
+
+        if vtxo_id_bytes.len() != 8 {
+            return Err(format!(
+                "transport: vtxo_id must be 8 bytes (16 hex chars), got {}",
+                vtxo_id_bytes.len()
+            ));
+        }
+
+        let mut vtxo_id = [0u8; 8];
+        vtxo_id.copy_from_slice(&vtxo_id_bytes);
+
+        Ok((vtxo_id.to_vec(), expiry_height as u32))
+    }
+}
+
 pub struct ArkService<T: ArkTransport, D: OrderDedupe> {
     verifier: OrderVerifier,
     dedupe: D,
     transport: T,
     streams: Streams,
-    tip: u32,
+    tip: Arc<AtomicU32>,
+    orders_stream: String,
+    receipts_stream: String,
+    group: String,
+    consumer: String,
 }
 
 impl<T: ArkTransport, D: OrderDedupe> ArkService<T, D> {
@@ -207,60 +383,182 @@ impl<T: ArkTransport, D: OrderDedupe> ArkService<T, D> {
             dedupe,
             transport,
             streams,
-            tip,
+            tip: Arc::new(AtomicU32::new(tip)),
+            orders_stream: ORDERS_STREAM.to_string(),
+            receipts_stream: RECEIPTS_STREAM.to_string(),
+            group: GROUP.to_string(),
+            consumer: CONSUMER.to_string(),
         }
     }
 
+    /// Override the stream/group names (tests, or a per-front deployment
+    /// namespace). The production defaults are the SPEC §5.2 names.
+    pub fn with_names(
+        mut self,
+        orders_stream: impl Into<String>,
+        receipts_stream: impl Into<String>,
+        group: impl Into<String>,
+        consumer: impl Into<String>,
+    ) -> Self {
+        self.orders_stream = orders_stream.into();
+        self.receipts_stream = receipts_stream.into();
+        self.group = group.into();
+        self.consumer = consumer.into();
+        self
+    }
+
+    /// Get the current chain tip height.
+    pub fn tip(&self) -> u32 {
+        self.tip.load(Ordering::Acquire)
+    }
+
+    /// Update the chain tip height.
+    pub fn set_tip(&self, tip: u32) {
+        self.tip.store(tip, Ordering::Release);
+    }
+
+    /// Get a clone of the tip Arc for sharing with background tasks.
+    pub fn tip_arc(&self) -> Arc<AtomicU32> {
+        self.tip.clone()
+    }
+
     pub async fn run(&mut self) -> Result<(), ArkError> {
-        self.streams.ensure_group("spc:ark:orders", "ark").await?;
+        self.streams
+            .ensure_group(&self.orders_stream, &self.group)
+            .await?;
+        let mut last_pending = Instant::now()
+            .checked_sub(PENDING_RETRY_INTERVAL)
+            .unwrap_or_else(Instant::now);
         loop {
-            let entries = self
-                .streams
-                .read_group("spc:ark:orders", "ark", "ark-0", 16)
-                .await?;
-            for (id, payload) in entries {
-                match ArkSendOrder::decode(&payload) {
-                    Ok(order) => {
-                        // A rejected or failed order is a terminal verdict for
-                        // this stream entry: log, ack, and leave re-emission
-                        // policy to `payout` (SPEC §11.3). A poison order must
-                        // not kill the service (the seen set survives reboots,
-                        // so a replayed order WILL be seen again).
-                        if let Err(e) = self.process(&order).await {
-                            tracing::warn!(error = %e, "ark order not executed");
-                        }
-                    }
-                    Err(e) => tracing::warn!(error = %e, "undecodable ark order dropped"),
-                }
-                self.streams.ack("spc:ark:orders", "ark", &id).await?;
+            self.pump_once().await?;
+            if last_pending.elapsed() >= PENDING_RETRY_INTERVAL {
+                last_pending = Instant::now();
+                self.retry_pending().await?;
             }
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
     }
 
-    pub async fn process(&mut self, order: &ArkSendOrder) -> Result<(), ArkError> {
+    /// Read and process new order entries. Held orders are left unacked, so
+    /// they remain in this consumer's pending list for [`Self::retry_pending`].
+    pub async fn pump_once(&mut self) -> Result<(), ArkError> {
+        let entries = self
+            .streams
+            .read_group(&self.orders_stream, &self.group, &self.consumer, 16)
+            .await?;
+        for (id, payload) in entries {
+            // A poison order (undecodable) is terminal; a held order is not.
+            if self.on_entry(&payload).await? {
+                self.streams
+                    .ack(&self.orders_stream, &self.group, &id)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Re-read this consumer's unacknowledged entries. This is the only path
+    /// that can execute a `Hold`ed order: nothing else re-delivers it.
+    pub async fn retry_pending(&mut self) -> Result<(), ArkError> {
+        let pending = self
+            .streams
+            .read_pending(&self.orders_stream, &self.group, &self.consumer, 64)
+            .await?;
+        for (id, payload) in pending {
+            if self.on_entry(&payload).await? {
+                self.streams
+                    .ack(&self.orders_stream, &self.group, &id)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Handle one stream payload. Returns true when the entry may be acked.
+    async fn on_entry(&mut self, payload: &[u8]) -> Result<bool, ArkError> {
+        let order = match ArkSendOrder::decode(payload) {
+            Ok(order) => order,
+            Err(e) => {
+                tracing::warn!(error = %e, "undecodable ark order dropped");
+                return Ok(true);
+            }
+        };
+        self.handle(&order).await
+    }
+
+    /// Process one order and decide whether its entry may be acknowledged.
+    /// `Held` is never acked (it must be retried); a terminal rejection or a
+    /// completed send emits a receipt and is acked.
+    pub async fn handle(&mut self, order: &ArkSendOrder) -> Result<bool, ArkError> {
+        match self.process(order).await {
+            Ok(outcome) => Ok(should_ack(outcome)),
+            Err(ArkError::Duplicate) | Err(ArkError::Ambiguous) => {
+                // The dedupe mark is written before the transport call, so a
+                // duplicate means an earlier attempt may have paid. We cannot
+                // know whether sats left the float: never claim `Sent` (that
+                // would let scrub erase the attribution) and never credit
+                // pending (that would owe a second time). Pin the order and
+                // leave its stream entry unacknowledged so it stays visibly
+                // in flight; `payout` keeps the `ark_payout` row scheduled
+                // until an operator or a real receipt resolves it.
+                self.dedupe.pin(&order.order_id).await?;
+                tracing::error!(
+                    order = %hex::encode(order.order_id),
+                    "ambiguous ark order: an earlier send was attempted but no receipt is known;                      not re-sending, not marking sent/pending (operator action required)"
+                );
+                Ok(false)
+            }
+            Err(e) => {
+                // A rejected or failed order is a terminal verdict for this
+                // entry: emit Failed so `payout` moves the sats to pending,
+                // then ack (decision record 5; SPEC §11.3).
+                tracing::warn!(error = %e, "ark order not executed");
+                self.emit_receipt(ArkSendReceipt {
+                    order_id: order.order_id,
+                    status: ReceiptStatus::Failed,
+                    vtxo_id: Vec::new(),
+                    expiry_height: 0,
+                })
+                .await;
+                Ok(true)
+            }
+        }
+    }
+
+    pub async fn process(&mut self, order: &ArkSendOrder) -> Result<Processed, ArkError> {
+        let current_tip = self.tip();
         let Some((vtxo_id, expiry)) = decide_send(
             &mut self.verifier,
             &self.dedupe,
             &self.transport,
             order,
-            self.tip,
+            current_tip,
         )
         .await?
         else {
-            return Ok(());
+            return Ok(Processed::Held);
         };
-        let receipt = ArkSendReceipt {
+        self.emit_receipt(ArkSendReceipt {
             order_id: order.order_id,
             status: ReceiptStatus::Sent,
             vtxo_id,
             expiry_height: expiry,
+        })
+        .await;
+        Ok(Processed::Sent)
+    }
+
+    async fn emit_receipt(&self, receipt: ArkSendReceipt) {
+        let bytes = match receipt.encode() {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                tracing::error!(error = %e, "ark receipt encode failed");
+                return;
+            }
         };
-        let bytes = receipt
-            .encode()
-            .map_err(|e| ArkError::Transport(e.to_string()))?;
-        let _ = self.streams.add("spc:ark:receipts", &bytes).await;
-        Ok(())
+        if let Err(e) = self.streams.add(&self.receipts_stream, &bytes).await {
+            tracing::error!(error = %e, "ark receipt add failed");
+        }
     }
 }
 
@@ -485,6 +783,73 @@ mod tests {
         assert_eq!(v.daily_sats, 120);
     }
 
+    /// A `Hold` is a retry, never an acknowledgement (SPEC §11.3). This is
+    /// the pure half of the lifecycle; the Redis test below proves the stream
+    /// entry stays pending and is retried after the tip advances.
+    #[test]
+    fn hold_is_not_acknowledged() {
+        assert!(!should_ack(Processed::Held));
+        assert!(should_ack(Processed::Sent));
+    }
+
+    /// The blocker regression: an order that is not due must stay in the
+    /// consumer group's pending list, and the pending retry must execute it
+    /// once the tip reaches `not_before_height`.
+    #[tokio::test]
+    async fn held_order_stays_unacked_until_due() {
+        let Ok(url) = std::env::var("SPC_TEST_REDIS_URL") else {
+            return;
+        };
+        let streams = Streams::connect(&url).await.expect("redis");
+        let kp = key(3);
+        let (addr, ark_id) = ark_address(9);
+        let suffix = rand::random::<u64>();
+        let orders = format!("spc:test:ark:orders:{suffix}");
+        let receipts = format!("spc:test:ark:receipts:{suffix}");
+        let group = "ark";
+        let consumer = "ark-test";
+        streams.ensure_group(&orders, group).await.unwrap();
+        streams.ensure_group(&receipts, group).await.unwrap();
+
+        let o = order(&kp, &addr, 100, 800_006);
+        streams.add(&orders, &o.encode().unwrap()).await.unwrap();
+
+        let mut svc = ArkService::new(
+            verifier(&kp, ark_id, 330, 0),
+            SharedSet::default(),
+            OkTransport,
+            streams.clone(),
+            800_005,
+        )
+        .with_names(&orders, &receipts, group, consumer);
+
+        // Not due: held, still pending, no receipt.
+        svc.pump_once().await.unwrap();
+        assert_eq!(
+            streams
+                .read_pending(&orders, group, consumer, 10)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(streams.len(&receipts).await.unwrap(), 0);
+
+        // A retry at the same tip is still held and still not acked.
+        svc.retry_pending().await.unwrap();
+        assert_eq!(streams.len(&receipts).await.unwrap(), 0);
+
+        // Due: the same pending entry is sent and acknowledged.
+        svc.set_tip(800_006);
+        svc.retry_pending().await.unwrap();
+        assert_eq!(streams.len(&receipts).await.unwrap(), 1);
+        assert!(streams
+            .read_pending(&orders, group, consumer, 10)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
     #[tokio::test]
     async fn held_orders_are_not_marked() {
         let kp = key(3);
@@ -501,5 +866,78 @@ mod tests {
             .await
             .unwrap()
             .is_some());
+    }
+
+    /// Reviewer 2: a duplicate means an earlier attempt was made and its
+    /// outcome is unknown. It must not be turned into a `Sent` receipt (that
+    /// marks the row sent and lets scrub erase attribution), must not credit
+    /// pending, and must not be acknowledged.
+    #[tokio::test]
+    async fn duplicate_order_is_not_acked_and_emits_no_receipt() {
+        let Ok(url) = std::env::var("SPC_TEST_REDIS_URL") else {
+            return;
+        };
+        let streams = Streams::connect(&url).await.expect("redis");
+        let kp = key(3);
+        let (addr, ark_id) = ark_address(9);
+        let mut o = order(&kp, &addr, 100, 0);
+        o.order_id = rand::random();
+        o.sign(&kp).unwrap();
+
+        // Simulate an earlier attempt that marked the dedupe set but never
+        // produced a receipt (crash or lost receipt).
+        let dedupe = SharedSet::default();
+        dedupe.0.lock().unwrap().insert(o.order_id);
+        let suffix = rand::random::<u64>();
+        let orders = format!("spc:test:ark:orders:{suffix}");
+        let receipts = format!("spc:test:ark:receipts:{suffix}");
+        let mut svc = ArkService::new(
+            verifier(&kp, ark_id, 330, 0),
+            dedupe,
+            OkTransport,
+            streams.clone(),
+            0,
+        )
+        .with_names(&orders, &receipts, "ark", "ark-test");
+
+        let ack = svc.handle(&o).await.unwrap();
+        assert!(!ack, "an ambiguous order stays unacknowledged");
+        assert_eq!(
+            streams.len(&receipts).await.unwrap(),
+            0,
+            "no Sent/Failed receipt is fabricated"
+        );
+    }
+
+    /// Once pinned, an order is never re-sent, even after the dedupe retry
+    /// window has expired and the service has restarted.
+    #[tokio::test]
+    async fn pinned_order_blocks_a_resend() {
+        let Ok(url) = std::env::var("SPC_TEST_REDIS_URL") else {
+            return;
+        };
+        let streams = Streams::connect(&url).await.expect("redis");
+        let kp = key(3);
+        let (addr, ark_id) = ark_address(9);
+        let mut o = order(&kp, &addr, 100, 0);
+        o.order_id = rand::random();
+        o.sign(&kp).unwrap();
+
+        let seen = SeenOrders::new(streams.clone(), 1);
+        seen.pin(&o.order_id).await.unwrap();
+        assert!(seen.is_pinned(&o.order_id).await.unwrap());
+
+        // A fresh dedupe instance (process restart) still sees the pin and
+        // refuses to reach the transport.
+        let restarted = SeenOrders::new(streams.clone(), 1);
+        let mut v = verifier(&kp, ark_id, 330, 0);
+        assert!(matches!(
+            decide_send(&mut v, &restarted, &OkTransport, &o, 0).await,
+            Err(ArkError::Ambiguous)
+        ));
+        streams
+            .srem(SeenOrders::AMBIGUOUS_KEY, &o.order_id)
+            .await
+            .unwrap();
     }
 }
