@@ -565,6 +565,8 @@ pub enum ConfigError {
     OnionNotLoopback(&'static str, &'static str, String),
     #[error("[{0}] targets a .onion address but [net] proxy is not set; there is no direct route (SPEC §3.8)")]
     OnionWithoutProxy(&'static str),
+    #[error("invalid [ark] server URL: {0}")]
+    ArkServer(String),
     #[error("ark enabled without {0}")]
     ArkMissing(&'static str),
     #[error("ark must not be self-hosted on mainnet")]
@@ -717,10 +719,12 @@ impl Config {
                 }
                 // SPEC §3.8/§11.3: a .onion Ark server must be reached through
                 // [net] proxy; a direct dial has no route and no fallback.
-                if let Some(host) = url_host(&ark.server) {
-                    if host_is_onion(&host) && egress.proxy().is_none() {
-                        return Err(ConfigError::OnionWithoutProxy("ark.server"));
-                    }
+                // The URL host parse is strict and fails closed (it gates
+                // egress); the dial path re-enforces the onion rule itself.
+                let server_host =
+                    url_host(&ark.server).map_err(|e| ConfigError::ArkServer(e.to_string()))?;
+                if host_is_onion(&server_host) && egress.proxy().is_none() {
+                    return Err(ConfigError::OnionWithoutProxy("ark.server"));
                 }
             }
         }

@@ -20,12 +20,14 @@
 use std::fmt;
 use std::io;
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use rand::RngCore;
 use serde::Deserialize;
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::time::timeout;
 
 /// `[net]` config block (SPEC §6.3), shared by `spc-pool` (ark role egress)
 /// and `spc-agent` (upstream SV2, JDP, Ark/mailbox egress).
@@ -102,23 +104,60 @@ pub fn host_is_onion(host: &str) -> bool {
     host.to_ascii_lowercase().ends_with(".onion")
 }
 
-/// Best-effort host extraction from a URL (`scheme://[user@]host[:port]/...`),
-/// used only for the `.onion`-without-proxy startup check.
-pub fn url_host(url: &str) -> Option<String> {
-    let (_, rest) = url.split_once("://")?;
-    let authority = rest.split('/').next()?;
-    let authority = authority.rsplit('@').next()?;
-    if let Some(rest) = authority.strip_prefix('[') {
-        let end = rest.find(']')?;
-        return Some(rest[..end].to_string());
+/// Strictly extract the normalized host of an `http(s)://` URL, for the
+/// startup check that a `.onion` Ark server has a proxy (SPEC §3.8, §11.3).
+/// This check gates egress, so it fails closed rather than guessing: more
+/// than one `@`, an empty host, whitespace or control bytes, a non-HTTP
+/// scheme, or a bad port are all errors. The returned host is lowercased
+/// with at most one trailing dot removed; bracketed IPv6 is supported.
+pub fn url_host(url: &str) -> Result<String, NetError> {
+    let bad = || NetError::Url(url.to_string());
+    let (scheme, rest) = url.split_once("://").ok_or_else(bad)?;
+    if !matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https") {
+        return Err(NetError::UrlScheme(url.to_string()));
     }
-    match authority.rsplit_once(':') {
-        Some((host, port)) if !host.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
-            Some(host.to_string())
+    let authority = rest.split(['/', '?', '#']).next().ok_or_else(bad)?;
+    if authority.is_empty()
+        || authority.bytes().any(|b| b <= b' ' || b == 0x7f)
+        || authority.matches('@').count() > 1
+    {
+        return Err(bad());
+    }
+    // One optional `userinfo@`; the host portion itself never contains '@'.
+    let hostport = authority
+        .rsplit_once('@')
+        .map(|(_, h)| h)
+        .unwrap_or(authority);
+    let host = if let Some(bracketed) = hostport.strip_prefix('[') {
+        let end = bracketed.find(']').ok_or_else(bad)?;
+        match bracketed[end + 1..].strip_prefix(':') {
+            None if end + 1 == bracketed.len() => {}
+            Some(port) if port.parse::<u16>().is_ok() => {}
+            _ => return Err(bad()),
         }
-        _ if !authority.is_empty() => Some(authority.to_string()),
-        _ => None,
+        bracketed[..end].to_ascii_lowercase()
+    } else {
+        let named = match hostport.rsplit_once(':') {
+            Some((h, port)) => {
+                // A bad port or a second ':' (unbracketed IPv6) is malformed.
+                if h.contains(':') || port.parse::<u16>().is_err() {
+                    return Err(bad());
+                }
+                h
+            }
+            None => hostport,
+        };
+        let lowered = named.to_ascii_lowercase();
+        let lowered = lowered.strip_suffix('.').unwrap_or(&lowered);
+        if lowered.is_empty() {
+            return Err(bad());
+        }
+        lowered.to_string()
+    };
+    if host.is_empty() {
+        return Err(bad());
     }
+    Ok(host)
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -131,6 +170,10 @@ pub enum NetError {
     ProxyAddress(String),
     #[error("a .onion target ({0}) has no direct route; set [net] proxy (SPEC §3.8)")]
     OnionWithoutProxy(String),
+    #[error("malformed URL authority: '{0}'")]
+    Url(String),
+    #[error("URL must use http(s)://: '{0}'")]
+    UrlScheme(String),
 }
 
 impl Net {
@@ -142,6 +185,7 @@ impl Net {
         Ok(Egress {
             proxy: Some(parse_socks5h(&self.proxy)?),
             stream_isolation: self.stream_isolation.unwrap_or(true),
+            handshake_timeout: HANDSHAKE_TIMEOUT,
         })
     }
 }
@@ -173,12 +217,19 @@ pub fn parse_socks5h(url: &str) -> Result<SocketAddr, NetError> {
 pub struct Egress {
     proxy: Option<SocketAddr>,
     stream_isolation: bool,
+    /// Bounds the proxy TCP connect AND the SOCKS5 handshake, so a dead but
+    /// accepting proxy cannot pin a role's startup or reconnect loop.
+    handshake_timeout: Duration,
 }
+
+/// Default deadline for connecting to the proxy and finishing the handshake.
+pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl Egress {
     pub const DIRECT: Self = Self {
         proxy: None,
         stream_isolation: true,
+        handshake_timeout: HANDSHAKE_TIMEOUT,
     };
 
     pub fn proxy(&self) -> Option<SocketAddr> {
@@ -188,6 +239,11 @@ impl Egress {
     /// Open one connection to `target`. Proxied dials carry freshly drawn
     /// SOCKS credentials when `stream_isolation` is on; nothing is reused
     /// between calls (one connect = one circuit, §11.7 mailbox reads).
+    ///
+    /// The `.onion`-without-proxy rule is enforced HERE, at the dial: the
+    /// config-time checks make the same rejection early and legible, but
+    /// this refusal is the single source of truth - no caller can bypass it
+    /// by constructing a target itself.
     pub async fn connect(&self, target: &Target) -> io::Result<TcpStream> {
         let Some(proxy) = self.proxy else {
             if target.is_onion() {
@@ -201,11 +257,29 @@ impl Egress {
                 Target::Name { host, port } => TcpStream::connect((host.as_str(), *port)).await,
             };
         };
-        let mut stream = TcpStream::connect(proxy).await?;
+        let mut stream = match timeout(self.handshake_timeout, TcpStream::connect(proxy)).await {
+            Ok(inner) => inner?,
+            Err(_) => return Err(timed_out("SOCKS5 proxy connect", self.handshake_timeout)),
+        };
         let auth = self.stream_isolation.then(draw_credentials);
-        socks5_connect(&mut stream, target, auth).await?;
+        match timeout(
+            self.handshake_timeout,
+            socks5_connect(&mut stream, target, auth),
+        )
+        .await
+        {
+            Ok(inner) => inner?,
+            Err(_) => return Err(timed_out("SOCKS5 handshake", self.handshake_timeout)),
+        }
         Ok(stream)
     }
+}
+
+fn timed_out(phase: &str, deadline: Duration) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::TimedOut,
+        format!("{phase} timed out ({deadline:?} deadline)"),
+    )
 }
 
 /// 32 hex characters per field: distinct per connection, which is the whole
@@ -322,9 +396,11 @@ async fn socks5_connect(
             req.extend_from_slice(&a.port().to_be_bytes());
         }
         Target::Name { host, port } => {
-            // `parse` bounds the name to 255 bytes, so the cast cannot wrap.
             req.push(0x03);
-            req.push(host.len() as u8);
+            req.push(
+                u8::try_from(host.len())
+                    .map_err(|_| protocol("SOCKS5 target name exceeds 255 bytes"))?,
+            );
             req.extend_from_slice(host.as_bytes());
             req.extend_from_slice(&port.to_be_bytes());
         }
@@ -462,17 +538,52 @@ mod tests {
     }
 
     #[test]
-    fn url_host_extracts_the_real_authority_host() {
+    fn url_host_parses_strictly_and_normalizes() {
         assert_eq!(
-            url_host("https://ark.example.tech"),
-            Some("ark.example.tech".into())
+            url_host("https://ark.example.tech").unwrap(),
+            "ark.example.tech"
         );
+        // One userinfo '@' is fine: the host is still the authority host.
         assert_eq!(
-            url_host("https://user:pw@app.onion:443/path?q=1"),
-            Some("app.onion".into())
+            url_host("https://user:pw@app.onion:443/path?q=1").unwrap(),
+            "app.onion"
         );
-        assert_eq!(url_host("http://[::1]:8080/x"), Some("::1".into()));
-        assert_eq!(url_host("not-a-url"), None);
+        assert_eq!(url_host("https://USER@good.onion").unwrap(), "good.onion");
+        assert_eq!(url_host("http://[::1]:8080/x").unwrap(), "::1");
+        // Case and one trailing dot normalize away.
+        assert_eq!(url_host("HTTPS://GOOD.ONION./").unwrap(), "good.onion");
+        assert!(host_is_onion(&url_host("https://GOOD.ONION.:443").unwrap()));
+    }
+
+    #[test]
+    fn url_host_rejects_ambiguous_or_malformed_authorities() {
+        for bad in [
+            "https://a@b.onion@c.onion", // two '@': the authority is ambiguous
+            "https://",
+            "https:///x",
+            "https://:443/",
+            "https://@:443/",
+            "https://good onion/",
+            "https://go\tod.onion/",
+            "https://example:70000/",
+            "https://example:notaport/",
+            "https://::1:443/", // unbracketed IPv6
+            "https://[::1",
+            "https://[::1]x",
+            "not-a-url",
+            "",
+        ] {
+            assert!(
+                matches!(url_host(bad), Err(NetError::Url(_))),
+                "{bad} must fail closed"
+            );
+        }
+        for scheme in ["socks5h://good.onion:9050", "ftp://good.onion"] {
+            assert!(
+                matches!(url_host(scheme), Err(NetError::UrlScheme(_))),
+                "{scheme}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -553,6 +664,7 @@ mod tests {
         let egress = Egress {
             proxy: Some(addr),
             stream_isolation: true,
+            handshake_timeout: HANDSHAKE_TIMEOUT,
         };
         let target = Target::parse("pool-example.onion:34254").unwrap();
         for _ in 0..3 {
@@ -585,6 +697,7 @@ mod tests {
         let egress = Egress {
             proxy: Some(addr),
             stream_isolation: false,
+            handshake_timeout: HANDSHAKE_TIMEOUT,
         };
         let target = Target::from("127.0.0.1:34254".parse::<SocketAddr>().unwrap());
         for _ in 0..2 {
@@ -620,10 +733,41 @@ mod tests {
         let egress = Egress {
             proxy: Some(addr),
             stream_isolation: true,
+            handshake_timeout: HANDSHAKE_TIMEOUT,
         };
         let target = Target::parse("127.0.0.1:1").unwrap();
         let err = egress.connect(&target).await.unwrap_err();
         assert!(err.to_string().contains("no acceptable auth method"));
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_stalled_proxy_fails_at_the_deadline_not_never() {
+        use std::time::Instant;
+
+        // Accepts the TCP connection and then says nothing at all.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (_silent, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        });
+        let egress = Egress {
+            proxy: Some(addr),
+            stream_isolation: true,
+            handshake_timeout: Duration::from_millis(150),
+        };
+        let target = Target::parse("pool.example.onion:34254").unwrap();
+        let start = Instant::now();
+        let err = egress.connect(&target).await.unwrap_err();
+        assert!(
+            err.to_string().contains("SOCKS5 handshake timed out"),
+            "{err}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "the deadline must actually bound the wait"
+        );
+        server.abort();
     }
 }
