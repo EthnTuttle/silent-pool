@@ -15,6 +15,14 @@ front_id = 0
 outbox_max = 4096
 tip_divergence_secs = 30
 
+[reach]                             # SPEC §3.8; the Tor daemon owns onion keys, not this binary
+advertise = []                      # e.g. ["sv2://pool.example:34254", "sv2://abc...onion:34254"]
+onion = { sv2 = "", sv1 = "", jd = "", api = "" }   # non-empty ⇒ that listener MUST bind loopback
+
+[net]                               # SPEC §3.8; outbound traffic only, never Postgres/Redis
+proxy = ""                          # e.g. "socks5h://127.0.0.1:9050" (remote resolution required)
+stream_isolation = true
+
 [template]
 source = "rpc"                      # "ipc" | "sv2-tp" | "rpc" | "mock"
 rpc_url = "http://127.0.0.1:18443"
