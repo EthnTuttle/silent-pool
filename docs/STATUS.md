@@ -4,17 +4,43 @@ Live build board. `docs/IMPLEMENTATION-PLAN.md` defines the packets and gates.
 A packet is Done only when its tests exist, `nix flake check` passes, both
 reviews are recorded for risky packets, and the commit is pushed.
 
-## Active sessions
+## Session roster (merge wave 2, 2026-11-02)
 
-
-The integrated review returned REQUEST CHANGES (11 blockers); the fix session above owns its files. This thread only dispatches, verifies commits and updates this board.
+| Role | Session | State |
+|---|---|---|
+| Orchestrator (merge gate, this board) | `ses_e60dd1e1` | active |
+| PPLNS-JD/SLICE accounting + settlement | `ses_e61952d7` | checkpoint `186d99e`; gate/review fixes `e2e9943`..`c403b7c` |
+| De-mock (metrics, per-height descriptor, ark role) | `ses_e61943da` | landed `3c3a19c`, `74807d3`, `65d87c1` |
+| Tor transport (spec and docs) | `ses_e60e6aac` | landed `8aca4be`, `914509f`; spec-ahead-of-code, closed |
+| rbitcoin node fork (testnet4) | `ses_e6195c6a` | separate repo `/home/ethan/code/rbitcoin`; not merged here |
+| Proxy/upstream analysis | `ses_e60f175c` | closed, `docs/analysis/2026-11-02-proxy-and-upstream-options.md` |
+| Multi-identifier analysis | `ses_e638a2e6` | closed, `docs/analysis/2026-11-02-multi-identifier-payouts.md` |
 
 ## Current state
 
 The pool runs end to end on regtest. Native SV1 and SV2 listeners build the
-same SPc coinbase, the front assembles and submits a block, and `spc-scan`
-recovers the miner's output. The remaining work is the live JDS/JDC loop, the
-stock-bark `ark` adapter, and the type-32 network server.
+same SPc coinbase, the front assembles and submits a block, `spc-scan` recovers
+the miner's output, and the Postgres/Redis stack settles the block and serves
+the API. Wave 2 closed the accounting/settlement/JD integration gaps and the
+mock paths, and added the Tor design. No new protocol surface was added.
+
+## Wave 2 merge log (2026-11-02)
+
+- `ba2a9fb`..`186d99e` - accounting/JD/settlement: reward conservation under
+  carried balances; front-event watermark (migration 0002) with idempotent
+  `LedgerApplied`; settlement reconstructed from sealed slices; reachable and
+  restart-safe share accounting; JDC + custom-job validation; share-target
+  policy record.
+- `3c3a19c`..`65d87c1` - de-mock: real `/metrics` exporter from the store;
+  per-height `pool_payout_descriptor` derivation with no zero-key fallback;
+  `rpc` feature shipped in the nix package.
+- `89e3f83`, `914509f` - Tor: SPEC §3.8 and the decision record; shipped
+  examples mark `[reach]`/`[net]` as spec-ahead-of-code (this build rejects
+  the keys, so there is no silent clearnet path).
+- `1ae2e9e` - proxy/upstream and multi-identifier analyses closed.
+- `e2e9943`..`c403b7c` - gate fixes: bounded startup store connects (a dead
+  Postgres no longer hangs the front), bounded ledger republish, SV1 rejects
+  invalid `mining.set_difficulty`.
 
 ## Done
 
@@ -40,73 +66,94 @@ stock-bark `ark` adapter, and the type-32 network server.
 - `spc-accounting`: slices, sealing, window, SLICE scores, tier routing,
   pending, trim, autoscaler, distribution, JD weights, O11 claim. SPEC §4.5
   fixture and proptests.
-- `spc-store`: SPEC §5.1 schema, migrations, settlement/orphan/Ark-failure
-  paths, binary stream codecs, bootstrap frame, Redis stream helpers, store
-  queries for the API.
-- `spc-pool`: native SV1 session + TCP listener; native SV2 Noise listener
-  (SetupConnection, extended channel, jobs, extended shares); pool-template
-  coinbase; block assembly; front state; payout role; read-only API with
-  `b_scan` auth; JD distribution publication/validation state; Ark order
-  verification; identity-free share blobs and the API audit view.
+- `spc-store`: SPEC §5.1 schema, migrations (0002 front-event watermark),
+  settlement/orphan/Ark-failure paths, binary stream codecs, bootstrap frame,
+  Redis stream helpers, store queries for the API.
+- `spc-pool`: native SV1 session + TCP listener; native SV2 Noise listener;
+  pool-template coinbase with a per-height descriptor output; block assembly;
+  front state; payout role; read-only API with `b_scan` auth; JD distribution
+  publication/validation; Ark order verification; identity-free share blobs;
+  the API audit view; Prometheus `/metrics`.
 - `spc-ext`: 0x0003 distribution/TLV/formula and 0x5350 registration messages,
   BIP340 signing, Ark order/receipt codecs.
 - `spc-share-ext`: identity-free leaf, merkle proofs, sampling verifier.
-- `spc-agent`: SV2 client, translator role, own-payout verifier, config.
+- `spc-agent`: SV2 client, translator role, own-payout verifier, config, JDC.
 - End-to-end: mock SV1, mock SV2, SV1 -> translator -> SV2, a real bitcoind
   regtest run, and a full-stack run with Postgres/Redis + `front,payout,api`
-  that settles block 102 and serves the API.
+  that settles found blocks and serves the API.
 - Live JDS/JDC: token allocation, `DeclareMiningJob` with the distribution
-  TLV, and JDS recompute-and-compare of the declared coinbase.
+  TLV, JDS recompute-and-compare of the declared coinbase.
 - Type-32 windows and share proofs served over SV2; `spc-scan audit` verifies
   sampled shares against a live server.
 - `payout` emits signed, capped `ArkSendOrder`s for Ark-rail entries; the `ark`
   role verifies them.
 - `nix flake check` green.
 
-## Active sessions (continued)
+## Merge gate (2026-11-02, wave 2 final tree)
 
-
-## Merge gate (2026-11-02)
-
-- `cargo test --workspace`: pass.
-- `cargo clippy --workspace --all-targets --features rpc -- -D warnings`: clean.
+- `cargo fmt --all -- --check`: clean.
+- `cargo test --workspace --all-targets --features spc-pool/rpc`: pass, all
+  targets (25 test binaries, 0 failures).
+- `cargo clippy --workspace --all-targets --features spc-pool/rpc -D warnings`:
+  clean.
 - `nix flake check`: pass.
-- `testing/regtest-e2e.sh`: pass (front-only).
-- `testing/regtest-services-e2e.sh`: pass (Postgres/Redis, front+payout+api, both blocks confirmed).
+- `testing/regtest-e2e.sh` (front only): pass, blocks 101 -> 103, `spc-scan`
+  finds the miner output.
+- `testing/regtest-services-e2e.sh` (Postgres/Redis, `front,payout,api`): pass,
+  blocks 101 -> 103, block 102 settled and served by the API, scan finds the
+  output.
 
-The earlier parallel run of the two harnesses collided on bitcoind's port; run them sequentially.
-
-Final fixes: `7a35b30` binds Ark orders to the configured `ark_id` and makes the 8-byte extranonce invariant explicit. All 12 blockers are now closed with tests.
-
-Final merge gate (2026-11-02): workspace tests, clippy `-D warnings`, `nix flake check`, front-only regtest and full-stack Postgres/Redis/`front,payout,api` regtest all green.
-
-Final review: **APPROVE** at commit `b2a03c4`. The only residual is a
-non-blocking note that `spc-accounting::route_tiers` still routes
-`registered && !dest_known` to `pending`; `payout`'s settlement re-decision is
-authoritative and overrides it per SPEC §11.1.
+Both harnesses bind bitcoind on 18443, so they must be run sequentially.
 
 ## Review
 
-`docs/reviews/2026-11-02-integrated-review.md` — REQUEST CHANGES. The blockers
-are being fixed by the sessions above; re-review follows.
+- Integrated review (2026-11-02): **APPROVE** at `b2a03c4`.
+- Wave 2 security review (`nemotron-3-ultra`, diff `5f36190..HEAD`):
+  REQUEST CHANGES with 2 blockers. Both were challenged and resolved without
+  code change: (B1) the Ark order's destination is what the Ark server must
+  see; SPEC §11.3 already defines the order as carrying exactly that and names
+  the fields, so the role boundary holds; (B2) the Tor keys are rejected by
+  this build's parser, so an operator cannot get an onion address with a
+  clearnet binding - the enforcement is a remaining packet, not a silent
+  bypass. Verified in the review: identity separation of `spc:ark:orders`,
+  fail-closed descriptor and target parsing, share-accounting idempotency and
+  conservation, xpub-only descriptor, parameterized SQL, migration locking.
+- Accepted residual risks from that review: bootstrap restore skips a slice
+  whose stored difficulty disagrees with its credits (decision
+  `2026-11-02-share-target-policy`, fail closed on the coinbase, window may
+  shrink); the settlement window target is estimated from one slice and can be
+  wrong across a difficulty retarget (needs the target persisted in
+  `distribution_snapshot`); the interim `ark` send transport is an operator
+  command (`sh -c`), to be replaced by the stock bark adapter; order-key
+  rotation is operator-driven (documented in OPERATIONS).
 
 ## Remaining
 
-1. Replace the mock Ark transport with a stock bark wallet adapter. Order
-   emission and verification are done; only the wallet/server call is missing.
-   This needs a pinned bark checkout and a stock `captaind`.
-2. JD fallback rules (JDS declines, 10 s silence) and the full-template rebuild
+1. Tor transport implementation: `[reach]`/`[net]` parser, loopback binding
+   enforcement, SOCKS5 egress. SPEC §3.8 is the requirement; the binary does
+   not accept the keys yet.
+2. Replace the interim Ark command transport with the stock bark wallet
+   adapter (order emission and verification are done).
+3. JD fallback rules (JDS declines, 10 s silence) and the full-template rebuild
    path in the JDC.
-3. The seeded `--features cheat-slice-difficulty` statistical test.
-4. Normative and security review over the integrated tree.
-5. Testnet soak and third-party `spc-scan` recovery.
+4. Persist the window target in `distribution_snapshot` so settlement survives
+   a difficulty retarget between the reference slice and the find.
+5. The seeded `--features cheat-slice-difficulty` statistical test.
+6. Testnet soak and third-party `spc-scan` recovery.
+7. rbitcoin as the node backend (separate repository, testnet4 fork); the
+   template source interface is the integration point.
+
+## Considered, not adopted
+
+- Proxy pool with an upstream pool, and p2poolv2 as a node mode
+  (`docs/analysis/2026-11-02-proxy-and-upstream-options.md`). The pool is the
+  payout authority; delegation removes the SPc and Ark rails.
+- Multiple account identities (BTC/LN/Nostr usernames)
+  (`docs/analysis/2026-11-02-multi-identifier-payouts.md`). Multiple delivery
+  rails under one SP identity is the aligned future shape; multi-identity is a
+  subsystem, not a parser.
+- Tor transport in this build: spec only until the packet above lands.
 
 ## Blocked
 
 None. The remaining items are implementation.
-
-## Next dispatch
-
-One session per item above, disjoint paths, with the existing tests as the
-acceptance gate. Every change ends with `nix flake check` and a why-first
-commit.
