@@ -16,6 +16,8 @@ use thiserror::Error;
 pub mod bark_stock;
 /// The production bark-backed transport and its trait seam.
 pub mod bark_transport;
+/// The board / refill loop (SPEC §11.3 "Refilling (H_f + 100)").
+pub mod board;
 /// The transport contract and the dev/test command transport.
 mod transport;
 
