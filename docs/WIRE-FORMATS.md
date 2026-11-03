@@ -47,7 +47,7 @@ B032   sp_id
 U8     rail                   // 0 coinbase, 1 ark, 2 pending, 3 forfeit (the rail the builder expected)
 B0_32  p_x                    // ser_x(P_id); empty if the id was not kept
 B0_255 dest_id                // SPEC §4.7 / §11.8 Ark destination (U_i policy key + delivery); empty if not Ark-capable
-U64    sats                   // pay(id) for a kept id, owed(id) otherwise
+U64    sats                   // banded pay(id) for a kept id (SPEC §4.4), owed(id) otherwise
 ```
 
 `entries` are attribution data: they never leave the SPc side of the Redis ACL (SPEC §11.3) and are scrubbed per SPEC §5.1.

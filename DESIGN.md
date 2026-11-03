@@ -41,7 +41,12 @@ registered with a pool. The payout tier is decided per block by whether the
 miner's accrued balance clears the coinbase dust threshold:
 
 - **Above threshold** -> SPc output directly in the coinbase. Trustless,
-  non-custodial, spendable after the 100-block coinbase maturity.
+  non-custodial, spendable after the 100-block coinbase maturity. Since
+  2026-11-03 the output carries **`band_floor(owed)`** against a public
+  logarithmic band ladder, not the exact amount; the overage
+  (`owed - band_floor(owed)`) is paid over Ark like a sub-threshold balance
+  (see "Banded amounts" below and
+  `docs/decisions/2026-11-03-banded-amounts-with-ark-overage.md`).
 - **Below threshold** -> once the block has 6 confirmations, the pool arkoors
   the miner from its own Ark float. The block's single pool output (a fresh
   P2TR under the pool's hot Ark key) carries those sats, and when it matures
@@ -52,6 +57,27 @@ miner's accrued balance clears the coinbase dust threshold:
 
 The crux: the Ark-side destination is **derived from the same per-block ECDH**
 the pool already runs for SPc — not bundled with the SP address. See below.
+
+## Banded amounts (2026-11-03)
+
+Coinbase outputs are quantized to a public logarithmic band ladder (`k = 4`
+sub-bands per octave, smallest band = the coinbase threshold `C`): a kept
+miner's coinbase output is `band_floor(owed)` and the overage
+`owed - band_floor(owed)` is paid over Ark at the usual `confirmation_depth`
+(6), aggregating per miner below `min_overage_sats` so no dust-scale VTXOs are
+created. This is a **product decision with stated costs**: every
+coinbase-tier miner gains an Ark footprint; the overage is trustodial
+(sender-or-server-honest) until the miner refreshes; and the Ark server —
+which already saw exact sub-threshold amounts — now sees exact per-miner
+amounts for the whole pool (`band` is public; `owed = band + overage`). The
+privacy claim becomes: the chain observer sees a band (at most
+`ceil(log2 L)` = 7 bits per miner per block at `k = 4`, `L = 81`), not an
+exact amount; amount privacy rests on the Ark-server trust assumption this
+design already makes. Rounding is down (rounding up would spend the reserved
+pool share), the rail is decided from un-banded `owed`, and the smallest band
+is `C`, so banding never moves a miner between rails and never produces a
+sub-dust output. Numbers, ladder alternatives and the float consequences are
+in the decision record.
 
 ## Derivation scheme
 
@@ -179,7 +205,8 @@ one mailbox per pool block.
 - **On-chain observer.** Sees SPc outputs only; the arkoor tier is invisible
   on-chain. A derived Ark address leaks nothing on-chain. A *published bundle*
   (e.g. a BIP321 `?sp=...&ark=...` URI) would be a correlation point — never
-  post one publicly.
+  post one publicly. Payout amounts are **banded** (see "Banded amounts"):
+  the observer learns a band index per output, not an exact amount.
 - **The Ark server.** Sees arkoor destination pubkeys, amounts, timing, and
   any boards. It can also parse public coinbases. This is the subtle one:
   bursts of pool-originated arkoors ~6 blocks after each pool block are
@@ -188,6 +215,10 @@ one mailbox per pool block.
   sees the funding UTXO, linking that SPc output to their Ark identity.
   With mailbox delivery, the server also unblinds every payout to the
   miner's static mailbox id, which links all of that miner's payouts.
+  With banded amounts (2026-11-03) the server's coverage is total: it serves
+  the exact overage of every paid miner every block, so
+  `band + overage = owed` reconstructs exact amounts pool-wide for it —
+  accepted as a product decision.
 - **Anyone the identifier is published to.** Sees whatever the identifier
   contains. Keep it to the bare `sp1q...`.
 
@@ -195,14 +226,19 @@ The single-identifier-with-derivation design is strictly more private than
 ArkPool's status quo (static reused address visible to the Ark server) and no
 worse than SPc alone on-chain. The costs that cannot be designed away:
 
-1. **Amount fingerprinting on the SPc tier** (known SPc limitation, unchanged).
+1. **Amount fingerprinting on the SPc tier** — bounded by banded amounts
+   (2026-11-03) to `ceil(log2 L)` bits per miner per block; the residual
+   channels are the band trajectory across blocks, output count, timing, and
+   singleton bands for the largest miners (see the decision record's
+   parameter study).
 2. **Tier transitions are observable.** A miner vanishing from coinbase
    outputs while pool arkoor activity continues leaks tier status to anyone
    watching both layers.
-3. **Ark server as cross-layer observer** (above). Soft mitigations only:
-   payout timing jitter, amount padding/rounding, aggregating small payouts
-   across epochs, and boarding SPc outputs via paths that do not advertise
-   "fresh coinbase payout."
+3. **Ark server as cross-layer observer** (above) — with banding, this is
+   where the exact amounts went. Soft mitigations only:
+   payout timing jitter, aggregating small payouts
+   across epochs (now standard for sub-threshold overages), and boarding SPc
+   outputs via paths that do not advertise "fresh coinbase payout."
 
 ## Open questions
 
