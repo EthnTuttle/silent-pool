@@ -12,13 +12,13 @@ reviews are recorded for risky packets, and the commit is pushed.
 | PPLNS-JD/SLICE accounting + settlement | `ses_e61952d7` | checkpoint `186d99e`; gate/review fixes `e2e9943`..`c403b7c` |
 | De-mock (metrics, per-height descriptor, ark role) | `ses_e61943da` | landed `3c3a19c`, `74807d3`, `65d87c1` |
 | Tor transport (spec and docs) | `ses_e60e6aac` | landed `8aca4be`, `914509f`; spec-ahead-of-code, closed |
-| Tor transport implementation | `ses_e5d9b9134` | landed `e919d35`..`57bd046`, merged `9be60a9` |
-| Stock bark Ark adapter | `ses_e5d9b9133` | dispatched 2026-11-03 on branch `bark-adapter` |
+| Tor transport implementation | `ses_e5d9b9134` | landed `e919d35`..`57bd046`, merged `9be60a9`; review fixes `c7420d3`, `35ffbda` merged `f9a046c` |
+| Stock bark Ark adapter | `ses_e5d9b9133` | landed `bdfdab6`..`ec4b047`, merged `2358a63` |
 | Amount-banded payouts analysis | `ses_e5d9b9192` | landed `116ed34`, merged |
 | Settlement window target | `ses_e5cf0b2b9` | dispatched 2026-11-03 on branch `window-target` |
-| JD fallback + template rebuild | `ses_e5cf0b27d` | dispatched 2026-11-03 on branch `jd-fallback` |
-| Banded amounts + Ark overage design | `ses_e5ceb5ce6` | dispatched 2026-11-03 on branch `banded-design`; decision accepted, design + numeric study |
-| rbitcoin node fork (testnet4) | `ses_e6195c6a` | separate repo `/home/ethan/code/rbitcoin`; not merged here |
+| JD fallback + template rebuild | `ses_e5cf0b27d` | landed `85db04d`..`18ac53f`, merged |
+| Banded amounts + Ark overage design | `ses_e5ceb5ce6` | landed `bdd0be5`..`7be2541`, merged `d62bf23`; ladder decided |
+| rbitcoin node fork (testnet4) | `ses_e6195c6a` | separate repo; 6 commits pushed to the fork; full sync to testnet4 tip verified once, re-syncing after a datadir wipe |
 | Proxy/upstream analysis | `ses_e60f175c` | closed, `docs/analysis/2026-11-02-proxy-and-upstream-options.md` |
 | Multi-identifier analysis | `ses_e638a2e6` | closed, `docs/analysis/2026-11-02-multi-identifier-payouts.md` |
 
@@ -36,13 +36,23 @@ reviews are recorded for risky packets, and the commit is pushed.
 - Amount-banded payouts analysis (`116ed34`): overage-to-Ark relocates exact
   amounts to the Ark server; band + overage-to-pending bounds the on-chain
   leak to `ceil(log2 L)` bits per block. No code change.
-- **Adopted direction (2026-11-03):** band the coinbase amounts and pay the
-  overage over Ark. The accepted tradeoff is explicit: every coinbase-tier
-  miner gains an Ark footprint, the overage is trustodial until refresh, and
-  the Ark server sees exact per-miner amounts; amount privacy then rests on
-  the Ark-server assumptions. A design session is producing the decision
-  record, SPEC/DESIGN edits and a numeric ladder/float study before code.
-- Stock bark Ark adapter (branch `bark-adapter`): in progress.
+- **Ladder decided and recorded (`d62bf23`, record `7be2541`):** coinbase
+  amounts are multiples of a constant ladder `{500k, 1M, 3M, 5M}` sats, greedy
+  largest-first, remainder to Ark. No era scaling; each halving doubles the
+  bands' relative size and the Ark-only population, which is accepted. The
+  constant ladder makes the band function pure over the amount alone.
+  `max_payout_slots` 1024 (2048 fee headroom). Era-1 output bound 619 (26.6 KB,
+  106k WU). Float = flow-per-find x 94 x hashrate share x 1.5 burst factor;
+  about 0.34 / 1.9 / 3.5 BTC for 100 / 1000 / 10000 miners at 1 percent
+  hashrate, worst case 2.9 BTC at 1 percent and 29.4 BTC at 10 percent. SPEC,
+  DESIGN, WIRE-FORMATS and ROADMAP amended; no code yet.
+- JD fallback merged: declare-bounded then hold-and-alarm, coded JDS declines,
+  and a full-template rebuild on `SetNewPrevHash`.
+- Stock bark Ark adapter merged (`2358a63`): stock bark at `c419159` behind a
+  transport seam, per-order idempotency, float boarding from matured pool
+  outputs, receipts, caps. The `command` transport is dev-only. The ark e2e
+  over a stock `captaind` passes on the merged tree (boarded 1,000,000 sats,
+  paid 500,000, receipt verified).
 
 ## Current state
 
