@@ -40,14 +40,12 @@ One miner identity — the SP address (`sp1q...`) — is the only string ever
 registered with a pool. The payout tier is decided per block by whether the
 miner's accrued balance clears the coinbase dust threshold:
 
-- **Above threshold** -> SPc output directly in the coinbase. Trustless,
+- **Above threshold** -> SPc output(s) directly in the coinbase. Trustless,
   non-custodial, spendable after the 100-block coinbase maturity. Since
-  2026-11-03 the payout is a **denomination decomposition** against a public
-  ladder (`u·8^j`, adaptive base unit `u ≥ 10 000` sats): a miner gets
-  `digit_j` outputs of `u·8^j` each at per-output keys `P_{i,k}`, and the
-  sub-`u` remainder is paid over Ark like a sub-threshold balance
-  (see "Denomination payouts" below and
-  `docs/decisions/2026-11-03-banded-amounts-with-ark-overage.md`).
+  2026-11-03 the payout is a **greedy decomposition over a constant four-rung
+  ladder**, one output per piece at `P_{i,k}` (see "Denomination payouts"),
+  and the threshold itself is the 500 000-sat base rung
+  (`docs/decisions/2026-11-03-banded-amounts-with-ark-overage.md`).
 - **Below threshold** -> once the block has 6 confirmations, the pool arkoors
   the miner from its own Ark float. The block's single pool output (a fresh
   P2TR under the pool's hot Ark key) carries those sats, and when it matures
@@ -61,26 +59,25 @@ the pool already runs for SPc — not bundled with the SP address. See below.
 
 ## Denomination payouts (2026-11-03)
 
-Coinbase outputs are denominated against a public ladder — denominations
-`d_j = u · 8^j` where the base unit `u` adapts per block (smallest
-`u ≥ 10 000` sats keeping the output count within the weight budget;
-a 1 000-identity pool typically runs `u = 10 000` at ~4 800 outputs,
-about 200 KB / 820k WU). A miner's payout is the base-8 decomposition of
-`floor(owed/u)`: a handful of outputs (typically 2-18 per block) of
-ladder values, and the remainder `owed mod u` goes over Ark as usual.
-Owner policy applied: **maximize the on-chain share; no deferral for
-capacity — the base unit adapts instead of trimming; whatever cannot be
-paid in the coinbase goes over Ark.** This is a **product decision with
-stated costs**: miners below `u` get no coinbase output at all; remainders
-are trustodial (sender-or-server-honest) until refresh; and the Ark server
-sees exact per-miner remainder amounts. Chain-facing: within a block every
-output value is one of ~6 public denominations — no per-miner varying
-amount exists on-chain; one uniform denomination was analysed and rejected
-because its output count is linear in payout and it silently exiles
-populations > a few hundred to Ark; powers of two minimize output count but
-halve the per-denomination anonymity sets (2x-wide top classes re-identify
-whales within 2x instead of 8x). Numbers, the one-band-vs-multiple
-analysis, float sizing and wallet UTXO counts are in the decision record.
+Coinbase outputs are denominated against a published, **constant** ladder —
+rungs `{500 000; 1 000 000; 3 000 000; 5 000 000}` sats, greedy
+largest-first, remainder below 500k over Ark. The ladder never changes (no
+era scaling): each halving doubles the rungs' relative size, which is
+accepted (era-4 base ≈ 1.28 % of the reward), and the band function is
+trivially pure over the amount — no dependence on height, subsidy, fees or
+the coinbase value, so build, settlement and miner audit cannot diverge on
+it. Owner policy applied: **maximize the on-chain share; no deferral for
+capacity (the output count is value-bounded, ≤ T/500k ≈ 619 in era 1);
+whatever cannot be paid in the coinbase goes over Ark.** This is a **product
+decision with stated costs**: miners below 500k sats get no coinbase output
+at all (the dominant class in a large pool — ~86 % of identities at 1 000
+miners); remainders are trustodial until refresh; and the Ark server sees
+exact per-miner remainder amounts. Chain-facing: every output is one of four
+public values, so no per-miner varying amount exists on-chain; residual
+channels are per-rung class composition, counts, timing, whale top classes,
+and redemption-time clustering. Numbers, tail-rung evaluation (10M/25M,
+not adopted), float sizing and wallet UTXO counts are in the decision
+record.
 
 ## Derivation scheme
 
