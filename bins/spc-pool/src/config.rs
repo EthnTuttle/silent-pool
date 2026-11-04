@@ -565,6 +565,10 @@ pub enum ConfigError {
     OnionNotLoopback(&'static str, &'static str, String),
     #[error("[{0}] targets a .onion address but [net] proxy is not set; there is no direct route (SPEC §3.8)")]
     OnionWithoutProxy(&'static str),
+    #[error("invalid [ark] server URL: {0}")]
+    ArkServer(String),
+    #[error("[ark] enabled with [net] proxy set: Ark egress through a proxy lands with the bark transport; unset [net] proxy or wait for the bark transport")]
+    ArkProxyUnsupported,
     #[error("ark enabled without {0}")]
     ArkMissing(&'static str),
     #[error("ark must not be self-hosted on mainnet")]
@@ -661,6 +665,12 @@ impl Config {
         // surprise), and an onion-published listener must bind loopback - an
         // onion service on a clearnet interface silently bypasses the privacy
         // it is published for.
+        //
+        // The loopback rule is deliberately NOT conditioned on the listener
+        // being enabled or its role being selected: the onion entry is the
+        // operator's statement "this address is published", and a published
+        // clearnet-reachable listener is the bypass the rule exists to
+        // forbid. Publishing and binding are config facts, not runtime state.
         let egress = self
             .net
             .egress()
@@ -689,6 +699,14 @@ impl Config {
 
         if let Some(ark) = &self.ark {
             if ark.enabled {
+                // The ark role's sends currently run through the operator's
+                // `send_command`, whose process we cannot proxy; a configured
+                // proxy would be silently ineffective. Refuse instead of
+                // pretending (fail closed). Proxied Ark egress lands with the
+                // in-process bark transport.
+                if !self.net.proxy.trim().is_empty() {
+                    return Err(ConfigError::ArkProxyUnsupported);
+                }
                 if ark.server.is_empty() {
                     return Err(ConfigError::ArkMissing("server"));
                 }
@@ -717,10 +735,12 @@ impl Config {
                 }
                 // SPEC §3.8/§11.3: a .onion Ark server must be reached through
                 // [net] proxy; a direct dial has no route and no fallback.
-                if let Some(host) = url_host(&ark.server) {
-                    if host_is_onion(&host) && egress.proxy().is_none() {
-                        return Err(ConfigError::OnionWithoutProxy("ark.server"));
-                    }
+                // The URL host parse is strict and fails closed (it gates
+                // egress); the dial path re-enforces the onion rule itself.
+                let server_host =
+                    url_host(&ark.server).map_err(|e| ConfigError::ArkServer(e.to_string()))?;
+                if host_is_onion(&server_host) && egress.proxy().is_none() {
+                    return Err(ConfigError::OnionWithoutProxy("ark.server"));
                 }
             }
         }
@@ -1031,9 +1051,49 @@ send_command = "/bin/true"
             cfg.validate(),
             Err(ConfigError::OnionWithoutProxy("ark.server"))
         );
+        // With a proxy the onion rule is satisfied, but the ark role still
+        // cannot run proxied until the bark transport lands (see below).
         let cfg = with_extra(&format!(
             "{ARK_ONION}\n[net]\nproxy = \"socks5h://127.0.0.1:9050\"\n"
         ));
+        assert_eq!(cfg.validate(), Err(ConfigError::ArkProxyUnsupported));
+    }
+
+    #[test]
+    fn ark_role_with_a_proxy_is_gated_until_the_bark_transport() {
+        // The command transport cannot honor [net] proxy, so a configured
+        // proxy plus an enabled ark role must refuse, not silently go direct.
+        let ark = ARK_ONION.replace("https://def.onion", "https://ark.example.tech");
+        let cfg = with_extra(&ark);
+        cfg.validate().unwrap();
+        let cfg = with_extra(&format!(
+            "{ark}\n[net]\nproxy = \"socks5h://127.0.0.1:9050\"\n"
+        ));
+        let err = cfg.validate().unwrap_err();
+        assert_eq!(err, ConfigError::ArkProxyUnsupported);
+        assert!(err.to_string().contains("bark transport"), "{err}");
+    }
+
+    #[test]
+    fn onion_loopback_applies_even_when_the_listener_is_disabled() {
+        // sv1 disabled, its onion entry set, listen off loopback: refuse.
+        // The §3.8 rule binds the published address, not the runtime role.
+        let mut cfg = sample();
+        cfg.sv1.enabled = false;
+        cfg.sv1.listen = "0.0.0.0:3333".into();
+        cfg.reach.onion.sv1 = "abc.onion:3333".into();
+        assert!(
+            matches!(
+                cfg.validate(),
+                Err(ConfigError::OnionNotLoopback("sv1", "sv1", _))
+            ),
+            "disabled SV1 with an onion entry and a clearnet bind must not pass"
+        );
+        // Same shape bound to loopback is fine (e.g. preparing to enable).
+        let mut cfg = sample();
+        cfg.sv1.enabled = false;
+        cfg.sv1.listen = "127.0.0.1:3333".into();
+        cfg.reach.onion.sv1 = "abc.onion:3333".into();
         cfg.validate().unwrap();
     }
 }

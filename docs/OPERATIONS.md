@@ -125,7 +125,10 @@ services.tor = {
   and on the `ark` host's `spc-pool` config. `socks5h` (remote resolution) is
   mandatory: local DNS leaks the query the proxy exists to hide. Stream
   isolation keeps mailbox reads on separate circuits. A `.onion` upstream with
-  no proxy is a startup error, never a silent direct connection.
+  no proxy is a startup error, never a silent direct connection. Ark-server
+  egress is gated until the in-process bark transport lands: with the current
+  external `send_command` transport, `[net] proxy` plus `[ark] enabled`
+  refuses to start rather than pretend to proxy.
 - **Multi-region.** One onion service terminates on one `front`. Either publish
   one address per front in `advertise` (and let `spc-agent` rotate on failure)
   or put OnionBalance in front of the set. Back up each front's onion key with
