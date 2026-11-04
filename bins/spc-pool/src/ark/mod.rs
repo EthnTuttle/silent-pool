@@ -10,7 +10,18 @@ use secp256k1::XOnlyPublicKey;
 use spc_ext::{ArkSendOrder, ArkSendReceipt, ReceiptStatus};
 use spc_store::redis::{RedisError, Streams};
 use thiserror::Error;
-use tokio::process::Command;
+
+/// Stock `bark-wallet` client behind the seam (UPSTREAM_DEPS.md pin).
+#[cfg(feature = "ark")]
+pub mod bark_stock;
+/// The production bark-backed transport and its trait seam.
+pub mod bark_transport;
+/// The board / refill loop (SPEC §11.3 "Refilling (H_f + 100)").
+pub mod board;
+/// The transport contract and the dev/test command transport.
+mod transport;
+
+pub use transport::{ArkTransport, ExternalCommandTransport};
 
 /// Production stream names (SPEC §5.2). Tests can override them with
 /// [`ArkService::with_names`] so a shared Redis is not polluted.
@@ -244,120 +255,11 @@ async fn decide_send<T: ArkTransport, D: OrderDedupe>(
     }
 }
 
-/// The only side effect the role needs: pay an address from the float.
-#[async_trait::async_trait]
-pub trait ArkTransport: Send + Sync + 'static {
-    async fn send(&self, address: &str, sats: u64) -> Result<(Vec<u8>, u32), String>;
-}
-
-/// Blanket implementation for Box<dyn ArkTransport>
-#[async_trait::async_trait]
-impl ArkTransport for Box<dyn ArkTransport> {
-    async fn send(&self, address: &str, sats: u64) -> Result<(Vec<u8>, u32), String> {
-        (**self).send(address, sats).await
-    }
-}
-
-/// External command transport for Ark sends.
-/// The command receives JSON on stdin: `{"address": "<ark1...>", "sats": 12345}`
-/// It MUST return JSON on stdout: `{"vtxo_id": "<hex>", "expiry_height": <u32>}`
-/// Non-zero exit, timeout, invalid JSON, or wrong types are treated as transport failures.
-pub struct ExternalCommandTransport {
-    command: String,
-    timeout: Duration,
-}
-
-impl ExternalCommandTransport {
-    pub fn new(command: String, timeout_secs: u64) -> Self {
-        Self {
-            command,
-            timeout: Duration::from_secs(timeout_secs),
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl ArkTransport for ExternalCommandTransport {
-    async fn send(&self, address: &str, sats: u64) -> Result<(Vec<u8>, u32), String> {
-        // Defensive re-parse of the address to ensure it's valid before sending
-        let _parsed: ark::Address = address
-            .parse()
-            .map_err(|e| format!("transport: address parse failed: {e}"))?;
-
-        let input = serde_json::json!({
-            "address": address,
-            "sats": sats,
-        });
-
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c")
-            .arg(&self.command)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| format!("transport: failed to spawn command: {e}"))?;
-
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| "transport: failed to open stdin".to_string())?;
-        use tokio::io::AsyncWriteExt;
-        let mut stdin = stdin;
-        stdin
-            .write_all(input.to_string().as_bytes())
-            .await
-            .map_err(|e| format!("transport: failed to write stdin: {e}"))?;
-        stdin
-            .shutdown()
-            .await
-            .map_err(|e| format!("transport: failed to close stdin: {e}"))?;
-
-        let output = tokio::time::timeout(self.timeout, child.wait_with_output())
-            .await
-            .map_err(|_| format!("transport: command timed out after {:?}", self.timeout))?
-            .map_err(|e| format!("transport: command failed: {e}"))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!(
-                "transport: command exited with {}: {}",
-                output.status, stderr
-            ));
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let result: serde_json::Value = serde_json::from_str(&stdout)
-            .map_err(|e| format!("transport: invalid JSON output: {e}"))?;
-
-        let vtxo_id_hex = result
-            .get("vtxo_id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "transport: missing or invalid 'vtxo_id' field".to_string())?;
-        let expiry_height = result
-            .get("expiry_height")
-            .and_then(|v| v.as_u64())
-            .ok_or_else(|| "transport: missing or invalid 'expiry_height' field".to_string())?;
-
-        let vtxo_id_bytes =
-            hex::decode(vtxo_id_hex).map_err(|e| format!("transport: invalid vtxo_id hex: {e}"))?;
-
-        if vtxo_id_bytes.len() != 8 {
-            return Err(format!(
-                "transport: vtxo_id must be 8 bytes (16 hex chars), got {}",
-                vtxo_id_bytes.len()
-            ));
-        }
-
-        let mut vtxo_id = [0u8; 8];
-        vtxo_id.copy_from_slice(&vtxo_id_bytes);
-
-        Ok((vtxo_id.to_vec(), expiry_height as u32))
-    }
-}
-
+/// The only side effect the role needs lives in [`transport`]: pay an
+/// address from the float. The production implementation is
+/// [`bark_transport::BarkTransport`] over a stock bark wallet
+/// ([`bark_stock`]); [`transport::ExternalCommandTransport`] is a dev/test
+/// transport only (refused outside regtest/signet by config validation).
 pub struct ArkService<T: ArkTransport, D: OrderDedupe> {
     verifier: OrderVerifier,
     dedupe: D,

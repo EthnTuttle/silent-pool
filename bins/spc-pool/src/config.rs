@@ -275,11 +275,22 @@ pub struct Ark {
     pub retry_blocks: u32,
     #[serde(default)]
     pub server_is_self: bool,
+    /// Ark transport selector (SPEC §11.10): `"bark"` (default, the
+    /// stock bark wallet at the UPSTREAM_DEPS.md pin) or `"command"`
+    /// (the dev/test external-command transport, refused outside
+    /// regtest/signet).
+    #[serde(default = "default_transport")]
+    pub transport: String,
+    /// Bark wallet datadir (sqlite persister, on-chain wallet state,
+    /// lock files); created 0o700 at first start.
+    #[serde(default = "default_datadir")]
+    pub datadir: PathBuf,
     /// External command to execute Ark sends. The command receives the address
     /// and sats as JSON on stdin: `{"address": "<ark1...>", "sats": 12345}`.
     /// It MUST return `{"vtxo_id": "<hex>", "expiry_height": <u32>}` on stdout.
     /// Non-zero exit, timeout, invalid JSON, or wrong types are treated as
     /// transport failures. This is a real operator integration point, not a mock.
+    /// Required only when `transport = "command"`.
     #[serde(default)]
     pub send_command: Option<String>,
 }
@@ -413,6 +424,12 @@ fn default_min_remaining() -> u32 {
 fn default_retry_blocks() -> u32 {
     6
 }
+fn default_transport() -> String {
+    "bark".into()
+}
+fn default_datadir() -> PathBuf {
+    "/var/lib/spc/ark".into()
+}
 
 impl Default for Template {
     fn default() -> Self {
@@ -520,6 +537,8 @@ impl Default for Ark {
             min_remaining_blocks: default_min_remaining(),
             retry_blocks: default_retry_blocks(),
             server_is_self: false,
+            transport: default_transport(),
+            datadir: default_datadir(),
             send_command: None,
         }
     }
@@ -567,10 +586,12 @@ pub enum ConfigError {
     OnionWithoutProxy(&'static str),
     #[error("invalid [ark] server URL: {0}")]
     ArkServer(String),
-    #[error("[ark] enabled with [net] proxy set: Ark egress through a proxy lands with the bark transport; unset [net] proxy or wait for the bark transport")]
+    #[error("[ark] enabled with [net] proxy set: proxied Ark egress is not implemented yet (the bark transport dials the server directly); unset [net] proxy or wait for proxied Ark egress")]
     ArkProxyUnsupported,
     #[error("ark enabled without {0}")]
     ArkMissing(&'static str),
+    #[error("invalid ark transport config: {0}")]
+    ArkTransport(String),
     #[error("ark must not be self-hosted on mainnet")]
     ArkSelfMainnet,
 }
@@ -699,11 +720,11 @@ impl Config {
 
         if let Some(ark) = &self.ark {
             if ark.enabled {
-                // The ark role's sends currently run through the operator's
-                // `send_command`, whose process we cannot proxy; a configured
-                // proxy would be silently ineffective. Refuse instead of
-                // pretending (fail closed). Proxied Ark egress lands with the
-                // in-process bark transport.
+                // Neither transport can honour [net] proxy yet: the command
+                // transport is an operator process, and the bark transport's
+                // client dials the Ark server directly. A configured proxy
+                // would be silently ineffective, so refuse instead of
+                // pretending (fail closed).
                 if !self.net.proxy.trim().is_empty() {
                     return Err(ConfigError::ArkProxyUnsupported);
                 }
@@ -722,8 +743,29 @@ impl Config {
                 if ark.retry_blocks == 0 {
                     return Err(ConfigError::ArkMissing("retry_blocks"));
                 }
-                if ark.send_command.is_none() {
-                    return Err(ConfigError::ArkMissing("send_command"));
+                // Transport selection (SPEC §11.10): "bark" is the
+                // production stock-wallet transport; "command" is
+                // dev/test only and is refused outside regtest/signet
+                // (SPEC §11.9 negative matrix).
+                let is_dev_network = matches!(self.pool.network.as_str(), "regtest" | "signet");
+                match ark.transport.as_str() {
+                    "bark" => {}
+                    "command" => {
+                        if !is_dev_network {
+                            return Err(ConfigError::ArkTransport(
+                                "transport = \"command\" is dev/test only; it requires regtest or signet"
+                                    .into(),
+                            ));
+                        }
+                        if ark.send_command.is_none() {
+                            return Err(ConfigError::ArkMissing("send_command"));
+                        }
+                    }
+                    other => {
+                        return Err(ConfigError::ArkTransport(format!(
+                            "unknown transport '{other}' (expected \"bark\" or \"command\")"
+                        )));
+                    }
                 }
                 if ark.server_is_self && self.pool.network == "mainnet" {
                     return Err(ConfigError::ArkSelfMainnet);
@@ -1095,5 +1137,62 @@ send_command = "/bin/true"
         cfg.sv1.listen = "127.0.0.1:3333".into();
         cfg.reach.onion.sv1 = "abc.onion:3333".into();
         cfg.validate().unwrap();
+    }
+
+    fn ark_enabled() -> Config {
+        let mut cfg = sample();
+        cfg.ark = Some(Ark {
+            enabled: true,
+            server: "https://ark.example.tech".into(),
+            ark_id: "00000000".into(),
+            float_target_sats: 1_000_000,
+            max_order_sats: 330,
+            max_daily_sats: 0,
+            order_pubkey: "01".repeat(32),
+            order_key_path: default_order_key_path(),
+            seed_path: default_seed_path(),
+            pool_output_account: default_pool_account(),
+            min_remaining_blocks: 3_024,
+            retry_blocks: 6,
+            server_is_self: false,
+            transport: default_transport(),
+            datadir: default_datadir(),
+            send_command: None,
+        });
+        cfg
+    }
+
+    /// `transport = "bark"` is the default and needs no send_command
+    /// (SPEC §11.10); `"command"` is dev/test only and requires both a
+    /// dev network and the command itself (SPEC §11.9).
+    #[test]
+    fn ark_transport_selection_is_enforced() {
+        // Default: bark, no send_command, any (non-mainnet) network.
+        let cfg = ark_enabled();
+        assert_eq!(cfg.ark.as_ref().unwrap().transport, "bark");
+        cfg.validate().unwrap();
+
+        // command on regtest with the command set: fine.
+        let mut cfg = ark_enabled();
+        cfg.ark.as_mut().unwrap().transport = "command".into();
+        cfg.ark.as_mut().unwrap().send_command = Some("true".into());
+        cfg.validate().unwrap();
+
+        // command on testnet4: refused (not a dev network).
+        let mut cfg = ark_enabled();
+        cfg.pool.network = "testnet4".into();
+        cfg.ark.as_mut().unwrap().transport = "command".into();
+        cfg.ark.as_mut().unwrap().send_command = Some("true".into());
+        assert!(matches!(cfg.validate(), Err(ConfigError::ArkTransport(_))));
+
+        // command without the command: refused.
+        let mut cfg = ark_enabled();
+        cfg.ark.as_mut().unwrap().transport = "command".into();
+        assert_eq!(cfg.validate(), Err(ConfigError::ArkMissing("send_command")));
+
+        // Unknown transport: refused.
+        let mut cfg = ark_enabled();
+        cfg.ark.as_mut().unwrap().transport = "carrier-pigeon".into();
+        assert!(matches!(cfg.validate(), Err(ConfigError::ArkTransport(_))));
     }
 }

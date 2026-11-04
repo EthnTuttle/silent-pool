@@ -155,6 +155,25 @@ impl Streams {
         let mut conn = self.conn.clone();
         Ok(conn.xlen(stream).await?)
     }
+
+    /// Every member of a set (the raw bytes written by `sadd`).
+    pub async fn smembers(&self, key: &str) -> Result<Vec<Vec<u8>>> {
+        let mut conn = self.conn.clone();
+        Ok(conn.smembers(key).await?)
+    }
+
+    /// Read a plain string key.
+    pub async fn kv_get(&self, key: &str) -> Result<Option<String>> {
+        let mut conn = self.conn.clone();
+        Ok(conn.get(key).await?)
+    }
+
+    /// Write a plain string key.
+    pub async fn kv_set(&self, key: &str, value: &str) -> Result<()> {
+        let mut conn = self.conn.clone();
+        let () = conn.set(key, value).await?;
+        Ok(())
+    }
 }
 
 fn parse_xread(value: Value) -> Result<Vec<(String, Vec<u8>)>> {
