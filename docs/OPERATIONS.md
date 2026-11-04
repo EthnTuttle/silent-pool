@@ -62,7 +62,7 @@ lease at start and refuses to start if the lease is held.
 | `ark` | none - dials out to the third-party Ark server over HTTPS (`[ark] server`) | - | - |
 | `spc-agent` | SV1 downstream for ASICs | `[downstream] listen` | 34255 |
 | `front`, `api` | Tor onion services (optional) - the Tor daemon forwards to the loopback listener | `[reach] onion` + Tor `HiddenServicePort` | - |
-| `spc-agent`, `ark` | outbound via SOCKS5 (optional) - upstream SV2, JDP, Ark server and mailbox reads | `[net] proxy` | SOCKS 9050 |
+| `spc-agent` | outbound via SOCKS5 (optional) - upstream SV2 and JDP only | `[net] proxy` | SOCKS 9050 |
 
 Both `front` listeners (SV1 and SV2) feed the same share, slice and
 distribution path. The `payout` and `ark` roles have no inbound ports; they
@@ -99,17 +99,18 @@ configs: `config/spc-pool.example.toml`, `config/spc-agent.example.toml`.
 
 ### Tor reach (optional)
 
-Tor is a transport option, not a deployment mode (SPEC §3.8). `spc-pool`
-accepts `[reach]`/`[net]` and `spc-agent` accepts `[net]`; both fail closed
-at startup on the §3.8 rules. The pool does not create or manage onion
-keys - the Tor daemon does, and forwards to the listener the pool already
-binds.
+Tor is a transport option, not a deployment mode (SPEC §3.8), and it covers
+**mining connections only**. `spc-pool` accepts `[reach]`; `spc-agent` accepts
+`[net]` for its upstream SV2 and JDP connections. Ark egress is direct for both
+binaries (decision 2026-11-04-tor-scope-mining-only). The pool does not create
+or manage onion keys - the Tor daemon does, and forwards to the listener the
+pool already binds.
 
 ```nix
 # Illustrative; exact option shape follows the pinned NixOS release.
 services.tor = {
   enable = true;
-  client.enable = true;                      # spc-agent / ark egress
+  client.enable = true;                      # spc-agent mining egress
   settings.SocksPort = [ "9050 IsolateSOCKSAuth" ];
   relay.onionServices.spc-sv2.map = [
     { port = 34254; target = { addr = "127.0.0.1"; port = 34254; }; }
@@ -122,13 +123,16 @@ services.tor = {
   so an advertised onion address can never be decorative. List the public
   endpoints in `[reach] advertise`; they are served from `GET /api/pool`.
 - **Outbound.** Set `[net] proxy = "socks5h://127.0.0.1:9050"` on `spc-agent`
-  and on the `ark` host's `spc-pool` config. `socks5h` (remote resolution) is
-  mandatory: local DNS leaks the query the proxy exists to hide. Stream
-  isolation keeps mailbox reads on separate circuits. A `.onion` upstream with
-  no proxy is a startup error, never a silent direct connection. Ark-server
-  egress is gated until the in-process bark transport lands: with the current
-  external `send_command` transport, `[net] proxy` plus `[ark] enabled`
-  refuses to start rather than pretend to proxy.
+  only, for the upstream SV2 and JDP connections. `socks5h` (remote
+  resolution) is mandatory: local DNS leaks the query the proxy exists to
+  hide. Stream isolation gives each connection its own circuit. A `.onion`
+  upstream with no proxy is a startup error, never a silent direct connection.
+- **Ark is not proxied.** The `ark` role dials the Ark server directly and the
+  agent's mailbox reads are direct, so the Ark server and mailbox endpoint see
+  the reader's network address. That is the accepted residual of decision
+  2026-11-04-tor-scope-mining-only; use an operator-level network control if it
+  matters. `spc-pool` has no `[net]` section, and a pool config carrying one
+  fails to parse.
 - **Multi-region.** One onion service terminates on one `front`. Either publish
   one address per front in `advertise` (and let `spc-agent` rotate on failure)
   or put OnionBalance in front of the set. Back up each front's onion key with

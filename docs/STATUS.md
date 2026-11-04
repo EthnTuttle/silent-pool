@@ -12,7 +12,7 @@ reviews are recorded for risky packets, and the commit is pushed.
 | PPLNS-JD/SLICE accounting + settlement | `ses_e61952d7` | checkpoint `186d99e`; gate/review fixes `e2e9943`..`c403b7c` |
 | De-mock (metrics, per-height descriptor, ark role) | `ses_e61943da` | landed `3c3a19c`, `74807d3`, `65d87c1` |
 | Tor transport (spec and docs) | `ses_e60e6aac` | landed `8aca4be`, `914509f`; spec-ahead-of-code, closed |
-| Tor transport implementation | `ses_e5d9b9134` | landed `e919d35`..`57bd046`, merged `9be60a9`; review fixes `c7420d3`, `35ffbda` merged `f9a046c` |
+| Tor transport implementation | `ses_e5d9b9134` | landed `e919d35`..`57bd046`, merged `9be60a9`; review fixes `f9a046c`; scope narrowed to mining connections 2026-11-04 |
 | Stock bark Ark adapter | `ses_e5d9b9133` | landed `bdfdab6`..`ec4b047`, merged `2358a63` |
 | Amount-banded payouts analysis | `ses_e5d9b9192` | landed `116ed34`, merged |
 | Settlement window target | `ses_e5cf0b2b9` | dispatched 2026-11-03 on branch `window-target` |
@@ -31,8 +31,11 @@ reviews are recorded for risky packets, and the commit is pushed.
   loopback at startup, `.onion` targets without a proxy rejected, and
   `GET /api/pool` publishing `endpoints` verbatim from `[reach] advertise`.
   The agent's SV2 upstream and JDP dials route through `[net]`.
-  **Residual:** the ark role's Ark gRPC and the mailbox reader do not exist
-  yet (O13/Phase 7); they will dial through the same egress when they land.
+  **Scope narrowed 2026-11-04:** Tor covers mining connections only. Ark
+  egress is direct (the bark transport dials the server itself and mailbox
+  reads are direct), `spc-pool` no longer has a `[net]` section, and the
+  accepted residual is that the Ark server and mailbox endpoint see the
+  network address. See `docs/decisions/2026-11-04-tor-scope-mining-only.md`.
 - Amount-banded payouts analysis (`116ed34`): overage-to-Ark relocates exact
   amounts to the Ark server; band + overage-to-pending bounds the on-chain
   leak to `ceil(log2 L)` bits per block. No code change.
@@ -173,9 +176,9 @@ Both harnesses bind bitcoind on 18443, so they must be run sequentially.
 
 ## Remaining
 
-1. Tor transport residual: the ark role's Ark gRPC and the mailbox reader
-   must dial through `[net]`; both land with O13/Phase 7 (the config surface,
-   loopback enforcement and agent egress are merged in `9be60a9`).
+1. Tor is complete for its scope (mining connections). Ark egress is direct
+   by decision 2026-11-04; do not add `[net]` back to the pool without a new
+   record.
 2. Replace the interim Ark command transport with the stock bark wallet
    adapter (order emission and verification are done). Dispatched 2026-11-03
    (branch `bark-adapter`).
@@ -203,7 +206,7 @@ Both harnesses bind bitcoind on 18443, so they must be run sequentially.
   (`docs/analysis/2026-11-02-multi-identifier-payouts.md`). Multiple delivery
   rails under one SP identity is the aligned future shape; multi-identity is a
   subsystem, not a parser.
-- Tor transport in this build: spec only until the packet above lands.
+- Tor for Ark/mailbox egress: rejected 2026-11-04 (mining connections only).
 
 ## Blocked
 

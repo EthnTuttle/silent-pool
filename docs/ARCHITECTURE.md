@@ -175,7 +175,7 @@ Dev/regtest MAY run all roles in one process; production splits `front`
 | Ark server gRPC | `ark` role ↔ third-party `captaind` | gRPC | stock bark wallet ops: arkoor sends, `board_psbt`, status; nothing custom (RESULTS.md: server changes required: none) |
 | Ark mailbox/gRPC | `spc-agent` ↔ `captaind` | gRPC | `ReadMailbox` per epoch (MAILBOX.md §3; never `SubscribeMailbox`), `GetVtxosByIds` fallback, attestations, refresh/spend |
 
-Every TCP or gRPC row above MAY be carried over Tor without a protocol change (SPEC §3.8): inbound, the Tor daemon publishes the `front`/`api` listeners and `spc-pool` binds them to loopback (`[reach]`); outbound, `spc-agent` and the `ark` role dial through a remote-resolution SOCKS5 proxy (`[net] proxy`) with per-connection stream isolation. The SV2 Noise session, SV1 session and JDP session are unchanged; Tor is a byte pipe, not a mode.
+Every TCP row above MAY be carried over Tor without a protocol change (SPEC §3.8): inbound, the Tor daemon publishes the `front`/`api` listeners and `spc-pool` binds them to loopback (`[reach]`); outbound, `spc-agent` dials its upstream SV2 and JDP connections through a remote-resolution SOCKS5 proxy (`[net] proxy`) with per-connection stream isolation. Ark egress is direct for both binaries (decision 2026-11-04). The SV2 Noise session, SV1 session and JDP session are unchanged; Tor is a byte pipe, not a mode.
 
 ### 5.2 Redis streams (SPEC §5.2)
 

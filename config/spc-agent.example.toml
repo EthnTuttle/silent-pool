@@ -11,16 +11,17 @@ request_share_accounting = true
 [downstream]
 listen = "127.0.0.1:34255"           # stays plain TCP: ASIC firmware does not speak Tor
 
-# Tor egress (SPEC §3.8); covers upstream SV2, JDP and Ark/mailbox traffic.
-# The [downstream] SV1 listener stays plain TCP - ASIC firmware does not
-# speak Tor - and the miner's own Template Provider is never proxied.
+# Tor egress (SPEC §3.8) for MINING connections only: upstream SV2 and JDP.
+# Ark-server and mailbox traffic are direct (decision 2026-11-04), so this
+# proxy does not hide the miner from the Ark server. The [downstream] SV1
+# listener stays plain TCP - ASIC firmware does not speak Tor - and the
+# miner's own Template Provider is never proxied.
 [net]
 # e.g. "socks5h://127.0.0.1:9050". Only socks5h:// is accepted: remote name
 # resolution is mandatory. A .onion upstream address (host:port form) or JDS
 # with no proxy is a startup error, never a silent direct connection.
 proxy = ""
-# Distinct SOCKS credentials per connection (Tor IsolateSOCKSAuth); mailbox
-# reads additionally open a new connection per epoch (SPEC §11.7).
+# Distinct SOCKS credentials per connection (Tor IsolateSOCKSAuth).
 # Default true when proxy is set.
 stream_isolation = true
 

@@ -29,16 +29,9 @@ advertise = []
 # (an onion service on a clearnet interface silently bypasses its privacy).
 onion = { sv2 = "", sv1 = "", jd = "", api = "" }   # "<id>.onion:<port>"
 
-# Outbound proxy for the ark role's Ark-server traffic only - never
-# [storage] (Postgres/Redis) and never [template] (SPEC §3.8 scope rule).
-[net]
-# e.g. "socks5h://127.0.0.1:9050". Only socks5h:// is accepted: remote name
-# resolution is mandatory (socks5:// resolves locally and leaks the query).
-# A .onion [ark] server with no proxy is a startup error.
-proxy = ""
-# Distinct SOCKS credentials per connection (Tor IsolateSOCKSAuth); each
-# connection gets its own circuit. Default true when proxy is set.
-stream_isolation = true
+# There is no [net] here: Tor egress covers mining connections only and is
+# an spc-agent setting. The ark role dials the Ark server directly
+# (decision 2026-11-04-tor-scope-mining-only).
 
 [template]
 source = "rpc"                      # "ipc" | "sv2-tp" | "rpc" | "mock"

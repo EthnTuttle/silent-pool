@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use spc_crypto::Network;
 use thiserror::Error;
 
-use crate::net::{host_is_onion, url_host, Net};
+use crate::net::host_is_onion;
 
 pub const MAX_FRONT_ID: u8 = 127;
 
@@ -38,8 +38,6 @@ pub struct Config {
     pub pool: Pool,
     #[serde(default)]
     pub reach: Reach,
-    #[serde(default)]
-    pub net: Net,
     #[serde(default)]
     pub template: Template,
     #[serde(default)]
@@ -582,12 +580,8 @@ pub enum ConfigError {
     OnionAdvertised(&'static str, String),
     #[error("[reach] onion.{0} is advertised but [{1}] listen = {2} is not a loopback address (SPEC §3.8)")]
     OnionNotLoopback(&'static str, &'static str, String),
-    #[error("[{0}] targets a .onion address but [net] proxy is not set; there is no direct route (SPEC §3.8)")]
-    OnionWithoutProxy(&'static str),
     #[error("invalid [ark] server URL: {0}")]
     ArkServer(String),
-    #[error("[ark] enabled with [net] proxy set: proxied Ark egress is not implemented yet (the bark transport dials the server directly); unset [net] proxy or wait for proxied Ark egress")]
-    ArkProxyUnsupported,
     #[error("ark enabled without {0}")]
     ArkMissing(&'static str),
     #[error("invalid ark transport config: {0}")]
@@ -692,10 +686,6 @@ impl Config {
         // operator's statement "this address is published", and a published
         // clearnet-reachable listener is the bypass the rule exists to
         // forbid. Publishing and binding are config facts, not runtime state.
-        let egress = self
-            .net
-            .egress()
-            .map_err(|e| ConfigError::Proxy(e.to_string()))?;
         for (name, section, listen, entry) in [
             ("sv2", "pool", &self.pool.listen, &self.reach.onion.sv2),
             ("sv1", "sv1", &self.sv1.listen, &self.reach.onion.sv1),
@@ -720,14 +710,6 @@ impl Config {
 
         if let Some(ark) = &self.ark {
             if ark.enabled {
-                // Neither transport can honour [net] proxy yet: the command
-                // transport is an operator process, and the bark transport's
-                // client dials the Ark server directly. A configured proxy
-                // would be silently ineffective, so refuse instead of
-                // pretending (fail closed).
-                if !self.net.proxy.trim().is_empty() {
-                    return Err(ConfigError::ArkProxyUnsupported);
-                }
                 if ark.server.is_empty() {
                     return Err(ConfigError::ArkMissing("server"));
                 }
@@ -774,15 +756,6 @@ impl Config {
                 if ark.server_is_self && !matches!(self.pool.network.as_str(), "regtest" | "signet")
                 {
                     return Err(ConfigError::ArkSelfMainnet);
-                }
-                // SPEC §3.8/§11.3: a .onion Ark server must be reached through
-                // [net] proxy; a direct dial has no route and no fallback.
-                // The URL host parse is strict and fails closed (it gates
-                // egress); the dial path re-enforces the onion rule itself.
-                let server_host =
-                    url_host(&ark.server).map_err(|e| ConfigError::ArkServer(e.to_string()))?;
-                if host_is_onion(&server_host) && egress.proxy().is_none() {
-                    return Err(ConfigError::OnionWithoutProxy("ark.server"));
                 }
             }
         }
@@ -987,11 +960,18 @@ listen = "127.0.0.1:8080"
     }
 
     #[test]
-    fn reach_and_net_default_to_empty_and_validate() {
+    fn reach_defaults_to_empty_and_validates() {
         let cfg = sample();
         cfg.validate().unwrap();
         assert!(cfg.reach.advertise.is_empty());
-        assert_eq!(cfg.net.egress().unwrap(), crate::net::Egress::DIRECT);
+    }
+
+    #[test]
+    fn pool_config_rejects_net() {
+        // [net] is agent-only (mining connections). A pool config that still
+        // carries it must fail to parse, not silently ignore it.
+        let text = format!("{SAMPLE}\n[net]\nproxy = \"socks5h://127.0.0.1:9050\"\n");
+        assert!(toml::from_str::<Config>(&text).is_err());
     }
 
     #[test]
@@ -1057,63 +1037,6 @@ listen = "127.0.0.1:34264"
                 "{bad}"
             );
         }
-    }
-
-    #[test]
-    fn net_proxy_must_be_socks5h() {
-        for scheme in ["socks5", "http", "https"] {
-            let mut cfg = sample();
-            cfg.net.proxy = format!("{scheme}://127.0.0.1:9050");
-            assert!(
-                matches!(cfg.validate(), Err(ConfigError::Proxy(_))),
-                "{scheme}"
-            );
-        }
-        let mut cfg = sample();
-        cfg.net.proxy = "socks5h://127.0.0.1:9050".into();
-        cfg.validate().unwrap();
-        assert!(cfg.net.egress().unwrap().proxy().is_some());
-    }
-
-    const ARK_ONION: &str = r#"
-[ark]
-enabled = true
-server = "https://def.onion"
-ark_id = "00000000"
-float_target_sats = 1000000
-order_pubkey = "0000000000000000000000000000000000000000000000000000000000000000"
-retry_blocks = 6
-send_command = "/bin/true"
-"#;
-
-    #[test]
-    fn onion_ark_server_without_proxy_is_a_startup_error() {
-        let cfg = with_extra(ARK_ONION);
-        assert_eq!(
-            cfg.validate(),
-            Err(ConfigError::OnionWithoutProxy("ark.server"))
-        );
-        // With a proxy the onion rule is satisfied, but the ark role still
-        // cannot run proxied until the bark transport lands (see below).
-        let cfg = with_extra(&format!(
-            "{ARK_ONION}\n[net]\nproxy = \"socks5h://127.0.0.1:9050\"\n"
-        ));
-        assert_eq!(cfg.validate(), Err(ConfigError::ArkProxyUnsupported));
-    }
-
-    #[test]
-    fn ark_role_with_a_proxy_is_gated_until_the_bark_transport() {
-        // The command transport cannot honor [net] proxy, so a configured
-        // proxy plus an enabled ark role must refuse, not silently go direct.
-        let ark = ARK_ONION.replace("https://def.onion", "https://ark.example.tech");
-        let cfg = with_extra(&ark);
-        cfg.validate().unwrap();
-        let cfg = with_extra(&format!(
-            "{ark}\n[net]\nproxy = \"socks5h://127.0.0.1:9050\"\n"
-        ));
-        let err = cfg.validate().unwrap_err();
-        assert_eq!(err, ConfigError::ArkProxyUnsupported);
-        assert!(err.to_string().contains("bark transport"), "{err}");
     }
 
     #[test]
