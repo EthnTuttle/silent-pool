@@ -82,6 +82,11 @@ pub struct SnapshotRow {
     pub distribution_id: Option<u64>,
     pub entries: serde_json::Value,
     pub high_water: serde_json::Value,
+    /// The exact window target (`N x d`, SPEC §4.3) the distribution was
+    /// built against, as a u128 decimal string for `NUMERIC(40,0)`. `None`
+    /// on rows written before the column existed; settlement then falls
+    /// back to the warned slice estimate.
+    pub window_target: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -76,6 +76,10 @@ pub struct BlockEvent {
     /// Public x-only key of the height's `a_send`; the secret is never stored.
     pub a_send_x: [u8; 32],
     pub high_water: BTreeMap<u8, String>,
+    /// The exact window target (`N x d`, SPEC §4.3) this distribution was
+    /// built against; `payout` freezes it in `distribution_snapshot` so
+    /// settlement reconstructs the same window even across a retarget.
+    pub window_target: u128,
     pub entries: Vec<Entry>,
 }
 
@@ -87,6 +91,7 @@ impl BlockEvent {
         w.u8(self.front_id);
         w.bytes(&self.fingerprint).bytes(&self.a_send_x);
         write_high_water(&mut w, &self.high_water)?;
+        w.u128(self.window_target);
         w.u16(u16::try_from(self.entries.len()).map_err(|_| CodecError::Range("entries"))?);
         for e in &self.entries {
             e.encode(&mut w)?;
@@ -102,6 +107,7 @@ impl BlockEvent {
         let fingerprint = r.array()?;
         let a_send_x = r.array()?;
         let high_water = read_high_water(&mut r)?;
+        let window_target = r.u128()?;
         let n = r.u16()? as usize;
         let mut entries = Vec::with_capacity(n.min(4096));
         for _ in 0..n {
@@ -115,6 +121,7 @@ impl BlockEvent {
             fingerprint,
             a_send_x,
             high_water,
+            window_target,
             entries,
         })
     }
@@ -454,6 +461,8 @@ mod tests {
             fingerprint: [2; 32],
             a_send_x: [3; 32],
             high_water: BTreeMap::from([(0u8, "1-1".to_string()), (3, "9-2".to_string())]),
+            // u128::MAX: N x d can exceed i64 and must survive the wire.
+            window_target: u128::MAX,
             entries: vec![entry(1), entry(2)],
         };
         let bytes = e.encode().unwrap();
