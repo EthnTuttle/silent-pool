@@ -417,6 +417,11 @@ pub struct ReconstructInput<'a> {
     pub entries: &'a [Entry],
     /// Sealed slices at or below the high-water mark, newest first.
     pub slices: &'a [SliceRow],
+    /// The exact window target (`N x d`, SPEC §4.3) frozen in
+    /// `distribution_snapshot.window_target` when the front built this
+    /// distribution. `None` only for rows written before that column
+    /// existed: settlement then falls back to the warned slice estimate.
+    pub window_target: Option<u128>,
     /// True when the store returned its safety-limited slice walk, i.e.
     /// there may be older slices below the last row.
     pub window_truncated: bool,
@@ -524,7 +529,12 @@ fn reconstruct_once(input: &ReconstructInput<'_>) -> Result<Reconstructed, Recon
         .iter()
         .map(slice_agg)
         .collect::<Result<Vec<_>, _>>()?;
-    let target = window_target(input.slices, input.height, input.cfg.window_n)?;
+    // The persisted target is the one the front selected this window with;
+    // only a pre-migration row (no stored value) falls back to the estimate.
+    let target = match input.window_target {
+        Some(target) => target,
+        None => window_target(input.slices, input.height, input.cfg.window_n)?,
+    };
     // `u64::MAX`: nothing is skipped. The stored slices at or below the
     // high-water mark already are the window's slice set (SPEC §4.3).
     let window = select_window(&aggs, u64::MAX, target, input.high_water.clone());
@@ -785,16 +795,17 @@ fn detect_mode(coinbase: &[CoinbaseOutput]) -> TemplateMode {
     }
 }
 
-/// Network difficulty at the finding block, as `Σd / n_shares` from a sealed
-/// slice (every share under one template carries the same `d`, so the
-/// division is exact). A slice sealed at the block's own height is the
+/// Estimated network difficulty at the finding block, as `Σd / n_shares`
+/// from a sealed slice (every share under one template carries the same `d`,
+/// so the division is exact). A slice sealed at the block's own height is the
 /// finding template and is preferred; the newest stored slice is the fallback
 /// when the finding slice has not sealed yet.
 ///
-/// A difficulty retarget between the fallback slice and the finding block
-/// makes this estimate wrong (reviewer #12). The exact fix is to persist the
-/// window target (or the finding `d`) in `distribution_snapshot`; see the
-/// migration noted in the report.
+/// This is the **pre-migration fallback only** (decision
+/// 2026-11-03-settlement-window-target): a difficulty retarget between the
+/// reference slice and the finding block makes it wrong, so the exact
+/// `N x d` is persisted in `distribution_snapshot.window_target` and used
+/// whenever present. The caller warns when it has to estimate.
 fn window_target(
     slices: &[SliceRow],
     finding_height: u32,
@@ -1278,6 +1289,9 @@ impl PayoutService {
                         distribution_id: None,
                         entries: json!(e.entries),
                         high_water: json!(e.high_water),
+                        // The exact target the front selected this window
+                        // with; settlement must never re-derive it.
+                        window_target: Some(e.window_target.to_string()),
                     })
                     .await?;
                 BlockStatus::Confirmed
@@ -1390,6 +1404,26 @@ impl PayoutService {
                     })?;
                 let entries: Vec<Entry> = serde_json::from_value(snapshot.entries)
                     .map_err(|_| PayoutError::Snapshot("entries is not an entry list"))?;
+                // The persisted window target is the exact `N x d` the front
+                // used. A stored value that is not a u128 decimal string is a
+                // corrupt row: fail closed, never guess. A missing value means
+                // the row predates the column, and only then is the target
+                // estimated (decision 2026-11-03-settlement-window-target).
+                let window_target = match snapshot.window_target.as_deref() {
+                    Some(text) => Some(
+                        text.parse::<u128>()
+                            .map_err(|_| PayoutError::Snapshot("window_target is not a u128"))?,
+                    ),
+                    None => {
+                        tracing::warn!(
+                            block = %display_hash(&e.block_hash),
+                            height = e.height,
+                            "distribution snapshot predates the persisted window target; \
+                             N x d is estimated from the stored slices"
+                        );
+                        None
+                    }
+                };
                 let high_water_mark = match single_front_high_water(&high_water) {
                     Ok(id) => id,
                     Err(err) => {
@@ -1414,6 +1448,7 @@ impl PayoutService {
                     high_water: &high_water,
                     entries: &entries,
                     slices: &slices,
+                    window_target,
                     window_truncated,
                     pending: &pending,
                     coinbase: &coinbase,
@@ -2047,6 +2082,9 @@ mod tests {
             high_water: &high_water,
             entries: &entries,
             slices: &slices,
+            // Pre-migration shape: no persisted target, so these tests
+            // exercise the warned slice-estimate fallback.
+            window_target: None,
             window_truncated: false,
             pending: &pending,
             coinbase: &coinbase,
@@ -2102,6 +2140,9 @@ mod tests {
             high_water: &high_water,
             entries: &entries,
             slices: &slices,
+            // Pre-migration shape: no persisted target, so these tests
+            // exercise the warned slice-estimate fallback.
+            window_target: None,
             window_truncated: false,
             pending: &pending,
             coinbase: &coinbase,
@@ -2162,6 +2203,9 @@ mod tests {
             high_water: &high_water,
             entries: &entries,
             slices: &slices,
+            // Pre-migration shape: no persisted target, so these tests
+            // exercise the warned slice-estimate fallback.
+            window_target: None,
             window_truncated: false,
             pending: &pending,
             coinbase: &coinbase,
@@ -2221,6 +2265,9 @@ mod tests {
             high_water: &high_water,
             entries: &entries,
             slices: &slices,
+            // Pre-migration shape: no persisted target, so these tests
+            // exercise the warned slice-estimate fallback.
+            window_target: None,
             window_truncated: false,
             pending: &pending,
             coinbase: &coinbase,
@@ -2279,6 +2326,9 @@ mod tests {
             high_water: &hw,
             entries: &entries,
             slices: &slices,
+            // Pre-migration shape: no persisted target, so these tests
+            // exercise the warned slice-estimate fallback.
+            window_target: None,
             window_truncated: false,
             pending: &pending,
             coinbase: &coinbase,
@@ -2305,6 +2355,7 @@ mod tests {
             high_water: &hw,
             entries: &[],
             slices: &[],
+            window_target: None,
             window_truncated: false,
             pending: &BTreeMap::new(),
             coinbase: &[],
@@ -2337,6 +2388,9 @@ mod tests {
             high_water: &hw,
             entries: &entries,
             slices: &slices,
+            // Pre-migration shape: no persisted target, so these tests
+            // exercise the warned slice-estimate fallback.
+            window_target: None,
             window_truncated: false,
             pending: &BTreeMap::new(),
             coinbase: &coinbase,
@@ -2386,6 +2440,9 @@ mod tests {
             high_water: &hw,
             entries: &entries,
             slices: &slices,
+            // Pre-migration shape: no persisted target, so these tests
+            // exercise the warned slice-estimate fallback.
+            window_target: None,
             window_truncated: false,
             pending: &pending,
             coinbase: &coinbase,
@@ -2424,6 +2481,105 @@ mod tests {
         assert_eq!(window_target(&slices, 100, 4).unwrap(), 800);
         // No slice at the finding height: fall back to the newest.
         assert_eq!(window_target(&slices, 101, 4).unwrap(), 400);
+    }
+
+    /// Decision 2026-11-03-settlement-window-target (test (a)): the window
+    /// was selected with the finding template's `d`, a retarget has since
+    /// changed what the stored slices imply, and settlement must use the
+    /// persisted target, not the slice estimate.
+    ///
+    /// `window_n = 1`; the finding template credited `d = 600` (persisted
+    /// target 600) while every stored slice was sealed under the pre-retarget
+    /// `d = 300`, so the slice estimate would be 300.
+    #[test]
+    fn settlement_uses_the_persisted_window_target_across_a_retarget() {
+        let alice = id(0xa1);
+        let bob = id(0xb2);
+        // No slice at the finding height 200: the newest slice is from the
+        // pre-retarget epoch, so the estimate path would pick 300.
+        let slices = vec![
+            slice_row(3, 199, 300, 1, &[(alice, 300, 0)]),
+            slice_row(2, 198, 300, 1, &[(bob, 300, 0)]),
+        ];
+        let entries = vec![
+            entry(alice, Rail::Coinbase, Some(id(0x01)), 300),
+            entry(bob, Rail::Coinbase, Some(id(0x02)), 300),
+        ];
+        let coinbase = vec![
+            output(pool_script(), 0),
+            output(spc_accounting::p2tr_script(&id(0x01)), 300),
+            output(spc_accounting::p2tr_script(&id(0x02)), 300),
+        ];
+        let hw = high_water(0, "3");
+        let input = ReconstructInput {
+            height: 200,
+            high_water: &hw,
+            entries: &entries,
+            slices: &slices,
+            // The exact target the front froze for this distribution.
+            window_target: Some(600),
+            window_truncated: false,
+            pending: &BTreeMap::new(),
+            coinbase: &coinbase,
+            economics: BlockEconomics {
+                subsidy: 600,
+                fees: 0,
+            },
+            delivered: &BTreeSet::new(),
+            cfg: base_cfg(1),
+            coinbase_threshold_sats: 30,
+        };
+
+        let reconstructed = reconstruct_settlement(&input).unwrap();
+        // The persisted 600 target takes both slices (Σ 600); the 300
+        // estimate would have taken only slice 3 and paid Bob nothing.
+        assert_eq!(reconstructed.window, vec![3, 2]);
+        assert_eq!(reconstructed.raw.get(&alice), Some(&300));
+        assert_eq!(reconstructed.raw.get(&bob), Some(&300));
+        // Replay determinism: the same frozen inputs book the same ledger.
+        assert_eq!(reconstruct_settlement(&input).unwrap(), reconstructed);
+    }
+
+    /// Test (b): a pre-migration snapshot row carries no target, so
+    /// settlement falls back to the (warned, at the service layer) slice
+    /// estimate. The same slices as the retarget test estimate 300 from the
+    /// newest slice and select only slice 3.
+    #[test]
+    fn pre_migration_snapshot_falls_back_to_the_slice_estimate() {
+        let alice = id(0xa1);
+        let slices = vec![
+            slice_row(3, 199, 300, 1, &[(alice, 300, 0)]),
+            slice_row(2, 198, 300, 1, &[(id(0xb2), 300, 0)]),
+        ];
+        let entries = vec![entry(alice, Rail::Coinbase, Some(id(0x01)), 300)];
+        let coinbase = vec![
+            output(pool_script(), 0),
+            output(spc_accounting::p2tr_script(&id(0x01)), 300),
+        ];
+        let hw = high_water(0, "3");
+        let input = ReconstructInput {
+            height: 200,
+            high_water: &hw,
+            entries: &entries,
+            slices: &slices,
+            window_target: None,
+            window_truncated: false,
+            pending: &BTreeMap::new(),
+            coinbase: &coinbase,
+            economics: BlockEconomics {
+                subsidy: 300,
+                fees: 0,
+            },
+            delivered: &BTreeSet::new(),
+            cfg: base_cfg(1),
+            coinbase_threshold_sats: 30,
+        };
+
+        let reconstructed = reconstruct_settlement(&input).unwrap();
+        // The estimate (300 from the newest slice) closes on slice 3 alone -
+        // a smaller window than the persisted 600 target would select.
+        assert_eq!(reconstructed.window, vec![3]);
+        assert_eq!(reconstructed.raw.get(&alice), Some(&300));
     }
 
     #[test]
@@ -2546,6 +2702,7 @@ mod tests {
                 distribution_id: None,
                 entries: serde_json::to_value(entries).unwrap(),
                 high_water: serde_json::json!({"0": "1"}),
+                window_target: Some("8".into()),
             })
             .await
             .unwrap();
@@ -2795,6 +2952,238 @@ mod tests {
         assert!(row.credits.is_empty(), "old credits are scrubbed");
     }
 
+    /// Authoritative view with a fixed coinbase and economics: lets the
+    /// env-gated tests run the exact `recompute` path against a real store.
+    struct ReconstructChain {
+        coinbase: Vec<CoinbaseOutput>,
+        economics: BlockEconomics,
+    }
+
+    #[async_trait::async_trait]
+    impl ChainView for ReconstructChain {
+        async fn tip_height(&self) -> Result<u32, ChainError> {
+            Ok(900_000)
+        }
+
+        async fn block_hash_at(&self, _height: u32) -> Result<Option<[u8; 32]>, ChainError> {
+            Ok(None)
+        }
+
+        async fn is_active(&self, _block: &[u8; 32], _height: u32) -> Result<bool, ChainError> {
+            Ok(true)
+        }
+
+        async fn coinbase_outputs(
+            &self,
+            _block_hash: &[u8; 32],
+        ) -> Result<Option<Vec<CoinbaseOutput>>, ChainError> {
+            Ok(Some(self.coinbase.clone()))
+        }
+
+        async fn block_economics(
+            &self,
+            _block_hash: &[u8; 32],
+        ) -> Result<Option<BlockEconomics>, ChainError> {
+            Ok(Some(self.economics))
+        }
+
+        fn authoritative(&self) -> bool {
+            true
+        }
+    }
+
+    /// Store fixture for the reconstruction tests: two miners, two sealed
+    /// pre-retarget slices below the finding height, and a snapshot whose
+    /// `window_target` the caller chooses (None = pre-migration row).
+    /// Env-gated settlement fixture: two identities, two sealed slices, and
+    /// a distribution snapshot at a finding height.
+    ///
+    /// The high-water walk (`window_slices_to`) returns EVERY stored slice
+    /// at or below the mark, so this fixture must be deterministic against
+    /// a shared test database that other fixtures - and earlier runs of
+    /// these very tests - have filled:
+    ///
+    /// - The slice ids sit just below `i64::MAX` and the heights at
+    ///   `i32::MAX`, so no foreign row can sort between (or before) the
+    ///   fixture's two slices in the walk's `height DESC, slice_id DESC`
+    ///   order; the window closes on exactly these two rows.
+    /// - The ids, heights, difficulties, and identity keys are FIXED, and
+    ///   `insert_slice` is `ON CONFLICT DO NOTHING`: a re-run writes
+    ///   byte-identical rows, so the fixture is idempotent and never
+    ///   accumulates stale credits the window would reject.
+    ///
+    /// The finding height equals the newest slice's height, so the
+    /// pre-migration estimate's reference slice is the fixture's own, not
+    /// whatever foreign slice happens to be stored.
+    async fn reconstruction_env(
+        window_target: Option<&str>,
+    ) -> Option<(Store, Streams, [u8; 32], [u8; 32], u64, u32)> {
+        let (store, streams) = ark_test_env().await?;
+        let alice = [
+            0x53, 0x50, 0x63, 0x74, 0x65, 0x73, 0x74, 0x61, 0x6c, 0x69, 0x63, 0x65, 0x31, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x01,
+        ];
+        let bob = [
+            0x53, 0x50, 0x63, 0x74, 0x65, 0x73, 0x74, 0x62, 0x6f, 0x62, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x02,
+        ];
+        for sp_id in [alice, bob] {
+            store
+                .upsert_identity(&SpIdentityRow {
+                    sp_id,
+                    b_scan: vec![2; 33],
+                    b_spend: vec![3; 33],
+                    network: 3,
+                })
+                .await
+                .unwrap();
+        }
+        let older = 0x7fff_ffff_ffff_f000u64;
+        let newer = 0x7fff_ffff_ffff_f001u64;
+        let finding_height = i32::MAX as u32;
+        for (slice_id, height, sp_id) in [
+            (newer, finding_height, alice),
+            (older, finding_height - 1, bob),
+        ] {
+            store
+                .insert_slice(&SliceRow {
+                    slice_id,
+                    height,
+                    prev_hash: [1; 32],
+                    ref_job_id: 1,
+                    ref_fees: 0,
+                    n_shares: 1,
+                    difficulty: "100".into(),
+                    root: [2; 32],
+                    shares: vec![3],
+                    credits: vec![SliceCreditRow {
+                        sp_id,
+                        diff_sum: "100".into(),
+                        diff_fee_sum: "0".into(),
+                    }],
+                })
+                .await
+                .unwrap();
+        }
+        let fingerprint: [u8; 32] = rand::random();
+        let entries = vec![
+            entry(alice, Rail::Coinbase, Some(id(0x01)), 100),
+            entry(bob, Rail::Coinbase, Some(id(0x02)), 100),
+        ];
+        store
+            .insert_snapshot(&SnapshotRow {
+                fingerprint,
+                height: finding_height,
+                a_send_x: [4; 32],
+                distribution_id: None,
+                entries: serde_json::to_value(entries).unwrap(),
+                high_water: serde_json::json!({ "0": newer.to_string() }),
+                window_target: window_target.map(str::to_string),
+            })
+            .await
+            .unwrap();
+        Some((store, streams, fingerprint, alice, newer, finding_height))
+    }
+
+    /// Test (b), service level: a pre-migration snapshot row (no stored
+    /// window target) settles through the warned slice estimate - the
+    /// reconstruction is not held, and the estimate path (which logs the
+    /// warning naming the block) runs.
+    #[tokio::test]
+    async fn pre_migration_row_settles_through_the_warned_estimate() {
+        let Some((store, streams, fingerprint, alice, newer, finding_height)) =
+            reconstruction_env(None).await
+        else {
+            return;
+        };
+        let bob_entry_p_x = id(0x02);
+        let svc = PayoutService::new(
+            store.clone(),
+            streams,
+            RETRY_DEPTH,
+            30,
+            Arc::new(ReconstructChain {
+                coinbase: vec![
+                    output(pool_script(), 0),
+                    output(spc_accounting::p2tr_script(&id(0x01)), 100),
+                    output(spc_accounting::p2tr_script(&bob_entry_p_x), 100),
+                ],
+                economics: BlockEconomics {
+                    subsidy: 200,
+                    fees: 0,
+                },
+            }),
+            None,
+            0,
+        )
+        .with_accounting(base_cfg(2));
+        let event = BlockEvent {
+            block_hash: rand::random(),
+            height: finding_height,
+            front_id: 0,
+            fingerprint,
+            a_send_x: [4; 32],
+            high_water: BTreeMap::from([(0u8, newer.to_string())]),
+            window_target: 0,
+            entries: Vec::new(),
+        };
+        let Some((ledger, deltas)) = svc.recompute(&event, fingerprint).await.unwrap() else {
+            panic!("a pre-migration row must settle, not hold");
+        };
+        // The estimate (d = 100 from the newest slice, window_n = 2 -> 200)
+        // takes both slices: both miners are paid their raw share.
+        assert_eq!(ledger.len(), 2);
+        assert!(ledger.iter().all(|row| row.rail == LedgerRail::Coinbase));
+        let alice_row = ledger.iter().find(|row| row.sp_id == alice).unwrap();
+        assert_eq!(alice_row.paid_sats, 100);
+        assert!(deltas.is_empty());
+    }
+
+    /// A persisted window target that is not a u128 is a corrupt row:
+    /// settlement fails closed (an error the consumer group retries and
+    /// alarms on), never a silent fall-back to the estimate.
+    #[tokio::test]
+    async fn corrupt_persisted_window_target_fails_closed() {
+        // 2^128: a valid NUMERIC(40,0) but beyond u128.
+        let Some((store, streams, fingerprint, _alice, newer, finding_height)) =
+            reconstruction_env(Some("340282366920938463463374607431768211456")).await
+        else {
+            return;
+        };
+        let svc = PayoutService::new(
+            store,
+            streams,
+            RETRY_DEPTH,
+            30,
+            Arc::new(ReconstructChain {
+                coinbase: vec![output(pool_script(), 200)],
+                economics: BlockEconomics {
+                    subsidy: 200,
+                    fees: 0,
+                },
+            }),
+            None,
+            0,
+        )
+        .with_accounting(base_cfg(2));
+        let event = BlockEvent {
+            block_hash: rand::random(),
+            height: finding_height,
+            front_id: 0,
+            fingerprint,
+            a_send_x: [4; 32],
+            high_water: BTreeMap::from([(0u8, newer.to_string())]),
+            window_target: 0,
+            entries: Vec::new(),
+        };
+        assert!(matches!(
+            svc.recompute(&event, fingerprint).await,
+            Err(PayoutError::Snapshot(_))
+        ));
+    }
+
     /// Regression for the accounting fix: an unregistered id below `C`
     /// forfeits only this block's raw earnings. A prior pending balance is
     /// retained, so the ledger delta is zero and conservation holds.
@@ -2813,6 +3202,9 @@ mod tests {
             high_water: &hw,
             entries: &entries,
             slices: &slices,
+            // Pre-migration shape: no persisted target, so these tests
+            // exercise the warned slice-estimate fallback.
+            window_target: None,
             window_truncated: false,
             pending: &pending,
             coinbase: &coinbase,
@@ -2868,6 +3260,9 @@ mod tests {
             high_water: &hw,
             entries: &entries,
             slices: &slices,
+            // Pre-migration shape: no persisted target, so these tests
+            // exercise the warned slice-estimate fallback.
+            window_target: None,
             window_truncated: false,
             pending: &pending,
             coinbase: &coinbase,
@@ -3024,6 +3419,7 @@ mod tests {
             fingerprint: rand::random(),
             a_send_x: [4; 32],
             high_water: BTreeMap::from([(0u8, "1".to_string())]),
+            window_target: 8,
             entries: vec![entry(sp_id, Rail::Coinbase, Some(id(0x01)), 100)],
         };
         // Non-authoritative chain: the legacy ledger path books the entry,
@@ -3126,6 +3522,7 @@ mod tests {
                 distribution_id: None,
                 entries: serde_json::json!([]),
                 high_water: serde_json::json!({"0": "1"}),
+                window_target: Some("8".into()),
             })
             .await
             .unwrap();
@@ -3229,6 +3626,7 @@ mod tests {
             fingerprint: rand::random(),
             a_send_x: [4; 32],
             high_water: BTreeMap::from([(0u8, "1".to_string())]),
+            window_target: 8,
             entries: vec![entry(sp_id, Rail::Coinbase, None, 100)],
         };
         let payload = event.encode().unwrap();
@@ -3272,6 +3670,7 @@ mod tests {
                 distribution_id: None,
                 entries: serde_json::json!([]),
                 high_water: serde_json::json!({"0": "1"}),
+                window_target: Some("8".into()),
             })
             .await
             .unwrap();
