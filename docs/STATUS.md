@@ -19,6 +19,8 @@ reviews are recorded for risky packets, and the commit is pushed.
 | JD fallback + template rebuild | `ses_e5cf0b27d` | landed `85db04d`..`18ac53f`, merged |
 | Banded amounts + Ark overage design | `ses_e5ceb5ce6` | landed `bdd0be5`..`7be2541`, merged `d62bf23`; ladder decided |
 | rbitcoin node fork (testnet4) | `ses_e6195c6a` | separate repo; 6 commits pushed to the fork; full sync to testnet4 tip verified once, re-syncing after a datadir wipe |
+| rbitcoin RPC e2e harness | `ses_e592c174b` | dispatched 2026-11-04 on branch `rbitcoin-e2e` |
+| SV2 Template Provider source | `ses_e590d51b2` | dispatched 2026-11-04 on branch `sv2-tp` |
 | Proxy/upstream analysis | `ses_e60f175c` | closed, `docs/analysis/2026-11-02-proxy-and-upstream-options.md` |
 | Multi-identifier analysis | `ses_e638a2e6` | closed, `docs/analysis/2026-11-02-multi-identifier-payouts.md` |
 
@@ -39,6 +41,14 @@ reviews are recorded for risky packets, and the commit is pushed.
 - Amount-banded payouts analysis (`116ed34`): overage-to-Ark relocates exact
   amounts to the Ark server; band + overage-to-pending bounds the on-chain
   leak to `ceil(log2 L)` bits per block. No code change.
+- **rbitcoin as the e2e node (2026-11-04, in flight):** two packets run in
+  parallel. One adds `testing/regtest-rbitcoin-e2e.sh` + a reorg scenario
+  against rbitcoin's Core-compatible RPC (drop-in for `source = "rpc"`,
+  `invalidateblock` for the reorg invariant). The other implements
+  `[template] source = "sv2-tp"`: a TDP client over Noise_NX against
+  rbitcoin's Template Provider, with `SubmitSolution` replacing `submitblock`.
+  rbitcoin gives easy regtest PoW (`--regtest-pow-bits`), a single binary with
+  no wallet/CLI dependency, and a real TP.
 - **Ladder decided and recorded (`d62bf23`, record `7be2541`):** coinbase
   amounts are multiples of a constant ladder `{500k, 1M, 3M, 5M}` sats, greedy
   largest-first, remainder to Ark. No era scaling; each halving doubles the
