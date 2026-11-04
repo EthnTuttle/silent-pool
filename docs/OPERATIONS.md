@@ -216,8 +216,10 @@ Rules that are load-bearing (SPEC §2.2, §7.2, §9, §11.3):
 
 ## 6. Regtest harnesses
 
-Two end-to-end harnesses, both run from the devshell (they need `bitcoind`,
-`python3`, `jq`, `curl`). `KEEP=1` preserves the temp dir for inspection.
+End-to-end harnesses, pairs of bitcoind-backed and rbitcoin-backed scenarios.
+All run from the devshell (they need the node binary, `python3`, `jq`,
+`curl`; the full-stack ones also need `initdb`/`redis-server`). `KEEP=1`
+preserves the temp dir for inspection.
 
 **`testing/regtest-e2e.sh`** - the fast path (also `just e2e`):
 
@@ -240,6 +242,40 @@ Two end-to-end harnesses, both run from the devshell (they need `bitcoind`,
   `GET /api/pool/blocks?limit=5`, then runs the same `spc-scan` recovery.
 - Proves: front -> Redis -> payout -> Postgres -> API, i.e. the settlement
   and read paths, not just mining.
+
+**rbitcoin-backed** - the same two scenarios against `rbitcoin-node` (the
+pinned Rust node, `UPSTREAM_DEPS.md`) instead of `bitcoind`, proving the
+pool's `[template] source = "rpc"` consumes its Core-compatible RPC surface
+unchanged (cookie Basic auth, `getblocktemplate`, `submitblock`,
+`invalidateblock`, `getblock`/`getblockstats`). Unlike `bitcoind`, the node
+READS an existing Core-format `username:password` cookie (mode 0600, no
+trailing newline) from `--rpc-cookie-file`, so the harnesses write it before
+starting the node; blocks are funded with `generatetoaddress` to a fixed
+P2TR hex script (no wallet), and `--regtest-pow-bits 0x200fffff` keeps PoW
+trivial but real. Both scripts print `SKIP` and exit 0 when the binary is
+absent, use their own temp dirs and ports disjoint from the bitcoind
+harnesses (so all four can run concurrently), and accept `KEEP=1`:
+
+- `testing/regtest-rbitcoin-e2e.sh` - front-only. Asserts the height
+  advances when the synthetic miner submits shares AND that `spc-scan find`
+  recovers at least one miner output (a hard assert, unlike the bitcoind
+  harness's warning). Ports: RPC 29443, SV1 34333, SV2 34454, API 29080.
+- `testing/regtest-rbitcoin-reorg-e2e.sh` - full stack (ephemeral Postgres
+  55433 + Redis 56380, `confirmation_depth = 2`, API 29081). Settles a found
+  block with 2 confirmations, then `invalidateblock`s a second found block
+  and mines a competing branch across its height. Asserts the SPEC §8.4
+  step-4 orphan invariant: `block_found` carries exactly one row for the
+  height with `status='orphaned'`, `ledger_history` and `ark_payout` row
+  counts are unchanged from after the settle leg (the orphaned payout is
+  never booked, so it cannot be booked twice), `/api/pool/liability` is
+  unchanged, `/api/pool/blocks` shows the orphan, and the pool keeps
+  producing on the competing branch.
+
+Environment: `RBITCOIN_NODE` (default
+`/home/ethan/code/rbitcoin/target/dev/debug/rbitcoin-node`),
+`RBITCOIN_CLI` (optional; derived from the node dir, used only for a clean
+stop), `KEEP=1`. Run them from the devshell like the bitcoind harnesses,
+e.g. `nix develop -c ./testing/regtest-rbitcoin-reorg-e2e.sh`.
 
 Ark end-to-end (`just ark-e2e`, `testing/ark-e2e.sh`) additionally needs a
 `captaind` in `PATH` and `SPC_ARK_E2E=1`; CI otherwise runs the mock
