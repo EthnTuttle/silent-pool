@@ -40,8 +40,12 @@ One miner identity — the SP address (`sp1q...`) — is the only string ever
 registered with a pool. The payout tier is decided per block by whether the
 miner's accrued balance clears the coinbase dust threshold:
 
-- **Above threshold** -> SPc output directly in the coinbase. Trustless,
-  non-custodial, spendable after the 100-block coinbase maturity.
+- **Above threshold** -> SPc output(s) directly in the coinbase. Trustless,
+  non-custodial, spendable after the 100-block coinbase maturity. Since
+  2026-11-03 the payout is a **greedy decomposition over a constant four-rung
+  ladder**, one output per piece at `P_{i,k}` (see "Denomination payouts"),
+  and the threshold itself is the 500 000-sat base rung
+  (`docs/decisions/2026-11-03-banded-amounts-with-ark-overage.md`).
 - **Below threshold** -> once the block has 6 confirmations, the pool arkoors
   the miner from its own Ark float. The block's single pool output (a fresh
   P2TR under the pool's hot Ark key) carries those sats, and when it matures
@@ -52,6 +56,28 @@ miner's accrued balance clears the coinbase dust threshold:
 
 The crux: the Ark-side destination is **derived from the same per-block ECDH**
 the pool already runs for SPc — not bundled with the SP address. See below.
+
+## Denomination payouts (2026-11-03)
+
+Coinbase outputs are denominated against a published, **constant** ladder —
+rungs `{500 000; 1 000 000; 3 000 000; 5 000 000}` sats, greedy
+largest-first, remainder below 500k over Ark. The ladder never changes (no
+era scaling): each halving doubles the rungs' relative size, which is
+accepted (era-4 base ≈ 1.28 % of the reward), and the band function is
+trivially pure over the amount — no dependence on height, subsidy, fees or
+the coinbase value, so build, settlement and miner audit cannot diverge on
+it. Owner policy applied: **maximize the on-chain share; no deferral for
+capacity (the output count is value-bounded, ≤ T/500k ≈ 619 in era 1);
+whatever cannot be paid in the coinbase goes over Ark.** This is a **product
+decision with stated costs**: miners below 500k sats get no coinbase output
+at all (the dominant class in a large pool — ~86 % of identities at 1 000
+miners); remainders are trustodial until refresh; and the Ark server sees
+exact per-miner remainder amounts. Chain-facing: every output is one of four
+public values, so no per-miner varying amount exists on-chain; residual
+channels are per-rung class composition, counts, timing, whale top classes,
+and redemption-time clustering. Numbers, tail-rung evaluation (10M/25M,
+not adopted), float sizing and wallet UTXO counts are in the decision
+record.
 
 ## Derivation scheme
 
@@ -179,7 +205,9 @@ one mailbox per pool block.
 - **On-chain observer.** Sees SPc outputs only; the arkoor tier is invisible
   on-chain. A derived Ark address leaks nothing on-chain. A *published bundle*
   (e.g. a BIP321 `?sp=...&ark=...` URI) would be a correlation point — never
-  post one publicly.
+  post one publicly. Payout amounts are **denominated** (see "Denomination
+  payouts"): the observer sees only per-denomination counts per block —
+  no per-miner varying value exists on-chain.
 - **The Ark server.** Sees arkoor destination pubkeys, amounts, timing, and
   any boards. It can also parse public coinbases. This is the subtle one:
   bursts of pool-originated arkoors ~6 blocks after each pool block are
@@ -188,6 +216,9 @@ one mailbox per pool block.
   sees the funding UTXO, linking that SPc output to their Ark identity.
   With mailbox delivery, the server also unblinds every payout to the
   miner's static mailbox id, which links all of that miner's payouts.
+  With denomination payouts (2026-11-03) the server's coverage is total: it
+  serves the exact remainder of every paid miner every block and the full
+  balances of sub-`u` miners — accepted as a product decision.
 - **Anyone the identifier is published to.** Sees whatever the identifier
   contains. Keep it to the bare `sp1q...`.
 
@@ -195,14 +226,19 @@ The single-identifier-with-derivation design is strictly more private than
 ArkPool's status quo (static reused address visible to the Ark server) and no
 worse than SPc alone on-chain. The costs that cannot be designed away:
 
-1. **Amount fingerprinting on the SPc tier** (known SPc limitation, unchanged).
+1. **Amount fingerprinting on the SPc tier** — bounded by denomination
+   payouts (2026-11-03): the chain shows only public ladder values and
+   per-denomination counts; the residual channels are class composition,
+   per-block counts, timing, whale top classes, and redemption-time
+   clustering (see the decision record's parameter study).
 2. **Tier transitions are observable.** A miner vanishing from coinbase
    outputs while pool arkoor activity continues leaks tier status to anyone
    watching both layers.
-3. **Ark server as cross-layer observer** (above). Soft mitigations only:
-   payout timing jitter, amount padding/rounding, aggregating small payouts
-   across epochs, and boarding SPc outputs via paths that do not advertise
-   "fresh coinbase payout."
+3. **Ark server as cross-layer observer** (above) — with denomination
+   payouts, this is where the exact amounts went. Soft mitigations only:
+   payout timing jitter, aggregating small payouts
+   across epochs (now standard for sub-threshold remainders), and boarding SPc
+   outputs via paths that do not advertise "fresh coinbase payout."
 
 ## Open questions
 
