@@ -36,6 +36,9 @@ U32    height
 U8     front_id
 B032   fingerprint            // SPEC §4.7; audit/dedup handle only
 B032   a_send_x               // public x-only key; the secret is never stored
+U64    ladder_u               // §4.4 adaptive base unit used by this distribution
+U8     ladder_ratio           // 8 in v1
+U16    ladder_n               // budget-derived output target N
 SEQ0_64K[ {U8 front_id, STR0_255 stream_id} ] high_water  // {front_id: last_slice_stream_id} (§4.3); Redis stream ids are "ms-seq" strings
 SEQ0_64K[ Entry ] entries     // the winning distribution's full entry list (SPEC §3.3 step 5)
 ```
@@ -45,9 +48,9 @@ SEQ0_64K[ Entry ] entries     // the winning distribution's full entry list (SPE
 ```
 B032   sp_id
 U8     rail                   // 0 coinbase, 1 ark, 2 pending, 3 forfeit (the rail the builder expected)
-B0_32  p_x                    // ser_x(P_id); empty if the id was not kept
+B0_32  p_x                    // ser_x(P_id,k) — one per output of the decomposition; empty if the id was not kept
 B0_255 dest_id                // SPEC §4.7 / §11.8 Ark destination (U_i policy key + delivery); empty if not Ark-capable
-U64    sats                   // banded pay(id) for a kept id (SPEC §4.4), owed(id) otherwise
+U64    sats                   // u x floor(owed/u) for a kept id (SPEC §4.4), owed(id) otherwise
 ```
 
 `entries` are attribution data: they never leave the SPc side of the Redis ACL (SPEC §11.3) and are scrubbed per SPEC §5.1.
