@@ -20,6 +20,20 @@ pub enum JdError {
     Ext(String),
 }
 
+impl JdError {
+    /// The wire `error_code` answering a declined declaration (SPEC §3.5
+    /// "Declaration answers"). The JDS answers every parseable declaration,
+    /// so a JDC can always tell a coded decline from a transport error.
+    pub fn decline_code(&self) -> &'static str {
+        match self {
+            JdError::Invalid => "invalid-payout-distribution",
+            JdError::Stale => "stale-payout-distribution",
+            JdError::Empty => "no-payout-distribution",
+            JdError::Ext(_) => "internal-error",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Published {
     id: u64,
@@ -283,6 +297,20 @@ pub fn distribution_from_weights(
 mod tests {
     use super::*;
     use spc_ext::TxOut;
+
+    /// SPEC §3.5 "Declaration answers": every JdError maps to a stable,
+    /// project-defined wire code (or upstream `internal-error`), so a coded
+    /// decline is always distinguishable from a transport error.
+    #[test]
+    fn decline_codes_match_the_spec_table() {
+        assert_eq!(
+            JdError::Invalid.decline_code(),
+            "invalid-payout-distribution"
+        );
+        assert_eq!(JdError::Stale.decline_code(), "stale-payout-distribution");
+        assert_eq!(JdError::Empty.decline_code(), "no-payout-distribution");
+        assert_eq!(JdError::Ext("x".into()).decline_code(), "internal-error");
+    }
 
     fn dist() -> SetPayoutDistribution {
         SetPayoutDistribution {

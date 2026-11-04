@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use spc_ext::{DistributionIdTlv, SetPayoutDistribution};
 use stratum_apps::key_utils::{Secp256k1PublicKey, Secp256k1SecretKey};
-use stratum_core::binary_sv2::{self, GetSize, Seq064K, B0255, B064K};
+use stratum_core::binary_sv2::{self, GetSize, Seq064K, Str0255, B0255, B064K};
 use stratum_core::codec_sv2::SerializedFrame;
 use stratum_core::common_messages_sv2::{
     SetupConnection, SetupConnectionSuccess, MESSAGE_TYPE_SETUP_CONNECTION,
@@ -18,23 +18,54 @@ use stratum_core::extensions_sv2::{
     MESSAGE_TYPE_REQUEST_EXTENSIONS, MESSAGE_TYPE_REQUEST_EXTENSIONS_SUCCESS,
 };
 use stratum_core::job_declaration_sv2::{
-    AllocateMiningJobToken, AllocateMiningJobTokenSuccess, DeclareMiningJob,
-    MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN, MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN_SUCCESS,
-    MESSAGE_TYPE_DECLARE_MINING_JOB,
+    AllocateMiningJobToken, AllocateMiningJobTokenSuccess, DeclareMiningJob, DeclareMiningJobError,
+    DeclareMiningJobSuccess, MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN,
+    MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN_SUCCESS, MESSAGE_TYPE_DECLARE_MINING_JOB,
+    MESSAGE_TYPE_DECLARE_MINING_JOB_ERROR, MESSAGE_TYPE_DECLARE_MINING_JOB_SUCCESS,
 };
-use stratum_core::mining_sv2::{SetCustomMiningJob, MESSAGE_TYPE_SET_CUSTOM_MINING_JOB};
+use stratum_core::mining_sv2::{
+    SetCustomMiningJob, SetCustomMiningJobError, SetCustomMiningJobSuccess,
+    MESSAGE_TYPE_SET_CUSTOM_MINING_JOB, MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_ERROR,
+    MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS,
+};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, Mutex};
 
-use crate::jds::Jds;
+use crate::jds::{JdError, Jds};
 
 pub const EXT_PAYOUTS: u16 = 0x0003;
+
+/// What a test client can observe about a received declaration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeclareNotice {
+    pub request_id: u32,
+    pub distribution_id: Option<u64>,
+    pub wtxids: usize,
+}
+
+/// How the server answers declarations (SPEC §3.5 answers every parseable
+/// one). `Natural` is production; the other arms let client tests script a
+/// decline or a silence deterministically.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum AnswerPolicy {
+    #[default]
+    Natural,
+    /// Answer every declaration with this decline code.
+    ForceDecline(String),
+    /// Never answer declarations (distributions are still served).
+    Mute,
+    /// Drop the connection on the next declaration (a crashed-JDS stand-in,
+    /// for distinguishing coded declines from transport errors in tests).
+    HangUp,
+}
 
 pub struct JdsServer {
     jds: Arc<Mutex<Jds>>,
     current: Arc<Mutex<Option<Vec<u8>>>>,
     height: Arc<Mutex<u32>>,
     accepted: Arc<Mutex<Option<u64>>>,
+    declares: Arc<Mutex<Vec<DeclareNotice>>>,
+    answer: Arc<Mutex<AnswerPolicy>>,
     dist_tx: broadcast::Sender<Vec<u8>>,
     pk: Secp256k1PublicKey,
     sk: Secp256k1SecretKey,
@@ -51,6 +82,8 @@ impl JdsServer {
             current: Arc::new(Mutex::new(None)),
             height: Arc::new(Mutex::new(0)),
             accepted: Arc::new(Mutex::new(None)),
+            declares: Arc::new(Mutex::new(Vec::new())),
+            answer: Arc::new(Mutex::new(AnswerPolicy::default())),
             dist_tx,
             pk: Secp256k1PublicKey(kp.x_only_public_key().0),
             sk: Secp256k1SecretKey(kp.secret_key()),
@@ -78,6 +111,21 @@ impl JdsServer {
         *self.accepted.lock().await
     }
 
+    /// How many `DeclareMiningJob` messages reached the server.
+    pub async fn declare_count(&self) -> usize {
+        self.declares.lock().await.len()
+    }
+
+    /// The received declarations, in arrival order.
+    pub async fn declares(&self) -> Vec<DeclareNotice> {
+        self.declares.lock().await.clone()
+    }
+
+    /// Script the declaration answers (`Natural` by default).
+    pub async fn set_answer_policy(&self, policy: AnswerPolicy) {
+        *self.answer.lock().await = policy;
+    }
+
     pub async fn bind(
         &self,
         addr: &str,
@@ -89,10 +137,13 @@ impl JdsServer {
             current: self.current.clone(),
             height: self.height.clone(),
             accepted: self.accepted.clone(),
+            declares: self.declares.clone(),
+            answer: self.answer.clone(),
             dist_tx: self.dist_tx.clone(),
             pk: self.pk,
             sk: self.sk,
             token_seq: Arc::new(Mutex::new(0)),
+            job_seq: Arc::new(Mutex::new(0)),
         });
         let handle = tokio::spawn(async move {
             while let Ok((socket, _)) = listener.accept().await {
@@ -111,10 +162,13 @@ struct JdsServerRef {
     current: Arc<Mutex<Option<Vec<u8>>>>,
     height: Arc<Mutex<u32>>,
     accepted: Arc<Mutex<Option<u64>>>,
+    declares: Arc<Mutex<Vec<DeclareNotice>>>,
+    answer: Arc<Mutex<AnswerPolicy>>,
     dist_tx: broadcast::Sender<Vec<u8>>,
     pk: Secp256k1PublicKey,
     sk: Secp256k1SecretKey,
     token_seq: Arc<Mutex<u64>>,
+    job_seq: Arc<Mutex<u32>>,
 }
 
 impl JdsServerRef {
@@ -193,13 +247,50 @@ impl JdsServerRef {
                         (_, MESSAGE_TYPE_DECLARE_MINING_JOB) => {
                             let msg: DeclareMiningJob = binary_sv2::from_bytes(&mut payload)
                                 .map_err(|e| format!("declare: {e}"))?;
-                            if let Some(id) = find_tlv(msg.excess_data.as_bytes()) {
-                                let height = *self.height.lock().await;
-                                if let Ok(outputs) = parse_coinbase_outputs(msg.coinbase_tx_suffix.as_bytes()) {
-                                    match self.jds.lock().await.validate_declared(id, height, &outputs) {
-                                        Ok(()) => *self.accepted.lock().await = Some(id),
-                                        Err(error) => {
-                                            tracing::warn!(id, height, %error, "declared coinbase rejected")
+                            {
+                                let mut declares = self.declares.lock().await;
+                                declares.push(DeclareNotice {
+                                    request_id: msg.request_id,
+                                    distribution_id: find_tlv(msg.excess_data.as_bytes()),
+                                    wtxids: msg.wtxid_list.len(),
+                                });
+                            }
+                            match self.answer.lock().await.clone() {
+                                // Simulated silence: nothing is answered at all.
+                                AnswerPolicy::Mute => {}
+                                // Simulated crash: the connection is dropped.
+                                AnswerPolicy::HangUp => {
+                                    return Err("answer policy: simulated JDS hangup".into())
+                                }
+                                AnswerPolicy::ForceDecline(code) => {
+                                    send_declare_error(&mut write, msg.request_id, &code).await?;
+                                }
+                                AnswerPolicy::Natural => {
+                                    let height = *self.height.lock().await;
+                                    let result = {
+                                        let jds = self.jds.lock().await;
+                                        check_declare(&jds, height, &msg)
+                                    };
+                                    match result {
+                                        Ok(id) => {
+                                            *self.accepted.lock().await = Some(id);
+                                            let success = DeclareMiningJobSuccess {
+                                                request_id: msg.request_id,
+                                                // The pool allows mining on
+                                                // the declared job with the
+                                                // same token.
+                                                new_mining_job_token: msg.mining_job_token,
+                                            };
+                                            write_msg(
+                                                &mut write,
+                                                success,
+                                                MESSAGE_TYPE_DECLARE_MINING_JOB_SUCCESS,
+                                            )
+                                            .await?;
+                                        }
+                                        Err(decline) => {
+                                            tracing::warn!(height, code = decline.code(), %decline, "declared coinbase declined");
+                                            send_declare_error(&mut write, msg.request_id, decline.code()).await?;
                                         }
                                     }
                                 }
@@ -207,14 +298,43 @@ impl JdsServerRef {
                         }
                         (_, MESSAGE_TYPE_SET_CUSTOM_MINING_JOB) => {
                             let height = *self.height.lock().await;
+                            let mut id_buf = payload.clone();
+                            let parsed: Result<SetCustomMiningJob, _> =
+                                binary_sv2::from_bytes(&mut id_buf);
                             let result = {
                                 let jds = self.jds.lock().await;
                                 check_custom_job(&jds, height, &payload)
                             };
                             match result {
-                                Ok(id) => *self.accepted.lock().await = Some(id),
-                                Err(error) => {
-                                    tracing::warn!(height, %error, "SetCustomMiningJob rejected")
+                                Ok(id) => {
+                                    *self.accepted.lock().await = Some(id);
+                                    if let Ok(msg) = parsed {
+                                        let mut seq = self.job_seq.lock().await;
+                                        *seq = seq.wrapping_add(1);
+                                        let success = SetCustomMiningJobSuccess {
+                                            channel_id: msg.channel_id,
+                                            request_id: msg.request_id,
+                                            job_id: *seq,
+                                        };
+                                        write_msg(
+                                            &mut write,
+                                            success,
+                                            MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS,
+                                        )
+                                        .await?;
+                                    }
+                                }
+                                Err(decline) => {
+                                    tracing::warn!(height, code = decline.code(), %decline, "SetCustomMiningJob declined");
+                                    if let Ok(msg) = parsed {
+                                        send_custom_job_error(
+                                            &mut write,
+                                            msg.channel_id,
+                                            msg.request_id,
+                                            decline.code(),
+                                        )
+                                        .await?;
+                                    }
                                 }
                             }
                         }
@@ -234,6 +354,50 @@ impl JdsServerRef {
     }
 }
 
+/// A decline the JDS can answer (SPEC §3.5 "Declaration answers"): the wire
+/// `error_code` plus a detail string for logs. `Malformed` covers anything
+/// about the declaration itself (codec, TLV); `Rejected` is the distribution
+/// validation result.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Decline {
+    Malformed(String),
+    Rejected(JdError),
+}
+
+impl Decline {
+    /// The stable wire code a JDC can act on.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Decline::Malformed(_) => "invalid-job",
+            Decline::Rejected(e) => e.decline_code(),
+        }
+    }
+}
+
+impl std::fmt::Display for Decline {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Decline::Malformed(detail) => write!(f, "invalid-job: {detail}"),
+            Decline::Rejected(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for Decline {}
+
+/// Validate a Full-Template declaration (`DeclareMiningJob`), returning the
+/// distribution id it declared under on success.
+fn check_declare(jds: &Jds, height: u32, msg: &DeclareMiningJob<'_>) -> Result<u64, Decline> {
+    let id = find_tlv(msg.excess_data.as_bytes()).ok_or_else(|| {
+        Decline::Malformed("DeclareMiningJob is missing the distribution_id TLV".into())
+    })?;
+    let outputs =
+        parse_coinbase_outputs(msg.coinbase_tx_suffix.as_bytes()).map_err(Decline::Malformed)?;
+    jds.validate_declared(id, height, &outputs)
+        .map_err(Decline::Rejected)?;
+    Ok(id)
+}
+
 /// Validate a Coinbase-only declaration (`SetCustomMiningJob`).
 ///
 /// The extension appends the `distribution_id` TLV after the message payload
@@ -241,24 +405,27 @@ impl JdsServerRef {
 /// declared outputs are `coinbase_tx_outputs` (a consensus-serialized
 /// `Vec<TxOut>`, i.e. count + outputs) and the trailing bytes must contain
 /// exactly one well-formed `0x0003`/`0x01` TLV.
-fn check_custom_job(jds: &Jds, height: u32, payload: &[u8]) -> Result<u64, String> {
+fn check_custom_job(jds: &Jds, height: u32, payload: &[u8]) -> Result<u64, Decline> {
     // `from_bytes` leaves trailing bytes untouched, so decode from a copy and
     // use the message's serialized size to locate the appended TLV.
     let mut buf = payload.to_vec();
-    let msg: SetCustomMiningJob =
-        binary_sv2::from_bytes(&mut buf).map_err(|e| format!("SetCustomMiningJob decode: {e}"))?;
+    let msg: SetCustomMiningJob = binary_sv2::from_bytes(&mut buf)
+        .map_err(|e| Decline::Malformed(format!("SetCustomMiningJob decode: {e}")))?;
     let consumed = msg.get_size();
     let outputs_bytes = msg.coinbase_tx_outputs.as_bytes().to_vec();
-    let trailing = payload
-        .get(consumed..)
-        .ok_or("SetCustomMiningJob message size does not match its payload")?;
-    let id = distribution_id_from_trailing(trailing)?;
-    let (outputs, consumed_outputs) = parse_outputs(&outputs_bytes, 0)?;
+    let trailing = payload.get(consumed..).ok_or_else(|| {
+        Decline::Malformed("SetCustomMiningJob message size does not match its payload".into())
+    })?;
+    let id = distribution_id_from_trailing(trailing).map_err(Decline::Malformed)?;
+    let (outputs, consumed_outputs) =
+        parse_outputs(&outputs_bytes, 0).map_err(Decline::Malformed)?;
     if consumed_outputs != outputs_bytes.len() {
-        return Err("trailing bytes after SetCustomMiningJob coinbase_tx_outputs".into());
+        return Err(Decline::Malformed(
+            "trailing bytes after SetCustomMiningJob coinbase_tx_outputs".into(),
+        ));
     }
     jds.validate_declared(id, height, &outputs)
-        .map_err(|e| e.to_string())?;
+        .map_err(Decline::Rejected)?;
     Ok(id)
 }
 
@@ -408,6 +575,36 @@ async fn write_dist(
         .write_frame(frame)
         .await
         .map_err(|e| format!("write: {e}"))
+}
+
+/// Answer a Full-Template declaration with a coded decline (SPEC §3.5); the
+/// JDS is silent only when the frame itself could not be decoded.
+async fn send_declare_error(
+    write: &mut stratum_apps::network_helpers::noise_stream::NoiseTcpWriteHalf,
+    request_id: u32,
+    code: &str,
+) -> Result<(), String> {
+    let msg = DeclareMiningJobError {
+        request_id,
+        error_code: Str0255::try_from(code).map_err(|e| format!("code: {e:?}"))?,
+        error_details: B064K::new(&[]).map_err(|e| format!("details: {e}"))?,
+    };
+    write_msg(write, msg, MESSAGE_TYPE_DECLARE_MINING_JOB_ERROR).await
+}
+
+/// Answer the MP custom-job path with a coded decline (SPEC §3.5).
+async fn send_custom_job_error(
+    write: &mut stratum_apps::network_helpers::noise_stream::NoiseTcpWriteHalf,
+    channel_id: u32,
+    request_id: u32,
+    code: &str,
+) -> Result<(), String> {
+    let msg = SetCustomMiningJobError {
+        channel_id,
+        request_id,
+        error_code: Str0255::try_from(code).map_err(|e| format!("code: {e:?}"))?,
+    };
+    write_msg(write, msg, MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_ERROR).await
 }
 
 #[cfg(test)]
@@ -575,16 +772,29 @@ mod tests {
 
         let mut mutated = outputs.clone();
         mutated[0].1 += 1;
-        assert!(check_custom_job(&jds, 1, &custom_job_payload(&mutated, Some(id))).is_err());
+        let err = check_custom_job(&jds, 1, &custom_job_payload(&mutated, Some(id))).unwrap_err();
+        assert_eq!(err.code(), "invalid-payout-distribution");
 
         let mut swapped = outputs.clone();
         swapped.swap(0, 1);
-        assert!(check_custom_job(&jds, 1, &custom_job_payload(&swapped, Some(id))).is_err());
+        let err = check_custom_job(&jds, 1, &custom_job_payload(&swapped, Some(id))).unwrap_err();
+        assert_eq!(err.code(), "invalid-payout-distribution");
 
         // Dropping the carrier is also a mismatch.
         let mut missing = outputs.clone();
         missing.pop();
-        assert!(check_custom_job(&jds, 1, &custom_job_payload(&missing, Some(id))).is_err());
+        let err = check_custom_job(&jds, 1, &custom_job_payload(&missing, Some(id))).unwrap_err();
+        assert_eq!(err.code(), "invalid-payout-distribution");
+    }
+
+    #[test]
+    fn declaring_before_any_publication_is_a_coded_empty_decline() {
+        let jds = Jds::new(0);
+        let d = dist();
+        let outputs = plain_outputs(&d);
+        let err = check_custom_job(&jds, 1, &custom_job_payload(&outputs, Some(7))).unwrap_err();
+        assert_eq!(err.code(), "no-payout-distribution");
+        assert!(matches!(err, Decline::Rejected(JdError::Empty)));
     }
 
     #[test]
@@ -595,8 +805,10 @@ mod tests {
         let outputs = plain_outputs(&d);
 
         let err = check_custom_job(&jds, 1, &custom_job_payload(&outputs, None)).unwrap_err();
+        assert_eq!(err.code(), "invalid-job");
         assert!(
-            err.contains("missing the appended distribution_id TLV"),
+            err.to_string()
+                .contains("missing the appended distribution_id TLV"),
             "{err}"
         );
 
@@ -606,9 +818,12 @@ mod tests {
         assert!(check_custom_job(&jds, 1, &payload).is_err());
 
         // Wrong id at the current height is stale.
-        assert!(check_custom_job(&jds, 1, &custom_job_payload(&outputs, Some(id + 1))).is_err());
+        let err =
+            check_custom_job(&jds, 1, &custom_job_payload(&outputs, Some(id + 1))).unwrap_err();
+        assert_eq!(err.code(), "stale-payout-distribution");
         // Height straddling is stale.
-        assert!(check_custom_job(&jds, 2, &custom_job_payload(&outputs, Some(id))).is_err());
+        let err = check_custom_job(&jds, 2, &custom_job_payload(&outputs, Some(id))).unwrap_err();
+        assert_eq!(err.code(), "stale-payout-distribution");
     }
 
     #[test]
@@ -630,5 +845,125 @@ mod tests {
         assert!(distribution_id_from_trailing(&wrong_len).is_err());
         wrong_len.clear();
         assert!(distribution_id_from_trailing(&wrong_len).is_err());
+    }
+
+    /// SPEC §3.5 "Declaration answers": a hand-rolled client gets a real
+    /// `DeclareMiningJob.Error` frame whose `error_code` distinguishes the
+    /// decline reasons from each other - and the typed message itself from a
+    /// transport error (which would surface as a read failure, not a frame).
+    #[tokio::test]
+    async fn declarations_are_answered_with_coded_replies() {
+        use stratum_apps::network_helpers::connect_with_noise;
+        use stratum_core::common_messages_sv2::{Protocol, SetupConnection};
+        use stratum_core::framing_sv2::framing::MessageFrame;
+        use tokio::net::TcpStream;
+
+        type ReadHalf = stratum_apps::network_helpers::noise_stream::NoiseTcpReadHalf;
+        type WriteHalf = stratum_apps::network_helpers::noise_stream::NoiseTcpWriteHalf;
+
+        async fn send_declare(
+            write: &mut WriteHalf,
+            request_id: u32,
+            tlv: Option<u64>,
+            outputs: &[(ScriptBuf, u64)],
+        ) {
+            use stratum_core::framing_sv2::framing::MessageFrame;
+            let template = build_jd_template(2, 1, 8, outputs, 0).unwrap();
+            let tlv_bytes = tlv
+                .map(|id| DistributionIdTlv { id }.encode())
+                .unwrap_or_default();
+            let msg = DeclareMiningJob {
+                request_id,
+                mining_job_token: B0255::new(b"token").unwrap(),
+                version: 0x2000_0000,
+                coinbase_tx_prefix: B064K::new(&template.prefix).unwrap(),
+                coinbase_tx_suffix: B064K::new(&template.suffix).unwrap(),
+                wtxid_list: Seq064K::try_from(Vec::<U256>::new()).unwrap(),
+                excess_data: B064K::new(&tlv_bytes).unwrap(),
+            };
+            let frame =
+                MessageFrame::from_message(msg, MESSAGE_TYPE_DECLARE_MINING_JOB, 0, false).unwrap();
+            write.write_frame(frame).await.unwrap();
+        }
+
+        async fn read_answer(read: &mut ReadHalf, request_id: u32) -> Option<String> {
+            loop {
+                let mut f = read.read_frame().await.unwrap();
+                match f.header().msg_type() {
+                    MESSAGE_TYPE_DECLARE_MINING_JOB_SUCCESS => {
+                        let mut p = f.payload().to_vec();
+                        let m: DeclareMiningJobSuccess = binary_sv2::from_bytes(&mut p).unwrap();
+                        assert_eq!(m.request_id, request_id);
+                        return None;
+                    }
+                    MESSAGE_TYPE_DECLARE_MINING_JOB_ERROR => {
+                        let mut p = f.payload().to_vec();
+                        let m: DeclareMiningJobError = binary_sv2::from_bytes(&mut p).unwrap();
+                        assert_eq!(m.request_id, request_id);
+                        return Some(m.error_code.as_utf8_or_hex().to_string());
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let server = JdsServer::new(0);
+        let (addr, _handle) = server.bind("127.0.0.1:0").await.unwrap();
+        let d = dist();
+        let id = server.publish(1, 1_000, d.clone()).await.unwrap();
+
+        let stream = TcpStream::connect(addr).await.unwrap();
+        let stream = connect_with_noise(stream, None).await.unwrap();
+        let (mut read, mut write) = stream.into_split();
+
+        let s = |x: &'static str| Str0255::try_from(x).unwrap();
+        let setup = SetupConnection {
+            protocol: Protocol::JobDeclarationProtocol,
+            min_version: 2,
+            max_version: 2,
+            flags: 0,
+            endpoint_host: s("127.0.0.1"),
+            endpoint_port: 0,
+            vendor: s("test"),
+            hardware_version: s("1"),
+            firmware: s("1"),
+            device_id: s("1"),
+        };
+        let frame =
+            MessageFrame::from_message(setup, MESSAGE_TYPE_SETUP_CONNECTION, 0, false).unwrap();
+        write.write_frame(frame).await.unwrap();
+        // SetupConnection.Success, then the current distribution.
+        read.read_frame().await.unwrap();
+        read.read_frame().await.unwrap();
+
+        // Valid declaration -> Success echoing the request id.
+        send_declare(&mut write, 10, Some(id), &coinbase_outputs(&d)).await;
+        assert_eq!(read_answer(&mut read, 10).await, None);
+
+        // Unknown id -> stale.
+        send_declare(&mut write, 11, Some(id + 1_000_000), &coinbase_outputs(&d)).await;
+        assert_eq!(
+            read_answer(&mut read, 11).await,
+            Some("stale-payout-distribution".to_string())
+        );
+
+        // Missing TLV -> invalid-job.
+        send_declare(&mut write, 12, None, &coinbase_outputs(&d)).await;
+        assert_eq!(
+            read_answer(&mut read, 12).await,
+            Some("invalid-job".to_string())
+        );
+
+        // Mutated amount -> invalid-payout-distribution.
+        let mut bogus = coinbase_outputs(&d);
+        bogus[0].1 += 1;
+        send_declare(&mut write, 13, Some(id), &bogus).await;
+        assert_eq!(
+            read_answer(&mut read, 13).await,
+            Some("invalid-payout-distribution".to_string())
+        );
+
+        assert_eq!(server.declare_count().await, 4);
+        assert_eq!(server.accepted().await, Some(id));
     }
 }

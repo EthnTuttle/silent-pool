@@ -33,6 +33,8 @@ stream_isolation = true
 # coinbase_value = 5000000000        # coinbase_tx_value_remaining (T)
 # extranonce_len = 8
 # user_identifier = "spc-agent"      # AllocateMiningJobToken.user_identifier
+# declare_timeout_secs = 10          # bounded wait for the declaration answer (SPEC §3.5);
+#                                    # minimum 1; 0 is a startup error
 
 # [ark]
 # enabled = true

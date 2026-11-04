@@ -21,7 +21,7 @@ Byte-level formats BESPOKE to this project. Never restate upstream SV2 content �
 |---|---|---|
 | `OP_RETURN` carrier payload (JD mode) | SPEC §2.4.2 | `0x6a 0x23 0x53 0x50 0x63 <ser_x(A_send)>` (`OP_RETURN`, push of 35 B = `"SPc"` ‖ 32 B x-only, even-Y) |
 | `0x5350` messages (`SetArkIdentity` / `RegisterEpochMailboxes` / `ArkPayoutNotice`) | SPEC §11.4 | Project-defined extension, identifier `0x5350` ("SP"), negotiated via `0x0001` |
-| `SetPayoutDistribution`, `distribution_id` TLV `0x0003`/`0x01` | SPEC §3.5 | PR #203 text pinned at `47dbedd`; `distribution_id` is the per-front scheme of §3.5 |
+| `SetPayoutDistribution`, `distribution_id` TLV `0x0003`/`0x01` | SPEC §3.5 | PR #203 text pinned at `47dbedd`; `distribution_id` is the per-front scheme of §3.5; the `.Success`/`.Error` answers and their decline-code set are SPEC §3.5 "Declaration answers" |
 | `MailboxAuthorization` 105-byte layout | `MAILBOX.md` §3 | `ser_P(M_i) ‖ le64(expiry_unix) ‖ sig64` |
 | Type-32 share-accounting messages | `share-accounting-ext @ c661e93` + SPEC §3.7 deltas | Type 32 (`0x0020`), negotiated via `0x0001` |
 | Postgres row schemas | SPEC §5.1 | Used by the bootstrap RPC (§3.5) |
