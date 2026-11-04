@@ -133,6 +133,12 @@ pub struct Front {
     /// inclusive high-water mark settlement uses (SPEC §4.3): the probing
     /// share's own slice is still open and therefore above the mark.
     high_water: u64,
+    /// The exact window target (`N x d`, SPEC §4.3) the current
+    /// distribution's window was selected with. Frozen into the block event
+    /// and then `distribution_snapshot` so settlement reconstructs the same
+    /// window even when a retarget has since changed the stored slices'
+    /// implied `d` (decision 2026-11-03-settlement-window-target).
+    window_target: u128,
     miners: BTreeMap<SpId, MinerKeys>,
     /// The pending ledger, and the frozen base every forecast routes against:
     /// it only changes when a block is actually found (or from a bootstrap /
@@ -266,6 +272,7 @@ impl Front {
             slices: Vec::new(),
             slice_seq: 0,
             high_water: 0,
+            window_target: 0,
             miners: BTreeMap::new(),
             pending: BTreeMap::new(),
             ark: BTreeMap::new(),
@@ -572,12 +579,13 @@ impl Front {
             credited_difficulty: credited_difficulty(self.share_difficulty, template.bits),
             share_target: effective_share_target(self.share_difficulty, template.bits),
         };
-        let window = select_window(
-            &self.slices,
-            u64::MAX,
-            (self.cfg.window_n as u128).saturating_mul(u128::from(policy.credited_difficulty)),
-            BTreeMap::new(),
-        );
+        // Decision 2026-11-03-settlement-window-target: the exact target is
+        // remembered with the distribution it selected, so settlement never
+        // has to re-derive it from slices a retarget may have left behind.
+        let window_target =
+            (self.cfg.window_n as u128).saturating_mul(u128::from(policy.credited_difficulty));
+        self.window_target = window_target;
+        let window = select_window(&self.slices, u64::MAX, window_target, BTreeMap::new());
         // The mark is the newest *sealed* slice the window actually consumed,
         // not the still-open slice the probing share will land in (SPEC §4.3).
         // `0` means "no sealed slice in this window": no stored slice is at or
@@ -832,6 +840,9 @@ impl Front {
                 fingerprint: dist.fingerprint,
                 a_send_x: dist.a_send_x,
                 high_water,
+                // The exact target this distribution's window was selected
+                // with (frozen at `refresh` time), not a re-derivation.
+                window_target: self.window_target,
                 entries,
             }));
         }
@@ -1504,6 +1515,29 @@ pool_payout_descriptor = "DESCRIPTOR"
         let events = block_events(&mut front);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].high_water[&0], sealed_id.to_string());
+    }
+
+    /// SPEC §4.3 / decision 2026-11-03-settlement-window-target: the block
+    /// event carries the exact `N x d` the front selected the window with, so
+    /// settlement can freeze it instead of re-deriving it from slices.
+    #[tokio::test]
+    async fn block_events_carry_the_exact_window_target() {
+        // bits 0x1c00ffff is difficulty 256 against the difficulty-1 target;
+        // with share_difficulty 1000 the credited `d` caps at 256.
+        let source = Arc::new(MutableSource::new(template_at(800_000, 0x1c00_ffff, 0)));
+        let cfg = cfg_with(cfg(), |c| c.window_n = 2);
+        let mut front = Front::new(cfg, source, type32());
+        front.set_share_difficulty(1000).unwrap();
+        front.refresh().await.unwrap();
+
+        let mut finding = share(&front, 1);
+        finding.share_hash = [0u8; 32]; // meets the network target
+        front.on_share(finding).unwrap().expect("block");
+        let events = block_events(&mut front);
+        assert_eq!(events.len(), 1);
+        // N x d = 2 x 256: the value settlement will persist, not an
+        // estimate from whatever the stored slices imply later.
+        assert_eq!(events[0].window_target, 512);
     }
 
     #[tokio::test]
