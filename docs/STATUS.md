@@ -19,7 +19,7 @@ reviews are recorded for risky packets, and the commit is pushed.
 | JD fallback + template rebuild | `ses_e5cf0b27d` | landed `85db04d`..`18ac53f`, merged |
 | Banded amounts + Ark overage design | `ses_e5ceb5ce6` | landed `bdd0be5`..`7be2541`, merged `d62bf23`; ladder decided |
 | rbitcoin node fork (testnet4) | `ses_e6195c6a` | separate repo; 6 commits pushed to the fork; full sync to testnet4 tip verified once, re-syncing after a datadir wipe |
-| rbitcoin RPC e2e harness | `ses_e592c174b` | dispatched 2026-11-04 on branch `rbitcoin-e2e` |
+| rbitcoin RPC e2e harness | `ses_e592c174b` | landed `5f8d8b2`..`2d8d4ec`, merged `657c89a` |
 | SV2 Template Provider source | `ses_e590d51b2` | dispatched 2026-11-04 on branch `sv2-tp` |
 | Proxy/upstream analysis | `ses_e60f175c` | closed, `docs/analysis/2026-11-02-proxy-and-upstream-options.md` |
 | Multi-identifier analysis | `ses_e638a2e6` | closed, `docs/analysis/2026-11-02-multi-identifier-payouts.md` |
@@ -41,14 +41,19 @@ reviews are recorded for risky packets, and the commit is pushed.
 - Amount-banded payouts analysis (`116ed34`): overage-to-Ark relocates exact
   amounts to the Ark server; band + overage-to-pending bounds the on-chain
   leak to `ceil(log2 L)` bits per block. No code change.
-- **rbitcoin as the e2e node (2026-11-04, in flight):** two packets run in
-  parallel. One adds `testing/regtest-rbitcoin-e2e.sh` + a reorg scenario
-  against rbitcoin's Core-compatible RPC (drop-in for `source = "rpc"`,
-  `invalidateblock` for the reorg invariant). The other implements
-  `[template] source = "sv2-tp"`: a TDP client over Noise_NX against
-  rbitcoin's Template Provider, with `SubmitSolution` replacing `submitblock`.
-  rbitcoin gives easy regtest PoW (`--regtest-pow-bits`), a single binary with
-  no wallet/CLI dependency, and a real TP.
+- **rbitcoin regtest harness merged (`657c89a`):** `testing/regtest-rbitcoin-e2e.sh`
+  (front-only, RPC template source, miner, scan) and
+  `testing/regtest-rbitcoin-reorg-e2e.sh` (full stack, `confirmation_depth=2`;
+  settle, `invalidateblock`, competing branch). The reorg invariant is now
+  tested for the first time: the invalidated block becomes `orphaned`, exactly
+  one `block_found` row exists at the height, and ledger/liability are
+  byte-identical to the pre-orphan state, so an orphaned payout can never be
+  booked. rbitcoin reads an existing 0600 cookie (unlike bitcoind) and accepts
+  a bare hex script for `generatetoaddress`. Validated against the local
+  upstream-master build `e8cf9c9d6`; the fork pin is reference-only.
+- **SV2 Template Provider (in flight):** `[template] source = "sv2-tp"` as a
+  TDP client over Noise_NX against rbitcoin's TP, with `SubmitSolution`
+  replacing `submitblock`, so rbitcoin becomes the native e2e node path.
 - **Ladder decided and recorded (`d62bf23`, record `7be2541`):** coinbase
   amounts are multiples of a constant ladder `{500k, 1M, 3M, 5M}` sats, greedy
   largest-first, remainder to Ark. No era scaling; each halving doubles the
