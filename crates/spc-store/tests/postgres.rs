@@ -46,6 +46,7 @@ async fn snapshot(store: &Store, fingerprint: [u8; 32]) {
             distribution_id: None,
             entries: serde_json::json!([]),
             high_water: serde_json::json!({}),
+            window_target: Some("16".into()),
         })
         .await
         .unwrap();
@@ -461,6 +462,7 @@ async fn snapshot_round_trips_entries_and_high_water() {
             distribution_id: Some(42),
             entries: entries.clone(),
             high_water: high_water.clone(),
+            window_target: Some("340282366920938463463374607431768211455".into()),
         })
         .await
         .unwrap();
@@ -471,7 +473,36 @@ async fn snapshot_round_trips_entries_and_high_water() {
     assert_eq!(loaded.distribution_id, Some(42));
     assert_eq!(loaded.entries, entries);
     assert_eq!(loaded.high_water, high_water);
+    // u128::MAX round-trips exactly: N x d can exceed i64, and the
+    // NUMERIC(40,0) column must never truncate it.
+    assert_eq!(
+        loaded.window_target.as_deref(),
+        Some("340282366920938463463374607431768211455")
+    );
     assert!(store.snapshot(&id()).await.unwrap().is_none());
+}
+
+/// SPEC §5.1: `window_target` is nullable, so rows written before the
+/// migration (which carry no value) keep reading back as `None`.
+#[tokio::test]
+async fn snapshot_window_target_is_nullable_for_pre_migration_rows() {
+    let Some(store) = store().await else { return };
+
+    let fingerprint = id();
+    store
+        .insert_snapshot(&SnapshotRow {
+            fingerprint,
+            height: 800_000,
+            a_send_x: [4; 32],
+            distribution_id: None,
+            entries: serde_json::json!([]),
+            high_water: serde_json::json!({"0": "1"}),
+            window_target: None,
+        })
+        .await
+        .unwrap();
+    let loaded = store.snapshot(&fingerprint).await.unwrap().unwrap();
+    assert_eq!(loaded.window_target, None);
 }
 
 /// SPEC §4.6/§7.4: pending deltas are the settlement-time surface, and a
@@ -755,6 +786,7 @@ async fn scrub_preserves_scheduled_ark_snapshots_and_clears_settled_ones() {
                 "sats": 250u64,
             }]),
             high_water: serde_json::json!({"0": "1"}),
+            window_target: None,
         })
         .await
         .unwrap();
@@ -804,6 +836,7 @@ async fn scrub_preserves_scheduled_ark_snapshots_and_clears_settled_ones() {
                 "sats": 1_000u64,
             }]),
             high_water: serde_json::json!({"0": "1"}),
+            window_target: None,
         })
         .await
         .unwrap();
@@ -839,6 +872,7 @@ async fn scrub_preserves_scheduled_ark_snapshots_and_clears_settled_ones() {
             distribution_id: None,
             entries: serde_json::json!([]),
             high_water: serde_json::json!({"0": "1"}),
+            window_target: None,
         })
         .await
         .unwrap();
@@ -1117,4 +1151,124 @@ async fn metrics_queries_read_back_settlement() {
 
     assert!(store.ark_due_sats().await.unwrap() >= 250);
     assert!(store.forfeited_sats_total().await.unwrap() >= 40);
+}
+
+/// The 0004 migration must apply to a database last migrated at 0003, and a
+/// row written before it (no `window_target`) must keep reading back as
+/// `None` - never a zero, never a guess. Proven on an isolated scratch
+/// database because the suite's shared database is used in parallel and this
+/// test rewinds the schema.
+#[tokio::test]
+async fn window_target_migration_applies_to_an_existing_database() {
+    let Some(url) = std::env::var("SPC_TEST_DATABASE_URL").ok() else {
+        return;
+    };
+    // Same server, maintenance database: the harness runs a throwaway
+    // cluster where CREATE DATABASE is permitted. When it is not (a
+    // restricted CI user), this test cannot isolate itself and skips.
+    let admin_url = {
+        let base = url.split('?').next().unwrap_or(&url);
+        let (head, _) = base
+            .rsplit_once('/')
+            .expect("SPC_TEST_DATABASE_URL has a database path");
+        format!("{head}/postgres")
+    };
+    let name = format!(
+        "spc_migrate_{}",
+        hex::encode(uuid::Uuid::new_v4().as_bytes())
+    );
+    let admin = sqlx::PgPool::connect(&admin_url).await.unwrap();
+    if sqlx::query(&format!("CREATE DATABASE {name}"))
+        .execute(&admin)
+        .await
+        .is_err()
+    {
+        eprintln!("skip: no CREATE DATABASE privilege on the test server");
+        return;
+    }
+    let scratch_url = {
+        let base = url.split('?').next().unwrap_or(&url);
+        let (head, _) = base
+            .rsplit_once('/')
+            .expect("SPC_TEST_DATABASE_URL has a database path");
+        format!("{head}/{name}")
+    };
+
+    // Build the database as it was before 0004: apply 0001-0003 only, with
+    // the migrator's own bookkeeping so the later full run applies 0004.
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+    let all = sqlx::migrate::Migrator::new(dir.as_path()).await.unwrap();
+    let pre_0004 = sqlx::migrate::Migrator {
+        migrations: std::borrow::Cow::Owned(
+            all.migrations
+                .iter()
+                .filter(|m| m.version <= 3)
+                .cloned()
+                .collect(),
+        ),
+        ignore_missing: false,
+        locking: true,
+        no_tx: false,
+    };
+    {
+        let scratch = sqlx::PgPool::connect(&scratch_url).await.unwrap();
+        pre_0004.run(&scratch).await.unwrap();
+
+        // A snapshot row in the pre-migration shape (no window_target).
+        sqlx::query(
+            "INSERT INTO distribution_snapshot
+                (fingerprint, height, a_send_x, distribution_id, entries, high_water)
+             VALUES ($1, 800000, $2, NULL, '[]'::jsonb, $3::jsonb)",
+        )
+        .bind(id())
+        .bind([4u8; 32])
+        .bind(r#"{"0": "1"}"#)
+        .execute(&scratch)
+        .await
+        .unwrap();
+        scratch.close().await;
+    }
+
+    // The production path: Store::connect + migrate() applies 0004 on top.
+    let store = Store::connect(&scratch_url).await.unwrap();
+    store.migrate().await.unwrap();
+
+    // The pre-migration row is readable and reports no target.
+    let row = sqlx::query(
+        "SELECT count(*) AS n,
+                bool_and(window_target IS NULL) AS all_null
+         FROM distribution_snapshot",
+    )
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    let n: i64 = row.try_get("n").unwrap();
+    let all_null: bool = row.try_get("all_null").unwrap();
+    assert_eq!(n, 1);
+    assert!(all_null, "pre-migration row keeps NULL window_target");
+
+    // New rows carry the exact u128 target.
+    let fingerprint = id();
+    store
+        .insert_snapshot(&SnapshotRow {
+            fingerprint,
+            height: 800_000,
+            a_send_x: [4; 32],
+            distribution_id: None,
+            entries: serde_json::json!([]),
+            high_water: serde_json::json!({"0": "1"}),
+            window_target: Some("340282366920938463463374607431768211455".into()),
+        })
+        .await
+        .unwrap();
+    let loaded = store.snapshot(&fingerprint).await.unwrap().unwrap();
+    assert_eq!(
+        loaded.window_target.as_deref(),
+        Some("340282366920938463463374607431768211455")
+    );
+    store.pool().close().await;
+    sqlx::query(&format!("DROP DATABASE {name} WITH (FORCE)"))
+        .execute(&admin)
+        .await
+        .unwrap();
 }

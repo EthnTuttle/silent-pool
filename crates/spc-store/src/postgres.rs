@@ -242,8 +242,9 @@ impl Store {
     pub async fn insert_snapshot(&self, row: &SnapshotRow) -> Result<()> {
         sqlx::query(
             "INSERT INTO distribution_snapshot
-                (fingerprint, height, a_send_x, distribution_id, entries, high_water)
-             VALUES ($1, $2, $3, $4, $5, $6)
+                (fingerprint, height, a_send_x, distribution_id, entries, high_water,
+                 window_target)
+             VALUES ($1, $2, $3, $4, $5, $6, $7::numeric)
              ON CONFLICT (fingerprint) DO NOTHING",
         )
         .bind(&row.fingerprint[..])
@@ -252,17 +253,19 @@ impl Store {
         .bind(row.distribution_id.map(sats_i64).transpose()?)
         .bind(&row.entries)
         .bind(&row.high_water)
+        .bind(row.window_target.as_deref())
         .execute(&self.pool)
         .await?;
         Ok(())
     }
 
-    /// Load one distribution snapshot by fingerprint. `entries` and
-    /// `high_water` are the frozen window metadata settlement reconstructs
-    /// from (SPEC §4.3, §4.7, §7.4).
+    /// Load one distribution snapshot by fingerprint. `entries`, `high_water`
+    /// and `window_target` are the frozen window metadata settlement
+    /// reconstructs from (SPEC §4.3, §4.7, §7.4).
     pub async fn snapshot(&self, fingerprint: &[u8; 32]) -> Result<Option<SnapshotRow>> {
         let row = sqlx::query(
-            "SELECT fingerprint, height, a_send_x, distribution_id, entries, high_water
+            "SELECT fingerprint, height, a_send_x, distribution_id, entries, high_water,
+                    window_target::text AS window_target
              FROM distribution_snapshot WHERE fingerprint = $1",
         )
         .bind(&fingerprint[..])
@@ -280,6 +283,7 @@ impl Store {
                 distribution_id: distribution_id.map(sats_u64).transpose()?,
                 entries: r.try_get("entries")?,
                 high_water: r.try_get("high_water")?,
+                window_target: r.try_get("window_target")?,
             })
         })
         .transpose()
