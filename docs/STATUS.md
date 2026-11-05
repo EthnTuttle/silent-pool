@@ -20,7 +20,9 @@ reviews are recorded for risky packets, and the commit is pushed.
 | Banded amounts + Ark overage design | `ses_e5ceb5ce6` | landed `bdd0be5`..`7be2541`, merged `d62bf23`; ladder decided |
 | rbitcoin node fork (testnet4) | `ses_e6195c6a` | separate repo; 6 commits pushed to the fork; full sync to testnet4 tip verified once, re-syncing after a datadir wipe |
 | rbitcoin RPC e2e harness | `ses_e592c174b` | landed `5f8d8b2`..`2d8d4ec`, merged `657c89a` |
-| SV2 Template Provider source | `ses_e590d51b2` | dispatched 2026-11-04 on branch `sv2-tp` |
+| SV2 Template Provider source | `ses_e590d51b2` | stage 1 `f4015ed`; stage 2 in progress on branch `sv2-tp` |
+| Merge / integration queue | `ses_e5394012e` | active; sole writer to the shared surface (`docs/MERGE-QUEUE.md`) |
+| Denomination ladder impl (WP0-WP2) | `ses_e5393b4e2` | dispatched 2026-11-05 on branch `ladder` |
 | Proxy/upstream analysis | `ses_e60f175c` | closed, `docs/analysis/2026-11-02-proxy-and-upstream-options.md` |
 | Multi-identifier analysis | `ses_e638a2e6` | closed, `docs/analysis/2026-11-02-multi-identifier-payouts.md` |
 
@@ -71,6 +73,17 @@ reviews are recorded for risky packets, and the commit is pushed.
   outputs, receipts, caps. The `command` transport is dev-only. The ark e2e
   over a stock `captaind` passes on the merged tree (boarded 1,000,000 sats,
   paid 500,000, receipt verified).
+
+## Parallel integration (2026-11-05)
+
+`docs/MERGE-QUEUE.md` sets the protocol: packets own disjoint modules and
+tests; the shared surface (SPEC frontmatter, STATUS, config.rs, main.rs,
+OPERATIONS, manifests) has one writer, the merge session. Normative entries
+ship as `docs/changelog/*.md` fragments instead of editing the SPEC
+frontmatter, `scripts/merge-check.sh` reports conflicts without touching the
+tree, and `scripts/merge-gate.sh` runs the serial gate. The enabling refactor
+(config and main split into modules, OPERATIONS split) is the next packet
+after the in-flight branches land.
 
 ## Current state
 
