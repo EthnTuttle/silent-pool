@@ -157,6 +157,48 @@ async fn ark_rail_is_scheduled_and_leaves_liability_when_sent() {
     assert_eq!(store.pending_for(&sp_id).await.unwrap(), 0);
 }
 
+#[tokio::test]
+async fn coinbase_remainder_schedules_ark_once_and_orphan_reverses_it() {
+    let Some(store) = store().await else { return };
+    let sp_id = id();
+    let fingerprint = id();
+    let block_hash = id();
+    identity(&store, sp_id).await;
+    snapshot(&store, fingerprint).await;
+    let settlement = Settlement {
+        block_hash,
+        height: 800_000,
+        fingerprint: Some(fingerprint),
+        status: BlockStatus::Confirmed,
+        ledger: vec![LedgerRow {
+            sp_id,
+            rail: LedgerRail::Coinbase,
+            paid_sats: 500_000,
+            ark_due_sats: 123,
+            forfeited_sats: 0,
+            pending_delta: 0,
+        }],
+    };
+    store.settle(&settlement, 6).await.unwrap();
+    assert!(store.settle(&settlement, 6).await.is_err());
+    let payouts = store.scheduled_ark_payouts().await.unwrap();
+    let mine: Vec<_> = payouts
+        .iter()
+        .filter(|row| row.block_hash == block_hash && row.sp_id == sp_id)
+        .collect();
+    assert_eq!(mine.len(), 1);
+    assert_eq!(mine[0].sats, 123);
+    assert_eq!(mine[0].due_height, 800_006);
+
+    store.orphan(&block_hash).await.unwrap();
+    assert!(store
+        .scheduled_ark_payouts()
+        .await
+        .unwrap()
+        .iter()
+        .all(|row| row.block_hash != block_hash));
+}
+
 /// SPEC §7.4 + review 4.5: a block booked without a distribution
 /// fingerprint is `pending`, never `confirmed` (the CHECK constraint
 /// forbids `confirmed` with NULL); it owes nothing until the event is

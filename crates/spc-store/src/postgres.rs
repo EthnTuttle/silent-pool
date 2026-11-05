@@ -496,7 +496,7 @@ impl Store {
                 .await?;
             }
 
-            if row.rail == LedgerRail::Ark {
+            if row.ark_due_sats > 0 {
                 sqlx::query(
                     "INSERT INTO ark_payout
                         (block_hash, sp_id, sats, due_height, status)

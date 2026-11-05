@@ -24,8 +24,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 use spc_accounting::{
-    claim_jd, p2tr_script, raw_payouts, route_tiers, select_window, ArkCapability, RawPayouts,
-    SliceAgg, SpId, TierConfig,
+    claim_jd, decompose_for_mode, p2tr_script, raw_payouts, route_tiers, select_window,
+    ArkCapability, LadderMode, RawPayouts, SliceAgg, SpId, TierConfig, LADDER_BASE_SATS,
 };
 use spc_ext::{ArkSendOrder, ArkSendReceipt, ReceiptStatus};
 use spc_store::models::*;
@@ -344,7 +344,7 @@ impl Default for AccountingConfig {
             fee_bps: 100,
             window_n: 8,
             dust_limit_sats: 330,
-            max_payout_slots: 256,
+            max_payout_slots: 1_024,
             budget_wu: 50_000,
             overhead_wu: 0,
         }
@@ -391,6 +391,12 @@ pub enum ReconstructError {
     MissingCoinbaseOutput(SpId),
     #[error("coinbase output for {0:?} is not an entry on the coinbase rail")]
     PaidMismatch(SpId),
+    #[error("wrong rung output count for {0:?}")]
+    WrongOutputCount(SpId),
+    #[error("wrong rung output value for {0:?}")]
+    WrongOutputValue(SpId),
+    #[error("wrong banded payment sum for {0:?}")]
+    WrongOutputSum(SpId),
     #[error("mined coinbase does not pay the reconstructed coinbase tier")]
     CoinbaseTierMismatch,
     #[error("coinbase has duplicate payout scripts")]
@@ -487,6 +493,82 @@ pub fn reconstruct_settlement(
     }
 }
 
+#[derive(Default)]
+struct EntryGroup<'a> {
+    coinbase: Vec<&'a Entry>,
+    other: Vec<&'a Entry>,
+}
+
+impl<'a> EntryGroup<'a> {
+    fn primary(&self) -> Option<&'a Entry> {
+        self.coinbase
+            .first()
+            .copied()
+            .or_else(|| self.other.first().copied())
+    }
+
+    fn dest_known(&self) -> bool {
+        self.coinbase
+            .iter()
+            .chain(&self.other)
+            .any(|entry| !entry.dest_id.is_empty())
+    }
+}
+
+/// Pool-template events carry one entry per `P_{i,k}` and may carry one
+/// additional Ark/pending remainder entry. Fold that representation back to
+/// one logical identity; JD remains exactly one entry per identity.
+fn group_entries(
+    entries: &[Entry],
+    mode: TemplateMode,
+) -> Result<BTreeMap<SpId, EntryGroup<'_>>, ReconstructError> {
+    let mut groups: BTreeMap<SpId, EntryGroup<'_>> = BTreeMap::new();
+    for entry in entries {
+        let group = groups.entry(entry.sp_id).or_default();
+        if entry.rail == Rail::Coinbase {
+            if entry.p_x.len() != 32 {
+                return Err(ReconstructError::MissingPayoutKey(entry.sp_id));
+            }
+            if let Some(first) = group.coinbase.first() {
+                if first.sats != entry.sats || first.dest_id != entry.dest_id {
+                    return Err(ReconstructError::DuplicateEntry(entry.sp_id));
+                }
+            }
+            group.coinbase.push(entry);
+        } else {
+            if !entry.p_x.is_empty() {
+                return Err(ReconstructError::PaidMismatch(entry.sp_id));
+            }
+            group.other.push(entry);
+        }
+    }
+    for (id, group) in &groups {
+        match mode {
+            TemplateMode::Pool => {
+                if group.coinbase.is_empty() {
+                    if group.other.len() != 1 {
+                        return Err(ReconstructError::DuplicateEntry(*id));
+                    }
+                } else {
+                    if group.other.len() > 1
+                        || group.other.iter().any(|entry| {
+                            !matches!(entry.rail, Rail::Ark | Rail::Pending) || entry.sats == 0
+                        })
+                    {
+                        return Err(ReconstructError::DuplicateEntry(*id));
+                    }
+                }
+            }
+            TemplateMode::Jd => {
+                if group.coinbase.len() + group.other.len() != 1 || group.coinbase.len() > 1 {
+                    return Err(ReconstructError::DuplicateEntry(*id));
+                }
+            }
+        }
+    }
+    Ok(groups)
+}
+
 fn reconstruct_once(input: &ReconstructInput<'_>) -> Result<Reconstructed, ReconstructError> {
     // The vector is inclusive: `high_water = {front: last slice IN the
     // window}` (SPEC §4.3), so every stored slice at or below it is a
@@ -553,16 +635,11 @@ fn reconstruct_once(input: &ReconstructInput<'_>) -> Result<Reconstructed, Recon
         input.cfg.fee_bps,
     )?;
 
-    let mut entry_by_id: BTreeMap<SpId, &Entry> = BTreeMap::new();
-    for e in input.entries {
-        if entry_by_id.insert(e.sp_id, e).is_some() {
-            return Err(ReconstructError::DuplicateEntry(e.sp_id));
-        }
-    }
+    let groups = group_entries(input.entries, mode)?;
     // The window was frozen into the distribution: every identity it credits
     // must have been published, or the reconstruction is not this block's.
     for id in raw.raw.keys() {
-        if !entry_by_id.contains_key(id) {
+        if !groups.contains_key(id) {
             return Err(ReconstructError::WindowMismatch);
         }
     }
@@ -574,24 +651,32 @@ fn reconstruct_once(input: &ReconstructInput<'_>) -> Result<Reconstructed, Recon
         }
     }
     let mut paid: BTreeMap<SpId, u64> = BTreeMap::new();
-    for e in input.entries {
-        if e.p_x.is_empty() {
-            if e.rail == Rail::Coinbase {
-                return Err(ReconstructError::MissingPayoutKey(e.sp_id));
+    let mut key_values: BTreeMap<SpId, Vec<u64>> = BTreeMap::new();
+    let mut seen_keys = BTreeSet::new();
+    for (id, group) in &groups {
+        let mut values = Vec::with_capacity(group.coinbase.len());
+        for entry in &group.coinbase {
+            let p_x: [u8; 32] = entry
+                .p_x
+                .as_slice()
+                .try_into()
+                .map_err(|_| ReconstructError::MissingPayoutKey(*id))?;
+            if !seen_keys.insert(p_x) {
+                return Err(ReconstructError::DuplicateScript);
             }
-            continue;
+            let script = p2tr_script(&p_x);
+            if let Some(value) = script_value.get(script.as_slice()).copied() {
+                values.push(value);
+            } else if mode == TemplateMode::Pool {
+                return Err(ReconstructError::MissingCoinbaseOutput(*id));
+            }
         }
-        let p_x: [u8; 32] = e
-            .p_x
-            .as_slice()
-            .try_into()
-            .map_err(|_| ReconstructError::MissingPayoutKey(e.sp_id))?;
-        let script = p2tr_script(&p_x);
-        if let Some(value) = script_value.get(script.as_slice()).copied() {
-            if e.rail != Rail::Coinbase {
-                return Err(ReconstructError::PaidMismatch(e.sp_id));
-            }
-            paid.insert(e.sp_id, value);
+        if !values.is_empty() {
+            let sum = values.iter().try_fold(0u64, |sum, value| {
+                sum.checked_add(*value).ok_or(ReconstructError::Overflow)
+            })?;
+            paid.insert(*id, sum);
+            key_values.insert(*id, values);
         }
     }
 
@@ -604,46 +689,40 @@ fn reconstruct_once(input: &ReconstructInput<'_>) -> Result<Reconstructed, Recon
     let mut forfeited_now: BTreeMap<SpId, u64> = BTreeMap::new();
     match mode {
         TemplateMode::Pool => {
-            for e in input.entries {
-                let before = input.pending.get(&e.sp_id).copied().unwrap_or(0);
-                let raw_sats = raw.raw.get(&e.sp_id).copied().unwrap_or(0);
+            for (id, group) in &groups {
+                let before = input.pending.get(id).copied().unwrap_or(0);
+                let raw_sats = raw.raw.get(id).copied().unwrap_or(0);
                 let owed = raw_sats
                     .checked_add(before)
                     .ok_or(ReconstructError::Overflow)?;
-                // The distribution's `sats` is metadata: it was frozen from
-                // the front's pending forecast, which normally equals the
-                // booked ledger by the time this block is `confirmation_depth`
-                // deep. A difference is not fatal (the mined coinbase still
-                // says what was actually paid), but it is worth a line.
-                if e.sats != owed {
+                let primary = group.primary().ok_or(ReconstructError::WindowMismatch)?;
+                if group.coinbase.is_empty() && primary.sats != owed {
                     tracing::warn!(
-                        sp_id = %hex::encode(e.sp_id),
-                        event_sats = e.sats,
+                        sp_id = %hex::encode(id),
+                        event_sats = primary.sats,
                         reconstructed = owed,
-                        "distribution entry differs from slices + booked pending"
+                        "non-coinbase entry differs from slices + booked pending"
                     );
                 }
-                amounts.insert(e.sp_id, owed);
+                amounts.insert(*id, owed);
             }
-            let mut caps = BTreeMap::new();
-            for e in input.entries {
-                caps.insert(
-                    e.sp_id,
-                    ArkCapability {
-                        registered: input.delivered.contains(&e.sp_id),
-                        dest_known: !e.dest_id.is_empty(),
-                    },
-                );
-            }
+            let caps = groups
+                .iter()
+                .map(|(id, group)| {
+                    (
+                        *id,
+                        ArkCapability {
+                            registered: input.delivered.contains(id),
+                            dest_known: group.dest_known(),
+                        },
+                    )
+                })
+                .collect();
             let tier = tier_config(input);
             let routing = route_tiers(&raw, input.pending, &caps, &tier, t_actual)?;
             forfeited_now = routing.forfeited.iter().copied().collect();
             let expected_kept: BTreeSet<SpId> = routing.kept.iter().map(|(id, _)| *id).collect();
             let paid_ids: BTreeSet<SpId> = paid.keys().copied().collect();
-            // The mined coinbase is the truth. The routing set can differ
-            // when pending moved between the distribution build and this
-            // booking, so only a reconstruction that would over-credit the
-            // window is fatal.
             if expected_kept != paid_ids {
                 tracing::warn!(
                     expected = expected_kept.len(),
@@ -651,23 +730,42 @@ fn reconstruct_once(input: &ReconstructInput<'_>) -> Result<Reconstructed, Recon
                     "tier routing differs from the mined coinbase"
                 );
             }
-            for e in input.entries {
-                if e.rail == Rail::Coinbase {
-                    let value = paid
-                        .get(&e.sp_id)
-                        .ok_or(ReconstructError::MissingCoinbaseOutput(e.sp_id))?;
-                    let raw_sats = raw.raw.get(&e.sp_id).copied().unwrap_or(0);
-                    // `route_tiers` can pay only what the coinbase carries
-                    // when one balance exceeds the block reward: `paid` is
-                    // then `raw` plus part of the carried pending, and the
-                    // rest stays pending. Fail closed on a coinbase that
-                    // pays less than this block's raw share or more than
-                    // the frozen distribution entry.
-                    if *value < raw_sats || *value > e.sats {
-                        return Err(ReconstructError::CoinbaseTierMismatch);
+
+            for (id, group) in &groups {
+                if group.coinbase.is_empty() {
+                    if paid.contains_key(id) {
+                        return Err(ReconstructError::PaidMismatch(*id));
                     }
-                } else if paid.contains_key(&e.sp_id) {
-                    return Err(ReconstructError::PaidMismatch(e.sp_id));
+                    continue;
+                }
+                let owed = amounts
+                    .get(id)
+                    .copied()
+                    .ok_or(ReconstructError::WindowMismatch)?;
+                let expected =
+                    decompose_for_mode(owed, input.cfg.max_payout_slots, LadderMode::PoolTemplate)?;
+                let aggregate = group.coinbase[0];
+                if aggregate.sats != expected.paid {
+                    return Err(ReconstructError::CoinbaseTierMismatch);
+                }
+                if group.coinbase.len() != expected.outputs.len() {
+                    return Err(ReconstructError::WrongOutputCount(*id));
+                }
+                let values = key_values
+                    .get(id)
+                    .ok_or(ReconstructError::MissingCoinbaseOutput(*id))?;
+                if paid.get(id).copied() != Some(expected.paid) {
+                    return Err(ReconstructError::WrongOutputSum(*id));
+                }
+                for (actual, rung) in values.iter().zip(&expected.outputs) {
+                    if actual != rung {
+                        return Err(ReconstructError::WrongOutputValue(*id));
+                    }
+                }
+                if let Some(remainder) = group.other.first() {
+                    if remainder.sats != expected.remainder {
+                        return Err(ReconstructError::WrongOutputSum(*id));
+                    }
                 }
             }
         }
@@ -687,32 +785,49 @@ fn reconstruct_once(input: &ReconstructInput<'_>) -> Result<Reconstructed, Recon
         }
     }
 
-    let mut ledger = Vec::with_capacity(input.entries.len());
+    let mut ledger = Vec::with_capacity(groups.len());
     let mut deltas = Vec::new();
-    for e in input.entries {
-        let id = e.sp_id;
-        let before = input.pending.get(&id).copied().unwrap_or(0);
-        let amount = amounts.get(&id).copied().unwrap_or(0);
-        let row = if let Some(value) = paid.get(&id) {
-            // The mined coinbase paid this identity.
-            let after = amount.saturating_sub(*value);
-            LedgerRow {
-                sp_id: id,
-                rail: LedgerRail::Coinbase,
-                paid_sats: *value,
-                ark_due_sats: 0,
-                forfeited_sats: 0,
-                pending_delta: delta_of(after, before)?,
+    for (id, group) in &groups {
+        let e = group.primary().ok_or(ReconstructError::WindowMismatch)?;
+        let before = input.pending.get(id).copied().unwrap_or(0);
+        let amount = amounts.get(id).copied().unwrap_or(0);
+        let row = if let Some(value) = paid.get(id) {
+            if mode == TemplateMode::Pool {
+                // One coinbase row carries its remainder component. A kept
+                // id's remainder is never forfeited, even without delivery.
+                let remainder = amount
+                    .checked_sub(*value)
+                    .ok_or(ReconstructError::WrongOutputSum(*id))?;
+                let deliverable = input.delivered.contains(id) && group.dest_known();
+                let (ark_due, after) = if remainder > 0 && deliverable {
+                    (remainder, 0)
+                } else {
+                    (0, remainder)
+                };
+                LedgerRow {
+                    sp_id: *id,
+                    rail: LedgerRail::Coinbase,
+                    paid_sats: *value,
+                    ark_due_sats: ark_due,
+                    forfeited_sats: 0,
+                    pending_delta: delta_of(after, before)?,
+                }
+            } else {
+                let after = amount.saturating_sub(*value);
+                LedgerRow {
+                    sp_id: *id,
+                    rail: LedgerRail::Coinbase,
+                    paid_sats: *value,
+                    ark_due_sats: 0,
+                    forfeited_sats: 0,
+                    pending_delta: delta_of(after, before)?,
+                }
             }
         } else if e.rail == Rail::Coinbase {
             match mode {
-                // Pool-template mode builds the coinbase from the same
-                // routing: a kept id with no output is a broken distribution.
-                TemplateMode::Pool => return Err(ReconstructError::MissingCoinbaseOutput(id)),
-                // JD mode may dust-prune a kept id; the whole claim is
-                // carried pending (unsigned, SPEC §4.6 O11).
+                TemplateMode::Pool => return Err(ReconstructError::MissingCoinbaseOutput(*id)),
                 TemplateMode::Jd => LedgerRow {
-                    sp_id: id,
+                    sp_id: *id,
                     rail: LedgerRail::Pending,
                     paid_sats: 0,
                     ark_due_sats: 0,
@@ -721,30 +836,31 @@ fn reconstruct_once(input: &ReconstructInput<'_>) -> Result<Reconstructed, Recon
                 },
             }
         } else {
+            let forfeiture_boundary = if mode == TemplateMode::Pool {
+                LADDER_BASE_SATS
+            } else {
+                input.coinbase_threshold_sats
+            };
             let rail = settlement_rail(
                 amount,
-                input.delivered.contains(&id),
-                !e.dest_id.is_empty(),
-                input.coinbase_threshold_sats,
+                input.delivered.contains(id),
+                group.dest_known(),
+                forfeiture_boundary,
             );
             let (ark_due, forfeited, after) = match rail {
                 LedgerRail::Ark => (amount, 0, 0),
                 LedgerRail::Pending => (0, 0, amount),
                 LedgerRail::Forfeit => {
-                    // SPEC §11.1: only this block's raw earnings are
-                    // confiscated; a prior pending balance keeps waiting.
-                    // Prefer the accounting routing's forfeit split, and
-                    // otherwise derive the raw portion for this id.
                     let forfeitable = forfeited_now
-                        .get(&id)
+                        .get(id)
                         .copied()
-                        .unwrap_or_else(|| raw.raw.get(&id).copied().unwrap_or(0));
+                        .unwrap_or_else(|| raw.raw.get(id).copied().unwrap_or(0));
                     (0, forfeitable, before)
                 }
-                LedgerRail::Coinbase => return Err(ReconstructError::PaidMismatch(id)),
+                LedgerRail::Coinbase => return Err(ReconstructError::PaidMismatch(*id)),
             };
             LedgerRow {
-                sp_id: id,
+                sp_id: *id,
                 rail,
                 paid_sats: 0,
                 ark_due_sats: ark_due,
@@ -753,7 +869,7 @@ fn reconstruct_once(input: &ReconstructInput<'_>) -> Result<Reconstructed, Recon
             }
         };
         if row.pending_delta != 0 {
-            deltas.push((id, row.pending_delta));
+            deltas.push((*id, row.pending_delta));
         }
         ledger.push(row);
     }
@@ -1495,60 +1611,82 @@ impl PayoutService {
         &self,
         e: &BlockEvent,
     ) -> Result<(Vec<LedgerRow>, Vec<([u8; 32], i64)>), PayoutError> {
-        let mut ledger = Vec::with_capacity(e.entries.len());
+        let groups = group_entries(&e.entries, TemplateMode::Pool)
+            .map_err(|_| PayoutError::Snapshot("ambiguous multi-output entries"))?;
+        let mut ledger = Vec::with_capacity(groups.len());
         let mut deltas = Vec::new();
-        for entry in &e.entries {
-            let rail = match entry.rail {
-                Rail::Coinbase => LedgerRail::Coinbase,
-                Rail::Pending => LedgerRail::Pending,
-                Rail::Ark | Rail::Forfeit => {
-                    let delivery = self.store.ark_delivery(&entry.sp_id).await?.is_some();
-                    settlement_rail(
-                        entry.sats,
-                        delivery,
-                        !entry.dest_id.is_empty(),
-                        self.coinbase_threshold_sats,
-                    )
-                }
+        for (id, group) in &groups {
+            let before = self.store.pending_for(id).await?;
+            let delta = |after: u64| {
+                i64::try_from(i128::from(after) - i128::from(before))
+                    .map_err(|_| PayoutError::Overflow)
             };
-            let row = match rail {
-                LedgerRail::Coinbase => LedgerRow {
-                    sp_id: entry.sp_id,
+            let row = if let Some(entry) = group.coinbase.first() {
+                // Repeated k entries all carry the aggregate paid amount;
+                // credit it once. The optional second entry is the exact
+                // remainder, which the dev fallback cannot recompute.
+                let remainder = group.other.first().map_or(0, |entry| entry.sats);
+                let delivery = self.store.ark_delivery(id).await?.is_some();
+                let deliverable = delivery && group.dest_known();
+                let (ark_due, after) = if remainder > 0 && deliverable {
+                    (remainder, 0)
+                } else {
+                    (0, remainder)
+                };
+                LedgerRow {
+                    sp_id: *id,
                     rail: LedgerRail::Coinbase,
                     paid_sats: entry.sats,
-                    ark_due_sats: 0,
+                    ark_due_sats: ark_due,
                     forfeited_sats: 0,
-                    pending_delta: 0,
-                },
-                LedgerRail::Pending => {
-                    let delta = i64::try_from(entry.sats).map_err(|_| PayoutError::Overflow)?;
-                    deltas.push((entry.sp_id, delta));
-                    LedgerRow {
-                        sp_id: entry.sp_id,
-                        rail: LedgerRail::Pending,
+                    pending_delta: delta(after)?,
+                }
+            } else {
+                let entry = group
+                    .other
+                    .first()
+                    .ok_or(PayoutError::Snapshot("empty distribution entry"))?;
+                let delivery = self.store.ark_delivery(id).await?.is_some();
+                let rail = match entry.rail {
+                    Rail::Pending => LedgerRail::Pending,
+                    Rail::Ark | Rail::Forfeit => {
+                        settlement_rail(entry.sats, delivery, group.dest_known(), LADDER_BASE_SATS)
+                    }
+                    Rail::Coinbase => return Err(PayoutError::Snapshot("invalid rail grouping")),
+                };
+                match rail {
+                    LedgerRail::Pending => LedgerRow {
+                        sp_id: *id,
+                        rail,
                         paid_sats: 0,
                         ark_due_sats: 0,
                         forfeited_sats: 0,
-                        pending_delta: delta,
+                        pending_delta: delta(entry.sats)?,
+                    },
+                    LedgerRail::Ark => LedgerRow {
+                        sp_id: *id,
+                        rail,
+                        paid_sats: 0,
+                        ark_due_sats: entry.sats,
+                        forfeited_sats: 0,
+                        pending_delta: delta(0)?,
+                    },
+                    LedgerRail::Forfeit => LedgerRow {
+                        sp_id: *id,
+                        rail,
+                        paid_sats: 0,
+                        ark_due_sats: 0,
+                        forfeited_sats: entry.sats,
+                        pending_delta: 0,
+                    },
+                    LedgerRail::Coinbase => {
+                        return Err(PayoutError::Snapshot("invalid non-coinbase rail"))
                     }
                 }
-                LedgerRail::Ark => LedgerRow {
-                    sp_id: entry.sp_id,
-                    rail: LedgerRail::Ark,
-                    paid_sats: 0,
-                    ark_due_sats: entry.sats,
-                    forfeited_sats: 0,
-                    pending_delta: 0,
-                },
-                LedgerRail::Forfeit => LedgerRow {
-                    sp_id: entry.sp_id,
-                    rail: LedgerRail::Forfeit,
-                    paid_sats: 0,
-                    ark_due_sats: 0,
-                    forfeited_sats: entry.sats,
-                    pending_delta: 0,
-                },
             };
+            if row.pending_delta != 0 {
+                deltas.push((*id, row.pending_delta));
+            }
             ledger.push(row);
         }
         Ok((ledger, deltas))
@@ -2066,13 +2204,15 @@ mod tests {
             slice_row(1, 99, 100, 1, &[(carol, 100, 0)]),
         ];
         let entries = vec![
-            entry(alice, Rail::Coinbase, Some(id(0x01)), 60),
-            entry(bob, Rail::Coinbase, Some(id(0x02)), 40),
+            entry(alice, Rail::Coinbase, Some(id(0x01)), 1_500_000),
+            entry(alice, Rail::Coinbase, Some(id(0x03)), 1_500_000),
+            entry(bob, Rail::Coinbase, Some(id(0x02)), 1_000_000),
         ];
         let coinbase = vec![
-            output(pool_script(), 100),
-            output(spc_accounting::p2tr_script(&id(0x01)), 60),
-            output(spc_accounting::p2tr_script(&id(0x02)), 40),
+            output(pool_script(), 2_500_000),
+            output(spc_accounting::p2tr_script(&id(0x01)), 1_000_000),
+            output(spc_accounting::p2tr_script(&id(0x03)), 500_000),
+            output(spc_accounting::p2tr_script(&id(0x02)), 1_000_000),
         ];
         let pending = BTreeMap::new();
         let delivered = BTreeSet::new();
@@ -2089,7 +2229,7 @@ mod tests {
             pending: &pending,
             coinbase: &coinbase,
             economics: BlockEconomics {
-                subsidy: 200,
+                subsidy: 5_000_000,
                 fees: 0,
             },
             delivered: &delivered,
@@ -2100,16 +2240,128 @@ mod tests {
         let reconstructed = reconstruct_settlement(&input).unwrap();
         assert_eq!(reconstructed.mode, TemplateMode::Pool);
         assert_eq!(reconstructed.window, vec![3, 2]);
-        assert_eq!(reconstructed.raw.get(&alice), Some(&60));
-        assert_eq!(reconstructed.raw.get(&bob), Some(&40));
+        assert_eq!(reconstructed.raw.get(&alice), Some(&1_500_000));
+        assert_eq!(reconstructed.raw.get(&bob), Some(&1_000_000));
         assert_eq!(reconstructed.raw.get(&carol), None);
-        assert_eq!(reconstructed.t_actual, 200);
+        assert_eq!(reconstructed.t_actual, 5_000_000);
+        assert_eq!(reconstructed.ledger[0].paid_sats, 1_500_000);
         assert_eq!(reconstructed.ledger.len(), 2);
         assert!(reconstructed
             .ledger
             .iter()
             .all(|row| row.rail == LedgerRail::Coinbase));
         assert!(reconstructed.pending_deltas.is_empty());
+    }
+
+    #[test]
+    fn wrong_rung_count_sum_and_composition_are_rejected() {
+        let alice = id(0xa1);
+        let slices = vec![slice_row(2, 100, 100, 1, &[(alice, 100, 0)])];
+        let pending = BTreeMap::new();
+        let delivered = BTreeSet::new();
+        let hw = high_water(0, "3");
+        let short_entries = vec![entry(alice, Rail::Coinbase, Some(id(0x01)), 1_500_000)];
+        let short_coinbase = vec![
+            output(pool_script(), 500_000),
+            output(spc_accounting::p2tr_script(&id(0x01)), 1_000_000),
+        ];
+        let base = ReconstructInput {
+            height: 100,
+            high_water: &hw,
+            entries: &short_entries,
+            slices: &slices,
+            window_target: Some(100),
+            window_truncated: false,
+            pending: &pending,
+            coinbase: &short_coinbase,
+            economics: BlockEconomics {
+                subsidy: 1_500_000,
+                fees: 0,
+            },
+            delivered: &delivered,
+            cfg: base_cfg(1),
+            coinbase_threshold_sats: 30,
+        };
+        assert!(matches!(
+            reconstruct_settlement(&base),
+            Err(ReconstructError::WrongOutputCount(id)) if id == alice
+        ));
+
+        let sum_entries = vec![
+            entry(alice, Rail::Coinbase, Some(id(0x01)), 1_500_000),
+            entry(alice, Rail::Coinbase, Some(id(0x03)), 1_500_000),
+        ];
+        let sum_coinbase = vec![
+            output(pool_script(), 100_000),
+            output(spc_accounting::p2tr_script(&id(0x01)), 1_000_000),
+            output(spc_accounting::p2tr_script(&id(0x03)), 400_000),
+        ];
+        let wrong_sum = ReconstructInput {
+            entries: &sum_entries,
+            coinbase: &sum_coinbase,
+            ..base
+        };
+        assert!(matches!(
+            reconstruct_settlement(&wrong_sum),
+            Err(ReconstructError::WrongOutputSum(id)) if id == alice
+        ));
+
+        let composition_coinbase = vec![
+            output(pool_script(), 0),
+            output(spc_accounting::p2tr_script(&id(0x01)), 500_000),
+            output(spc_accounting::p2tr_script(&id(0x03)), 1_000_000),
+        ];
+        let wrong_composition = ReconstructInput {
+            entries: &sum_entries,
+            coinbase: &composition_coinbase,
+            ..base
+        };
+        assert!(matches!(
+            reconstruct_settlement(&wrong_composition),
+            Err(ReconstructError::WrongOutputValue(id)) if id == alice
+        ));
+    }
+
+    #[test]
+    fn registered_remainder_is_ark_due_and_reconstruction_is_repeatable() {
+        let alice = id(0xa1);
+        let slices = vec![slice_row(2, 500, 100, 1, &[(alice, 100, 0)])];
+        let mut payout = entry(alice, Rail::Coinbase, Some(id(0x01)), 500_000);
+        payout.dest_id = b"ark-destination".to_vec();
+        let mut remainder = entry(alice, Rail::Ark, None, 1);
+        remainder.dest_id = b"ark-destination".to_vec();
+        let entries = vec![payout, remainder];
+        let coinbase = vec![
+            output(pool_script(), 1),
+            output(spc_accounting::p2tr_script(&id(0x01)), 500_000),
+        ];
+        let pending = BTreeMap::new();
+        let delivered = BTreeSet::from([alice]);
+        let hw = high_water(0, "3");
+        let input = ReconstructInput {
+            height: 500,
+            high_water: &hw,
+            entries: &entries,
+            slices: &slices,
+            window_target: Some(100),
+            window_truncated: false,
+            pending: &pending,
+            coinbase: &coinbase,
+            economics: BlockEconomics {
+                subsidy: 500_001,
+                fees: 0,
+            },
+            delivered: &delivered,
+            cfg: base_cfg(1),
+            coinbase_threshold_sats: 330,
+        };
+        let first = reconstruct_settlement(&input).unwrap();
+        assert_eq!(first.ledger.len(), 1);
+        assert_eq!(first.ledger[0].rail, LedgerRail::Coinbase);
+        assert_eq!(first.ledger[0].paid_sats, 500_000);
+        assert_eq!(first.ledger[0].ark_due_sats, 1);
+        assert_eq!(first.ledger[0].pending_delta, 0);
+        assert_eq!(reconstruct_settlement(&input).unwrap(), first);
     }
 
     /// SPEC §4.6 (O11): the JDC paid at its own template revenue. The ledger
@@ -2250,12 +2502,12 @@ mod tests {
         let mut carol_entry = entry(carol, Rail::Pending, None, 100);
         carol_entry.dest_id = b"ark-destination".to_vec();
         let entries = vec![
-            entry(alice, Rail::Coinbase, Some(id(0x01)), 200),
+            entry(alice, Rail::Coinbase, Some(id(0x01)), 5_000_000),
             carol_entry,
         ];
         let coinbase = vec![
             output(pool_script(), 0),
-            output(spc_accounting::p2tr_script(&id(0x01)), 200),
+            output(spc_accounting::p2tr_script(&id(0x01)), 5_000_000),
         ];
         let pending = BTreeMap::from([(carol, 100)]);
         let delivered = BTreeSet::from([carol]);
@@ -2272,7 +2524,7 @@ mod tests {
             pending: &pending,
             coinbase: &coinbase,
             economics: BlockEconomics {
-                subsidy: 200,
+                subsidy: 5_000_000,
                 fees: 0,
             },
             delivered: &delivered,
@@ -2310,13 +2562,15 @@ mod tests {
             slice_row(2, 100, 100, 1, &[(bob, 40, 0)]),
         ];
         let entries = vec![
-            entry(alice, Rail::Coinbase, Some(id(0x01)), 60),
-            entry(bob, Rail::Coinbase, Some(id(0x02)), 40),
+            entry(alice, Rail::Coinbase, Some(id(0x01)), 1_500_000),
+            entry(alice, Rail::Coinbase, Some(id(0x03)), 1_500_000),
+            entry(bob, Rail::Coinbase, Some(id(0x02)), 1_000_000),
         ];
         let coinbase = vec![
-            output(pool_script(), 100),
-            output(spc_accounting::p2tr_script(&id(0x01)), 60),
-            output(spc_accounting::p2tr_script(&id(0x02)), 40),
+            output(pool_script(), 2_500_000),
+            output(spc_accounting::p2tr_script(&id(0x01)), 1_000_000),
+            output(spc_accounting::p2tr_script(&id(0x03)), 500_000),
+            output(spc_accounting::p2tr_script(&id(0x02)), 1_000_000),
         ];
         let pending = BTreeMap::new();
         let delivered = BTreeSet::new();
@@ -2333,7 +2587,7 @@ mod tests {
             pending: &pending,
             coinbase: &coinbase,
             economics: BlockEconomics {
-                subsidy: 200,
+                subsidy: 5_000_000,
                 fees: 0,
             },
             delivered: &delivered,
@@ -2343,8 +2597,8 @@ mod tests {
 
         let reconstructed = reconstruct_settlement(&input).unwrap();
         assert_eq!(reconstructed.window, vec![3, 2]);
-        assert_eq!(reconstructed.raw.get(&alice), Some(&60));
-        assert_eq!(reconstructed.raw.get(&bob), Some(&40));
+        assert_eq!(reconstructed.raw.get(&alice), Some(&1_500_000));
+        assert_eq!(reconstructed.raw.get(&bob), Some(&1_000_000));
     }
 
     #[test]
@@ -2502,13 +2756,13 @@ mod tests {
             slice_row(2, 198, 300, 1, &[(bob, 300, 0)]),
         ];
         let entries = vec![
-            entry(alice, Rail::Coinbase, Some(id(0x01)), 300),
-            entry(bob, Rail::Coinbase, Some(id(0x02)), 300),
+            entry(alice, Rail::Coinbase, Some(id(0x01)), 3_000_000),
+            entry(bob, Rail::Coinbase, Some(id(0x02)), 3_000_000),
         ];
         let coinbase = vec![
             output(pool_script(), 0),
-            output(spc_accounting::p2tr_script(&id(0x01)), 300),
-            output(spc_accounting::p2tr_script(&id(0x02)), 300),
+            output(spc_accounting::p2tr_script(&id(0x01)), 3_000_000),
+            output(spc_accounting::p2tr_script(&id(0x02)), 3_000_000),
         ];
         let hw = high_water(0, "3");
         let input = ReconstructInput {
@@ -2522,7 +2776,7 @@ mod tests {
             pending: &BTreeMap::new(),
             coinbase: &coinbase,
             economics: BlockEconomics {
-                subsidy: 600,
+                subsidy: 6_000_000,
                 fees: 0,
             },
             delivered: &BTreeSet::new(),
@@ -2534,8 +2788,8 @@ mod tests {
         // The persisted 600 target takes both slices (Σ 600); the 300
         // estimate would have taken only slice 3 and paid Bob nothing.
         assert_eq!(reconstructed.window, vec![3, 2]);
-        assert_eq!(reconstructed.raw.get(&alice), Some(&300));
-        assert_eq!(reconstructed.raw.get(&bob), Some(&300));
+        assert_eq!(reconstructed.raw.get(&alice), Some(&3_000_000));
+        assert_eq!(reconstructed.raw.get(&bob), Some(&3_000_000));
         // Replay determinism: the same frozen inputs book the same ledger.
         assert_eq!(reconstruct_settlement(&input).unwrap(), reconstructed);
     }
@@ -2551,10 +2805,10 @@ mod tests {
             slice_row(3, 199, 300, 1, &[(alice, 300, 0)]),
             slice_row(2, 198, 300, 1, &[(id(0xb2), 300, 0)]),
         ];
-        let entries = vec![entry(alice, Rail::Coinbase, Some(id(0x01)), 300)];
+        let entries = vec![entry(alice, Rail::Coinbase, Some(id(0x01)), 3_000_000)];
         let coinbase = vec![
             output(pool_script(), 0),
-            output(spc_accounting::p2tr_script(&id(0x01)), 300),
+            output(spc_accounting::p2tr_script(&id(0x01)), 3_000_000),
         ];
         let hw = high_water(0, "3");
         let input = ReconstructInput {
@@ -2567,7 +2821,7 @@ mod tests {
             pending: &BTreeMap::new(),
             coinbase: &coinbase,
             economics: BlockEconomics {
-                subsidy: 300,
+                subsidy: 3_000_000,
                 fees: 0,
             },
             delivered: &BTreeSet::new(),
@@ -2579,7 +2833,7 @@ mod tests {
         // The estimate (300 from the newest slice) closes on slice 3 alone -
         // a smaller window than the persisted 600 target would select.
         assert_eq!(reconstructed.window, vec![3]);
-        assert_eq!(reconstructed.raw.get(&alice), Some(&300));
+        assert_eq!(reconstructed.raw.get(&alice), Some(&3_000_000));
     }
 
     #[test]
@@ -3069,8 +3323,8 @@ mod tests {
         }
         let fingerprint: [u8; 32] = rand::random();
         let entries = vec![
-            entry(alice, Rail::Coinbase, Some(id(0x01)), 100),
-            entry(bob, Rail::Coinbase, Some(id(0x02)), 100),
+            entry(alice, Rail::Coinbase, Some(id(0x01)), 1_000_000),
+            entry(bob, Rail::Coinbase, Some(id(0x02)), 1_000_000),
         ];
         store
             .insert_snapshot(&SnapshotRow {
@@ -3107,11 +3361,11 @@ mod tests {
             Arc::new(ReconstructChain {
                 coinbase: vec![
                     output(pool_script(), 0),
-                    output(spc_accounting::p2tr_script(&id(0x01)), 100),
-                    output(spc_accounting::p2tr_script(&bob_entry_p_x), 100),
+                    output(spc_accounting::p2tr_script(&id(0x01)), 1_000_000),
+                    output(spc_accounting::p2tr_script(&bob_entry_p_x), 1_000_000),
                 ],
                 economics: BlockEconomics {
-                    subsidy: 200,
+                    subsidy: 2_000_000,
                     fees: 0,
                 },
             }),
@@ -3137,7 +3391,7 @@ mod tests {
         assert_eq!(ledger.len(), 2);
         assert!(ledger.iter().all(|row| row.rail == LedgerRail::Coinbase));
         let alice_row = ledger.iter().find(|row| row.sp_id == alice).unwrap();
-        assert_eq!(alice_row.paid_sats, 100);
+        assert_eq!(alice_row.paid_sats, 1_000_000);
         assert!(deltas.is_empty());
     }
 
@@ -3240,18 +3494,20 @@ mod tests {
         assert_eq!(i64::try_from(row.forfeited_sats).unwrap() + after, 140);
     }
 
-    /// With raw >= C the same balance routes to the coinbase. When the block
-    /// reward cannot cover the full owed total, the routing pays what the
-    /// coinbase carries and retains the rest as pending (partial keep).
+    /// The exact base boundary shapes down to 500k. The 101-sat remainder
+    /// stays on the same coinbase row, consumes the old 100-sat pending
+    /// balance exactly once, and is never forfeited.
     #[test]
-    fn raw_at_threshold_routes_to_coinbase_and_retains_the_rest() {
+    fn base_boundary_books_an_error_pending_remainder() {
         let alice = id(0xa1);
-        // raw = 330 (>= C), pending = 100: owed = 430, T = 330.
         let slices = vec![slice_row(2, 500, 100, 1, &[(alice, 100, 0)])];
-        let entries = vec![entry(alice, Rail::Coinbase, Some(id(0x01)), 430)];
+        let entries = vec![
+            entry(alice, Rail::Coinbase, Some(id(0x01)), 500_000),
+            entry(alice, Rail::Pending, None, 101),
+        ];
         let coinbase = vec![
-            output(pool_script(), 0),
-            output(spc_accounting::p2tr_script(&id(0x01)), 330),
+            output(pool_script(), 1),
+            output(spc_accounting::p2tr_script(&id(0x01)), 500_000),
         ];
         let pending = BTreeMap::from([(alice, 100u64)]);
         let hw = high_water(0, "3");
@@ -3260,14 +3516,12 @@ mod tests {
             high_water: &hw,
             entries: &entries,
             slices: &slices,
-            // Pre-migration shape: no persisted target, so these tests
-            // exercise the warned slice-estimate fallback.
             window_target: None,
             window_truncated: false,
             pending: &pending,
             coinbase: &coinbase,
             economics: BlockEconomics {
-                subsidy: 330,
+                subsidy: 500_001,
                 fees: 0,
             },
             delivered: &BTreeSet::new(),
@@ -3276,22 +3530,16 @@ mod tests {
         };
 
         let reconstructed = reconstruct_settlement(&input).unwrap();
-        assert_eq!(reconstructed.raw.get(&alice), Some(&330));
-        let row = reconstructed
-            .ledger
-            .iter()
-            .find(|row| row.sp_id == alice)
-            .expect("coinbase row");
+        assert_eq!(reconstructed.raw.get(&alice), Some(&500_001));
+        assert_eq!(reconstructed.ledger.len(), 1);
+        let row = &reconstructed.ledger[0];
         assert_eq!(row.rail, LedgerRail::Coinbase);
-        assert_eq!(row.paid_sats, 330);
-        assert_eq!(row.pending_delta, 0, "the carried 100 is retained");
-        assert!(reconstructed
-            .pending_deltas
-            .iter()
-            .all(|(id, _)| *id != alice));
-        // Conservation: paid + retained pending == owed.
+        assert_eq!(row.paid_sats, 500_000);
+        assert_eq!(row.ark_due_sats, 0);
+        assert_eq!(row.forfeited_sats, 0);
+        assert_eq!(row.pending_delta, 1);
         let after = 100i64 + row.pending_delta;
-        assert_eq!(i64::try_from(row.paid_sats).unwrap() + after, 430);
+        assert_eq!(i64::try_from(row.paid_sats).unwrap() + after, 500_101);
     }
 
     fn test_front() -> crate::front::Front {
@@ -3627,7 +3875,10 @@ mod tests {
             a_send_x: [4; 32],
             high_water: BTreeMap::from([(0u8, "1".to_string())]),
             window_target: 8,
-            entries: vec![entry(sp_id, Rail::Coinbase, None, 100)],
+            entries: vec![
+                entry(sp_id, Rail::Coinbase, Some(id(0x01)), 1_500_000),
+                entry(sp_id, Rail::Coinbase, Some(id(0x03)), 1_500_000),
+            ],
         };
         let payload = event.encode().unwrap();
         assert!(svc.on_block(&payload).await.is_ok());

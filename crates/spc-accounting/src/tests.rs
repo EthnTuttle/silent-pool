@@ -1543,8 +1543,17 @@ fn banded_routing_fails_closed_on_slots_and_revenue_overflow() {
         })
     ));
 
+    let boundary_ids: Vec<SpId> = (0u16..1_025)
+        .map(|i| {
+            let mut id = [0u8; 32];
+            id[..2].copy_from_slice(&i.to_be_bytes());
+            id
+        })
+        .collect();
     let boundary = RawPayouts {
-        raw: BTreeMap::from([([2; 32], 512_500_000)]),
+        // Separate base-rung balances prevent larger-rung coalescing: this is
+        // exactly 1_025 outputs rather than a single large decomposition.
+        raw: boundary_ids.iter().map(|id| (*id, 500_000)).collect(),
         pool_sats: 0,
         r_net: 512_500_000,
         f_net: 0,
@@ -1570,7 +1579,14 @@ fn banded_routing_fails_closed_on_slots_and_revenue_overflow() {
         512_500_000,
     )
     .unwrap();
-    assert_eq!(decomposition_len(accepted.kept[0].1), 1_025);
+    assert_eq!(
+        accepted
+            .kept
+            .iter()
+            .map(|(_, paid)| decomposition_len(*paid))
+            .sum::<u64>(),
+        1_025
+    );
     assert_eq!(accepted.pay_p, 0);
 }
 
