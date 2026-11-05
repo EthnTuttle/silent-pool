@@ -549,14 +549,12 @@ fn group_entries(
                     if group.other.len() != 1 {
                         return Err(ReconstructError::DuplicateEntry(*id));
                     }
-                } else {
-                    if group.other.len() > 1
-                        || group.other.iter().any(|entry| {
-                            !matches!(entry.rail, Rail::Ark | Rail::Pending) || entry.sats == 0
-                        })
-                    {
-                        return Err(ReconstructError::DuplicateEntry(*id));
-                    }
+                } else if group.other.len() > 1
+                    || group.other.iter().any(|entry| {
+                        !matches!(entry.rail, Rail::Ark | Rail::Pending) || entry.sats == 0
+                    })
+                {
+                    return Err(ReconstructError::DuplicateEntry(*id));
                 }
             }
             TemplateMode::Jd => {

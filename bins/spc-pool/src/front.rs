@@ -28,8 +28,8 @@ use bitcoin::pow::Target;
 use bitcoin::BlockHash;
 use spc_accounting::{
     build_distribution, build_weights, raw_payouts, route_tiers, select_window, ArkCapability,
-    Distribution, LadderMode, MinerKeys, Routing, ShareRec, Slice, SliceAgg, SpId, TierConfig,
-    Weights,
+    Distribution, DistributionPolicy, LadderMode, MinerKeys, Routing, ShareRec, Slice, SliceAgg,
+    SpId, TierConfig, Weights,
 };
 use spc_crypto::{Network, SendKey};
 use spc_store::models::{BootstrapSnapshot, SliceRow};
@@ -650,8 +650,10 @@ impl Front {
                 &self.miners,
                 &pool_script,
                 &self.ark_dest,
-                self.cfg.max_payout_slots,
-                LadderMode::PoolTemplate,
+                DistributionPolicy {
+                    max_payout_slots: self.cfg.max_payout_slots,
+                    mode: LadderMode::PoolTemplate,
+                },
             )?
         };
 

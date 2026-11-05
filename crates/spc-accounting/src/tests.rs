@@ -897,8 +897,10 @@ fn distribution_builds_p2tr_outputs_and_entries() {
         &miners,
         &p2tr_script(&[9; 32]),
         &BTreeMap::new(),
-        1_024,
-        LadderMode::PoolTemplate,
+        DistributionPolicy {
+            max_payout_slots: 1_024,
+            mode: LadderMode::PoolTemplate,
+        },
     )
     .unwrap();
     assert_eq!(d.outputs.len(), 2);
@@ -921,8 +923,10 @@ fn distribution_builds_p2tr_outputs_and_entries() {
             &miners,
             &p2tr_script(&[9; 32]),
             &BTreeMap::new(),
-            1_024,
-            LadderMode::JobDeclaration,
+            DistributionPolicy {
+                max_payout_slots: 1_024,
+                mode: LadderMode::JobDeclaration,
+            },
         )
         .err(),
         Some(Error::JdBanding)
@@ -959,8 +963,10 @@ fn distribution_outputs_are_sorted_by_script() {
         &miners,
         &p2tr_script(&[9; 32]),
         &BTreeMap::new(),
-        1_024,
-        LadderMode::PoolTemplate,
+        DistributionPolicy {
+            max_payout_slots: 1_024,
+            mode: LadderMode::PoolTemplate,
+        },
     )
     .unwrap();
     // Pool output first; 5.5M and 3.5M each need two rungs, 500k needs one.

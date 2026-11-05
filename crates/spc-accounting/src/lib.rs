@@ -815,6 +815,12 @@ pub struct Entry {
     pub sats: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DistributionPolicy {
+    pub max_payout_slots: usize,
+    pub mode: LadderMode,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Distribution {
     pub height: u32,
@@ -837,8 +843,8 @@ pub struct MinerKeys {
 
 /// Build the pool-template (sats) distribution (SPEC §4.7).
 ///
-/// Output order is `[pool output] ++ [miner outputs sorted by sp_id]` as the
-/// spec requires, so the fingerprint is independent of the trim order.
+/// Output order is `[pool output] ++ [miner outputs sorted by script]` as the
+/// spec requires, so the fingerprint is independent of the routing order.
 pub fn build_distribution(
     height: u32,
     send: &SendKey,
@@ -846,10 +852,9 @@ pub fn build_distribution(
     miners: &BTreeMap<SpId, MinerKeys>,
     pool_script: &[u8],
     ark_dest: &BTreeMap<SpId, Vec<u8>>,
-    max_payout_slots: usize,
-    mode: LadderMode,
+    policy: DistributionPolicy,
 ) -> Result<Distribution, Error> {
-    if mode == LadderMode::JobDeclaration {
+    if policy.mode == LadderMode::JobDeclaration {
         return Err(Error::JdBanding);
     }
     let kept = sorted_by_id(&routing.kept);
@@ -859,14 +864,14 @@ pub fn build_distribution(
     let mut required_slots = 0u64;
 
     for (id, sats) in &kept {
-        let decomposition = decompose_for_mode(*sats, max_payout_slots, mode)?;
+        let decomposition = decompose_for_mode(*sats, policy.max_payout_slots, policy.mode)?;
         required_slots = required_slots
             .checked_add(decomposition.outputs.len() as u64)
             .ok_or(Error::Overflow)?;
-        if required_slots > max_payout_slots as u64 {
+        if required_slots > policy.max_payout_slots as u64 {
             return Err(Error::PayoutSlots {
                 required: required_slots,
-                max: max_payout_slots,
+                max: policy.max_payout_slots,
             });
         }
         let keys = miners.get(id).ok_or(Error::Derivation(*id))?;
