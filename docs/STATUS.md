@@ -191,26 +191,28 @@ Both harnesses bind bitcoind on 18443, so they must be run sequentially.
 
 ## Remaining
 
-1. Tor is complete for its scope (mining connections). Ark egress is direct
-   by decision 2026-11-04; do not add `[net]` back to the pool without a new
-   record.
-2. Replace the interim Ark command transport with the stock bark wallet
-   adapter (order emission and verification are done). Dispatched 2026-11-03
-   (branch `bark-adapter`).
-3. JD fallback rules (JDS declines, 10 s silence) and the full-template rebuild
-   path in the JDC.
-4. Persist the window target in `distribution_snapshot` so settlement survives
-   a difficulty retarget between the reference slice and the find.
-5. Template sources: `[template] source` accepts `ipc` and `sv2-tp` in config
-   but this build refuses to start on anything but `rpc` (and dev-only `mock`).
-   They land with the rbitcoin/TP packet.
-6. Role-sourced metric families (front `a_send` age, `ark` float, JD rejection
-   codes, stream lag) are listed as planned in OPERATIONS §7; only the
-   exporter's current families are served today.
-7. The seeded `--features cheat-slice-difficulty` statistical test.
-8. Testnet soak and third-party `spc-scan` recovery.
-9. rbitcoin as the node backend (separate repository, testnet4 fork); the
-   template source interface (item 5) is the integration point.
+1. **Denomination-ladder implementation** (decision `d62bf23`): band
+   `{500k, 1M, 3M, 5M}`, greedy, remainder over Ark, `max_payout_slots` 1024,
+   the settlement predicate change, the band-aware miner check and tests. The
+   largest open packet; spec and record are done, no code yet.
+2. **SV2 Template Provider stage 2**: `SubmitSolution` submission seam, the
+   chain-view config decision, and `testing/regtest-rbitcoin-tp-e2e.sh`.
+   Stage 1 (TDP client, mapping, mock tests) is committed on `sv2-tp`.
+3. `[template] source = "ipc"` (bitcoin-core Cap'n Proto) - the other declared
+   source; rpc and sv2-tp cover the node backends in use.
+4. Role-sourced metric families (front `a_send` age, `ark` float, JD rejection
+   codes, stream lag) are planned in OPERATIONS §7; only the exporter's
+   current families are served today.
+5. The seeded `--features cheat-slice-difficulty` statistical test.
+6. Testnet soak and third-party `spc-scan` recovery.
+7. rbitcoin upstream: the testnet4 branch is pushed to the fork and PLAN §7
+   passes (sync to 159,175, GBT bits re-derived, BIP94 boundary checked); the
+   upstream PR is not opened.
+8. Multi-region (Phase 3 multi-front, Phase 8) per MULTI-REGION.md.
+
+Done since the previous board: bark transport, JD fallback, window-target
+persistence, Tor scope decision, ladder decision, rbitcoin RPC harness and
+reorg invariant, rbitcoin testnet4 acceptance.
 
 ## Considered, not adopted
 
