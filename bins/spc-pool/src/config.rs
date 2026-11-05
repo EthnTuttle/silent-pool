@@ -345,7 +345,7 @@ fn default_dust() -> u64 {
     330
 }
 fn default_max_slots() -> usize {
-    256
+    1_024
 }
 fn default_retain() -> u32 {
     16
@@ -924,6 +924,15 @@ listen = "127.0.0.1:8080"
         let mut cfg = sample();
         cfg.template.refresh_interval_ms = 0;
         assert_eq!(cfg.validate(), Err(ConfigError::RefreshInterval));
+    }
+
+    #[test]
+    fn payout_slots_cover_the_era_one_ladder_bound() {
+        let cfg = sample();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.accounting.max_payout_slots, 1_024);
+        assert_eq!(309_375_000u64.div_ceil(500_000), 619);
+        assert!(cfg.accounting.max_payout_slots as u64 >= 619);
     }
 
     #[test]

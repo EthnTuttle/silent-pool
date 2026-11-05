@@ -81,6 +81,51 @@ fn spec_4_5_worked_example_matches_to_the_sat() {
     assert_eq!(raw.pool_sats, 3_325_002);
     assert_eq!(raw.r_net, 309_375_000);
     assert_eq!(raw.f_net, 19_800_000);
+
+    let ark = [1u8, 2, 3]
+        .into_iter()
+        .map(|id| {
+            (
+                [id; 32],
+                ArkCapability {
+                    registered: true,
+                    dest_known: true,
+                },
+            )
+        })
+        .collect();
+    let routing = route_tiers(&raw, &BTreeMap::new(), &ark, &cfg(1_000_000, 1_024), r + f).unwrap();
+    assert_eq!(
+        routing.kept,
+        vec![
+            ([1; 32], 180_500_000),
+            ([2; 32], 115_000_000),
+            ([3; 32], 33_000_000)
+        ]
+    );
+    assert_eq!(
+        routing.ark_due,
+        vec![([1; 32], 491_854), ([2; 32], 178_612), ([3; 32], 4_532)]
+    );
+    assert_eq!(
+        decompose(180_991_854, 37).unwrap().outputs,
+        [vec![5_000_000; 36], vec![500_000]].concat()
+    );
+    assert_eq!(
+        decompose(115_178_612, 23).unwrap().outputs,
+        vec![5_000_000; 23]
+    );
+    assert_eq!(
+        decompose(33_004_532, 7).unwrap().outputs,
+        [vec![5_000_000; 6], vec![3_000_000]].concat()
+    );
+    assert_eq!(routing.pay_p, 4_000_000);
+    assert_eq!(
+        decomposition_len(180_991_854)
+            + decomposition_len(115_178_612)
+            + decomposition_len(33_004_532),
+        67
+    );
 }
 
 /// SPEC §4.4 floors the subsidy term **once per identity across the whole
@@ -294,7 +339,7 @@ fn tiers_are_disjoint_and_conservation_holds() {
             },
         ),
     ]);
-    let r = route_tiers(&raw, &pending, &ark, &cfg(172, 1), 2_300).unwrap();
+    let r = route_jd_tiers(&raw, &pending, &ark, &cfg(172, 1), 2_300).unwrap();
     // Only the largest (id 1) is kept; id 4 is trimmed, id 2 is Ark, id 3 forfeit.
     assert_eq!(r.kept, vec![([1; 32], 1_010)]);
     assert_eq!(r.pending, vec![([4; 32], 900)]);
@@ -339,7 +384,7 @@ fn pending_only_identity_is_routed_not_stranded() {
             dest_known: true,
         },
     )]);
-    let r = route_tiers(&raw, &pending, &ark, &cfg(172 * 2, 2), 6_100).unwrap();
+    let r = route_jd_tiers(&raw, &pending, &ark, &cfg(172 * 2, 2), 6_100).unwrap();
 
     assert_eq!(r.kept, vec![([2; 32], 5_000), ([1; 32], 1_000)]);
     assert_eq!(r.pending, vec![([4; 32], 900)]);
@@ -363,7 +408,7 @@ fn pending_only_identity_is_routed_not_stranded() {
 fn pending_only_unregistered_below_threshold_is_retained() {
     let raw = empty_raw();
     let pending = BTreeMap::from([([7; 32], 100)]);
-    let r = route_tiers(&raw, &pending, &BTreeMap::new(), &cfg(1_000, 10), 0).unwrap();
+    let r = route_jd_tiers(&raw, &pending, &BTreeMap::new(), &cfg(1_000, 10), 0).unwrap();
     assert!(r.forfeited.is_empty());
     assert_eq!(r.pending, vec![([7; 32], 100)]);
     assert_eq!(r.pending_deltas.get(&[7; 32]), Some(&0));
@@ -384,7 +429,7 @@ fn forfeit_takes_only_the_current_block_raw_portion() {
         f_net: 0,
     };
     let pending = BTreeMap::from([([1; 32], 60)]);
-    let r = route_tiers(&raw, &pending, &BTreeMap::new(), &cfg(10_000, 10), 40).unwrap();
+    let r = route_jd_tiers(&raw, &pending, &BTreeMap::new(), &cfg(10_000, 10), 40).unwrap();
     assert_eq!(r.forfeited, vec![([1; 32], 40)], "raw only, never 100");
     assert!(r.pending.is_empty() && r.kept.is_empty() && r.ark_due.is_empty());
     assert_eq!(r.pending_deltas.get(&[1; 32]), Some(&0));
@@ -426,7 +471,7 @@ fn registered_below_threshold_cases_are_unchanged() {
             },
         ),
     ]);
-    let r = route_tiers(&raw, &pending, &ark, &cfg(10_000, 10), 80).unwrap();
+    let r = route_jd_tiers(&raw, &pending, &ark, &cfg(10_000, 10), 80).unwrap();
     // Known destination: the whole owed becomes an Ark send due.
     assert_eq!(r.ark_due, vec![([1; 32], 100), ([3; 32], 70)]);
     assert_eq!(r.pending_deltas.get(&[1; 32]), Some(&-60));
@@ -455,7 +500,7 @@ fn coinbase_is_capped_at_total_and_the_excess_is_pending() {
     let mut tier = cfg(10_000, 8);
     tier.dust_limit_sats = 1;
     tier.coinbase_threshold_sats = 1;
-    let r = route_tiers(&raw, &pending, &BTreeMap::new(), &tier, 200).unwrap();
+    let r = route_jd_tiers(&raw, &pending, &BTreeMap::new(), &tier, 200).unwrap();
 
     // A owes 250 > T: pay T against it, one output, no negative balance.
     assert_eq!(r.kept, vec![([1; 32], 200)]);
@@ -486,7 +531,7 @@ fn coinbase_cap_stops_the_walk_deterministically() {
     let mut tier = cfg(10_000, 8);
     tier.dust_limit_sats = 1;
     tier.coinbase_threshold_sats = 1;
-    let r = route_tiers(&raw, &BTreeMap::new(), &BTreeMap::new(), &tier, 200).unwrap();
+    let r = route_jd_tiers(&raw, &BTreeMap::new(), &BTreeMap::new(), &tier, 200).unwrap();
     // 150 fits; the next 60 would exceed the remaining 50, so the walk stops
     // even though the 40 would still fit.
     assert_eq!(r.kept, vec![([1; 32], 150)]);
@@ -494,7 +539,7 @@ fn coinbase_cap_stops_the_walk_deterministically() {
     assert_eq!(r.pending, vec![([2; 32], 60), ([3; 32], 40)]);
     // Re-running is byte-identical (deterministic order).
     assert_eq!(
-        route_tiers(&raw, &BTreeMap::new(), &BTreeMap::new(), &tier, 200).unwrap(),
+        route_jd_tiers(&raw, &BTreeMap::new(), &BTreeMap::new(), &tier, 200).unwrap(),
         r
     );
 }
@@ -510,7 +555,7 @@ fn cap_never_emits_a_sub_threshold_output() {
     };
     let pending = BTreeMap::from([([1; 32], 500)]);
     // T = 200 < C = 330: the whole balance waits, pay_p keeps the block.
-    let r = route_tiers(&raw, &pending, &BTreeMap::new(), &cfg(10_000, 8), 200).unwrap();
+    let r = route_jd_tiers(&raw, &pending, &BTreeMap::new(), &cfg(10_000, 8), 200).unwrap();
     assert!(r.kept.is_empty());
     assert_eq!(r.pay_p, 200);
     assert_eq!(r.pending, vec![([1; 32], 600)]);
@@ -533,7 +578,7 @@ fn cap_reserves_the_pool_fee() {
     let mut tier = cfg(10_000, 8);
     tier.dust_limit_sats = 1;
     tier.coinbase_threshold_sats = 1;
-    let r = route_tiers(&raw, &pending, &BTreeMap::new(), &tier, 1_000).unwrap();
+    let r = route_jd_tiers(&raw, &pending, &BTreeMap::new(), &tier, 1_000).unwrap();
 
     // owed = 1 490 > T, but the payable capacity is T - pool_sats = 990.
     assert_eq!(r.kept, vec![([1; 32], 990)]);
@@ -557,7 +602,7 @@ fn cap_pays_nothing_when_the_fee_covers_the_block() {
         f_net: 0,
     };
     let pending = BTreeMap::from([([1; 32], 400)]);
-    let r = route_tiers(&raw, &pending, &BTreeMap::new(), &cfg(10_000, 8), 500).unwrap();
+    let r = route_jd_tiers(&raw, &pending, &BTreeMap::new(), &cfg(10_000, 8), 500).unwrap();
     assert!(r.kept.is_empty());
     assert_eq!(r.pay_p, 500);
     assert!(r.pay_p >= raw.pool_sats);
@@ -575,7 +620,7 @@ fn zero_balances_are_dropped() {
         f_net: 0,
     };
     let pending = BTreeMap::from([([2; 32], 0)]);
-    let r = route_tiers(&raw, &pending, &BTreeMap::new(), &cfg(1_000, 10), 0).unwrap();
+    let r = route_jd_tiers(&raw, &pending, &BTreeMap::new(), &cfg(1_000, 10), 0).unwrap();
     assert!(r.kept.is_empty() && r.pending.is_empty() && r.ark_due.is_empty());
     assert!(r.forfeited.is_empty());
 }
@@ -595,10 +640,10 @@ fn raising_the_threshold_does_not_change_owed() {
             dest_known: true,
         },
     )]);
-    let low = route_tiers(&raw, &BTreeMap::new(), &ark, &cfg(10_000, 10), 1_000).unwrap();
+    let low = route_jd_tiers(&raw, &BTreeMap::new(), &ark, &cfg(10_000, 10), 1_000).unwrap();
     let mut high_cfg = cfg(10_000, 10);
     high_cfg.coinbase_threshold_sats = 2_000;
-    let high = route_tiers(&raw, &BTreeMap::new(), &ark, &high_cfg, 1_000).unwrap();
+    let high = route_jd_tiers(&raw, &BTreeMap::new(), &ark, &high_cfg, 1_000).unwrap();
     assert_eq!(low.kept.iter().map(|(_, v)| v).sum::<u64>(), 1_000);
     assert_eq!(high.ark_due.iter().map(|(_, v)| v).sum::<u64>(), 1_000);
 }
@@ -611,7 +656,7 @@ fn trim_never_exceeds_budget_or_slots() {
         r_net: 50_000,
         f_net: 0,
     };
-    let r = route_tiers(
+    let r = route_jd_tiers(
         &raw,
         &BTreeMap::new(),
         &BTreeMap::new(),
@@ -620,7 +665,7 @@ fn trim_never_exceeds_budget_or_slots() {
     )
     .unwrap();
     assert_eq!(r.kept.len(), 10);
-    let r = route_tiers(
+    let r = route_jd_tiers(
         &raw,
         &BTreeMap::new(),
         &BTreeMap::new(),
@@ -729,7 +774,7 @@ fn build_weights_matches_the_routing() {
             dest_known: true,
         },
     )]);
-    let routing = route_tiers(&raw, &pending, &ark, &cfg(172, 1), 2_500).unwrap();
+    let routing = route_jd_tiers(&raw, &pending, &ark, &cfg(172, 1), 2_500).unwrap();
     // kept: id 1. Ark: id 2. Trimmed: id 4. Pending-only: id 9 (never forfeited).
     assert_eq!(routing.kept, vec![([1; 32], 1_000)]);
     let weights = build_weights(&routing, 60);
@@ -768,7 +813,8 @@ fn distribution_and_weights_agree_on_kept_ids() {
         f_net: 0,
     };
     let pending = BTreeMap::from([([2; 32], 100)]);
-    let routing = route_tiers(&raw, &pending, &BTreeMap::new(), &cfg(172 * 2, 2), 2_100).unwrap();
+    let routing =
+        route_jd_tiers(&raw, &pending, &BTreeMap::new(), &cfg(172 * 2, 2), 2_100).unwrap();
     assert_eq!(routing.kept, vec![([1; 32], 1_000), ([2; 32], 1_000)]);
     let weights = build_weights(&routing, 25);
     assert_eq!(weights.weights, routing.kept);
@@ -790,7 +836,7 @@ fn jd_weights_use_full_owed_not_the_capped_coinbase() {
     let mut tier = cfg(10_000, 8);
     tier.dust_limit_sats = 1;
     tier.coinbase_threshold_sats = 1;
-    let routing = route_tiers(&raw, &pending, &BTreeMap::new(), &tier, 200).unwrap();
+    let routing = route_jd_tiers(&raw, &pending, &BTreeMap::new(), &tier, 200).unwrap();
 
     // The pool-template coinbase can only pay A 200 of its 250 owed.
     assert_eq!(routing.kept, vec![([1; 32], 200)]);
@@ -833,14 +879,14 @@ fn distribution_builds_p2tr_outputs_and_entries() {
     let (keys, id) = key_pair(0x11, 0x12);
     let send = SendKey::generate(800_000).unwrap();
     let routing = Routing {
-        owed: BTreeMap::from([(id, 1_000)]),
-        kept: vec![(id, 1_000)],
+        owed: BTreeMap::from([(id, 500_000)]),
+        kept: vec![(id, 500_000)],
         pending: vec![],
         ark_due: vec![],
         forfeited: vec![],
         pending_deltas: BTreeMap::new(),
         pay_p: 100,
-        total: 1_100,
+        total: 500_100,
         pool_fee: 100,
     };
     let miners = BTreeMap::from([(id, keys)]);
@@ -851,6 +897,8 @@ fn distribution_builds_p2tr_outputs_and_entries() {
         &miners,
         &p2tr_script(&[9; 32]),
         &BTreeMap::new(),
+        1_024,
+        LadderMode::PoolTemplate,
     )
     .unwrap();
     assert_eq!(d.outputs.len(), 2);
@@ -865,12 +913,26 @@ fn distribution_builds_p2tr_outputs_and_entries() {
         d.fingerprint,
         super::fingerprint(800_000, send.x_only(), &d.outputs)
     );
+    assert_eq!(
+        build_distribution(
+            800_000,
+            &send,
+            &routing,
+            &miners,
+            &p2tr_script(&[9; 32]),
+            &BTreeMap::new(),
+            1_024,
+            LadderMode::JobDeclaration,
+        )
+        .err(),
+        Some(Error::JdBanding)
+    );
 }
 
-/// SPEC §4.7: `outputs = [pool] ++ [P2TR(P_id, pay(id)) sorted by sp_id]`.
-/// The trim order (owed descending) must not leak into the coinbase order.
+/// SPEC §4.7: miner outputs are sorted by script, independently of the
+/// owed-descending routing order, and every rung gets its own k key.
 #[test]
-fn distribution_outputs_are_sorted_by_sp_id() {
+fn distribution_outputs_are_sorted_by_script() {
     let (k1, id1) = key_pair(0x11, 0x12);
     let (k2, id2) = key_pair(0x21, 0x22);
     let (k3, id3) = key_pair(0x31, 0x32);
@@ -880,14 +942,14 @@ fn distribution_outputs_are_sorted_by_sp_id() {
     ids.sort();
     // Trim order: descending owed, so the sp_id order is not the payout order.
     let routing = Routing {
-        owed: BTreeMap::from([(ids[2], 330), (ids[1], 240), (ids[0], 150)]),
-        kept: vec![(ids[2], 300), (ids[1], 200), (ids[0], 100)],
+        owed: BTreeMap::from([(ids[2], 5_500_000), (ids[1], 3_500_000), (ids[0], 500_000)]),
+        kept: vec![(ids[2], 5_500_000), (ids[1], 3_500_000), (ids[0], 500_000)],
         pending: vec![(ids[0], 50)],
         ark_due: vec![(ids[1], 40)],
         forfeited: vec![(ids[2], 30)],
         pending_deltas: BTreeMap::new(),
         pay_p: 7,
-        total: 727,
+        total: 9_500_127,
         pool_fee: 7,
     };
     let d = build_distribution(
@@ -897,32 +959,33 @@ fn distribution_outputs_are_sorted_by_sp_id() {
         &miners,
         &p2tr_script(&[9; 32]),
         &BTreeMap::new(),
+        1_024,
+        LadderMode::PoolTemplate,
     )
     .unwrap();
-    // Pool output first, then exactly one output per kept id.
-    assert_eq!(d.outputs.len(), 4);
+    // Pool output first; 5.5M and 3.5M each need two rungs, 500k needs one.
+    assert_eq!(d.outputs.len(), 6);
     assert_eq!(d.pay_p, 7);
+    assert!(d.outputs[1..].windows(2).all(|w| w[0].0 <= w[1].0));
     for (i, id) in ids.iter().enumerate() {
         let entry = &d.entries[i];
         assert_eq!(entry.rail, Rail::Coinbase);
         assert_eq!(entry.sp_id, *id);
-        let p_x = entry.p_x.expect("coinbase entry carries P_id");
-        // The output at index i + 1 belongs to ids[i].
-        let expected = {
-            let keys = &miners[id];
-            let ecdh = send.derive_pool_side(&keys.b_scan).unwrap();
-            let tweaks = tier_tweaks(&ecdh, 0).unwrap();
-            spc_output_pubkey(&keys.b_spend, &tweaks.t_onchain)
+        let ecdh = send.derive_pool_side(&miners[id].b_scan).expect("ecdh");
+        let rungs = decompose(entry.sats, 8).unwrap().outputs;
+        let p_xs = &d.payout_keys[id];
+        assert_eq!(p_xs.len(), rungs.len());
+        assert_eq!(entry.p_x, p_xs.first().copied());
+        for (k, (p_x, rung)) in p_xs.iter().zip(rungs).enumerate() {
+            let tweaks = tier_tweaks(&ecdh, k as u32).unwrap();
+            let expected = spc_output_pubkey(&miners[id].b_spend, &tweaks.t_onchain)
                 .unwrap()
                 .x_only_public_key()
                 .0
-                .serialize()
-        };
-        assert_eq!(p_x, expected);
-        assert_eq!(
-            d.outputs[i + 1],
-            (p2tr_script(&expected), d.entries[i].sats)
-        );
+                .serialize();
+            assert_eq!(*p_x, expected);
+            assert!(d.outputs.contains(&(p2tr_script(&expected), rung)));
+        }
     }
     // Non-kept rails ride along in entries only, sorted by sp_id, no outputs.
     let rest: Vec<(Rail, SpId)> = d.entries[ids.len()..]
@@ -1130,7 +1193,7 @@ proptest! {
             budget_wu,
             overhead_wu,
         };
-        let routing = route_tiers(&raw, &pending, &ark, &tier, total).unwrap();
+        let routing = route_jd_tiers(&raw, &pending, &ark, &tier, total).unwrap();
 
         // (a) SPEC §4.6(a): the coinbase never exceeds the block reward.
         let paid: u64 = routing.kept.iter().map(|(_, v)| *v).sum();
@@ -1253,7 +1316,7 @@ proptest! {
             prop_assert_eq!(applied.get(id).copied().unwrap_or(0), pending.get(id).copied().unwrap_or(0));
         }
         prop_assert_eq!(
-            route_tiers(&raw, &pending, &ark, &tier, total).unwrap(),
+            route_jd_tiers(&raw, &pending, &ark, &tier, total).unwrap(),
             routing.clone()
         );
 
@@ -1339,7 +1402,7 @@ proptest! {
             budget_wu,
             overhead_wu,
         };
-        let routing = route_tiers(&raw, &pending, &BTreeMap::new(), &tier, total).unwrap();
+        let routing = route_jd_tiers(&raw, &pending, &BTreeMap::new(), &tier, total).unwrap();
 
         // Conservation: never more than the block reward, and the pool fee is
         // always reserved in `pay_p`.
@@ -1405,7 +1468,7 @@ proptest! {
             prop_assert!(used <= budget_wu as u64);
         }
         prop_assert_eq!(
-            route_tiers(&raw, &pending, &BTreeMap::new(), &tier, total).unwrap(),
+            route_jd_tiers(&raw, &pending, &BTreeMap::new(), &tier, total).unwrap(),
             routing.clone()
         );
     }
@@ -1430,8 +1493,8 @@ proptest! {
         low_cfg.coinbase_threshold_sats = low_c;
         let mut high_cfg = low_cfg.clone();
         high_cfg.coinbase_threshold_sats = high_c;
-        let low = route_tiers(&raw, &BTreeMap::new(), &BTreeMap::new(), &low_cfg, total).unwrap();
-        let high = route_tiers(&raw, &BTreeMap::new(), &BTreeMap::new(), &high_cfg, total).unwrap();
+        let low = route_jd_tiers(&raw, &BTreeMap::new(), &BTreeMap::new(), &low_cfg, total).unwrap();
+        let high = route_jd_tiers(&raw, &BTreeMap::new(), &BTreeMap::new(), &high_cfg, total).unwrap();
 
         let owed = |r: &Routing| -> u64 {
             r.kept.iter().chain(r.pending.iter()).chain(r.ark_due.iter()).chain(r.forfeited.iter())
@@ -1441,6 +1504,148 @@ proptest! {
         let low_kept: BTreeSet<SpId> = low.kept.iter().map(|(id, _)| *id).collect();
         for (id, _) in &high.kept {
             prop_assert!(low_kept.contains(id));
+        }
+    }
+}
+
+#[test]
+fn banded_routing_fails_closed_on_slots_and_revenue_overflow() {
+    let raw = RawPayouts {
+        raw: BTreeMap::from([([1; 32], 500_000)]),
+        pool_sats: 0,
+        r_net: 500_000,
+        f_net: 0,
+    };
+    assert!(matches!(
+        route_tiers(
+            &raw,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &cfg(0, 0),
+            500_000
+        ),
+        Err(Error::PayoutSlots {
+            required: 1,
+            max: 0
+        })
+    ));
+    assert!(matches!(
+        route_tiers(
+            &raw,
+            &BTreeMap::from([([1; 32], 500_000)]),
+            &BTreeMap::new(),
+            &cfg(1_000_000, 1_024),
+            500_000,
+        ),
+        Err(Error::PayoutRevenue {
+            required: 1_000_000,
+            available: 500_000
+        })
+    ));
+
+    let boundary = RawPayouts {
+        raw: BTreeMap::from([([2; 32], 512_500_000)]),
+        pool_sats: 0,
+        r_net: 512_500_000,
+        f_net: 0,
+    };
+    assert!(matches!(
+        route_tiers(
+            &boundary,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &cfg(0, 1_024),
+            512_500_000
+        ),
+        Err(Error::PayoutSlots {
+            required: 1_025,
+            max: 1_024
+        })
+    ));
+    let accepted = route_tiers(
+        &boundary,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &cfg(0, 1_025),
+        512_500_000,
+    )
+    .unwrap();
+    assert_eq!(decomposition_len(accepted.kept[0].1), 1_025);
+    assert_eq!(accepted.pay_p, 0);
+}
+
+proptest! {
+    #[test]
+    fn banded_routing_conservation_and_partitions(
+        amounts in proptest::collection::vec(0u64..=5_000_000, 1usize..=8),
+        pending_bits in proptest::collection::vec((0u8..=1u8, 0u64..=5_000_000), 8),
+        ark_bits in proptest::collection::vec(0u8..=2u8, 8),
+        pool_sats in 0u64..=1_000,
+    ) {
+        let raw = RawPayouts {
+            raw: amounts.iter().enumerate()
+                .map(|(i, amount)| ([(i + 1) as u8; 32], *amount))
+                .collect(),
+            pool_sats,
+            r_net: amounts.iter().sum(),
+            f_net: 0,
+        };
+        let pending: BTreeMap<SpId, u64> = pending_bits.iter().enumerate()
+            .filter(|(_, (present, _))| *present == 1)
+            .map(|(i, (_, amount))| ([(i + 1) as u8; 32], *amount))
+            .collect();
+        let ark: BTreeMap<SpId, ArkCapability> = ark_bits.iter().enumerate()
+            .filter(|(_, code)| **code != 0)
+            .map(|(i, code)| ([(i + 1) as u8; 32], ArkCapability {
+                registered: true,
+                dest_known: *code == 1,
+            }))
+            .collect();
+        let owed_total: u64 = raw.raw.keys().chain(pending.keys())
+            .copied().collect::<BTreeSet<_>>().into_iter()
+            .map(|id| owed_of(&raw, &pending, id)).sum();
+        let total = owed_total + pool_sats;
+        let slots = (total / LADDER_BASE_SATS) as usize;
+        let routing = route_tiers(&raw, &pending, &ark, &cfg(0, slots), total).unwrap();
+        let paid: u64 = routing.kept.iter().map(|(_, value)| *value).sum();
+        prop_assert_eq!(paid + routing.pay_p, total);
+        prop_assert!(routing.pay_p >= pool_sats);
+
+        let output_count: u64 = routing.kept.iter()
+            .map(|(_, value)| decomposition_len(*value)).sum();
+        prop_assert!(output_count <= total / LADDER_BASE_SATS);
+        prop_assert!(output_count <= slots as u64);
+        let applied = apply(&routing, &pending);
+        for (id, owed) in &routing.owed {
+            let (expected_paid, remainder) = band_amount(*owed);
+            let kept = routing.kept.iter().find(|(candidate, _)| candidate == id)
+                .map(|(_, value)| *value).unwrap_or(0);
+            prop_assert_eq!(kept, expected_paid);
+            let ark_due = routing.ark_due.iter().find(|(candidate, _)| candidate == id)
+                .map(|(_, value)| *value).unwrap_or(0);
+            let forfeited = routing.forfeited.iter().find(|(candidate, _)| candidate == id)
+                .map(|(_, value)| *value).unwrap_or(0);
+            let new_pending = applied.get(id).copied().unwrap_or(0);
+            prop_assert_eq!(kept + ark_due + forfeited + new_pending, *owed);
+            if expected_paid > 0 && remainder > 0 {
+                let deliverable = ark.get(id).is_some_and(|cap| cap.registered && cap.dest_known);
+                if deliverable {
+                    prop_assert_eq!(ark_due, remainder);
+                    prop_assert_eq!(new_pending, 0);
+                } else {
+                    prop_assert_eq!(ark_due, 0);
+                    prop_assert_eq!(new_pending, remainder);
+                }
+            }
+        }
+
+        let fee_weight = 7u64;
+        let weights = build_weights(&routing, fee_weight);
+        let sum_weights: u64 = weights.weights.iter().map(|(_, value)| *value).sum();
+        let all_owed: u64 = routing.owed.values().sum();
+        prop_assert_eq!(sum_weights + weights.pool_weight, fee_weight + all_owed);
+        for (id, weight) in weights.weights {
+            prop_assert_eq!(weight, routing.owed[&id], "JD weights stay exact-owed");
         }
     }
 }

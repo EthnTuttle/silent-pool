@@ -11,6 +11,13 @@ use serde::{Deserialize, Serialize};
 use spc_crypto::{spc_output_pubkey, tier_tweaks, SendKey};
 use thiserror::Error;
 
+mod ladder;
+pub use ladder::{
+    band_amount, decompose, decompose_for_mode, decomposition_len, validate_ladder,
+    LADDER_BASE_RUNGS_SATS, LADDER_BASE_SATS,
+};
+pub use ladder::{Decomposition, LadderMode};
+
 pub type SpId = [u8; 32];
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -21,6 +28,16 @@ pub enum Error {
     FeeBps,
     #[error("coinbase threshold is below dust")]
     Threshold,
+    #[error("ladder rung {rung} is below coinbase threshold {threshold}")]
+    RungBelowThreshold { rung: u64, threshold: u64 },
+    #[error("payout needs {required} slots, exceeding max_payout_slots {max}")]
+    PayoutSlots { required: u64, max: usize },
+    #[error("banded payout needs {required} sats, exceeding payable revenue {available}")]
+    PayoutRevenue { required: u64, available: u64 },
+    #[error("denomination ladder is pool-template only; refusing to band a JD build")]
+    JdBanding,
+    #[error("coinbase entry has no rung output for {0:?}")]
+    EmptyDecomposition(SpId),
     #[error("arithmetic overflow")]
     Overflow,
     #[error("derivation failed for {0:?}")]
@@ -317,9 +334,7 @@ pub struct TierConfig {
 
 impl TierConfig {
     pub fn validate(&self) -> Result<(), Error> {
-        if self.coinbase_threshold_sats < self.dust_limit_sats {
-            return Err(Error::Threshold);
-        }
+        validate_ladder(self.coinbase_threshold_sats, self.dust_limit_sats)?;
         if self.fee_bps > 10_000 {
             return Err(Error::FeeBps);
         }
@@ -403,6 +418,134 @@ pub struct Routing {
 /// pending-only id below `C` therefore routes to the `pending` rail with
 /// `pending_delta = 0`.
 pub fn route_tiers(
+    raw: &RawPayouts,
+    pending: &BTreeMap<SpId, u64>,
+    ark: &BTreeMap<SpId, ArkCapability>,
+    cfg: &TierConfig,
+    total: u64,
+) -> Result<Routing, Error> {
+    cfg.validate()?;
+    if raw.pool_sats > total {
+        return Err(Error::PayoutRevenue {
+            required: raw.pool_sats,
+            available: total,
+        });
+    }
+
+    let mut ids: BTreeSet<SpId> = raw.raw.keys().copied().collect();
+    ids.extend(pending.keys().copied());
+    let mut owed = Vec::new();
+    for id in ids {
+        let r = raw.raw.get(&id).copied().unwrap_or(0);
+        let p = pending.get(&id).copied().unwrap_or(0);
+        let amount = r.checked_add(p).ok_or(Error::Overflow)?;
+        if amount > 0 {
+            owed.push((id, amount));
+        }
+    }
+    owed.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    // Post-pass over every kept balance: exact owed remains authoritative,
+    // while only the greedy rung sum reaches the pool-template coinbase.
+    let mut required_paid = 0u128;
+    let mut required_slots = 0u64;
+    for (_, amount) in &owed {
+        let (paid, _) = band_amount(*amount);
+        required_paid = required_paid
+            .checked_add(u128::from(paid))
+            .ok_or(Error::Overflow)?;
+        required_slots = required_slots
+            .checked_add(decomposition_len(*amount))
+            .ok_or(Error::Overflow)?;
+    }
+    let available = total - raw.pool_sats;
+    if required_paid > u128::from(available) {
+        return Err(Error::PayoutRevenue {
+            required: u64::try_from(required_paid).unwrap_or(u64::MAX),
+            available,
+        });
+    }
+    if required_slots > cfg.max_payout_slots as u64 {
+        return Err(Error::PayoutSlots {
+            required: required_slots,
+            max: cfg.max_payout_slots,
+        });
+    }
+
+    let mut kept = Vec::new();
+    let mut pending_out = Vec::new();
+    let mut ark_due = Vec::new();
+    let mut forfeited = Vec::new();
+    let mut pending_deltas = BTreeMap::new();
+    let mut paid_total = 0u64;
+    for (id, amount) in &owed {
+        let raw_part = raw.raw.get(id).copied().unwrap_or(0);
+        let old = pending.get(id).copied().unwrap_or(0);
+        let (paid, remainder) = band_amount(*amount);
+        if paid > 0 {
+            // Prove the shared band function accepts this exact amount and
+            // mode; `build_distribution` and settlement repeat the same call.
+            let shaped =
+                decompose_for_mode(*amount, cfg.max_payout_slots, LadderMode::PoolTemplate)?;
+            debug_assert_eq!(shaped.paid, paid);
+            paid_total = paid_total.checked_add(paid).ok_or(Error::Overflow)?;
+            kept.push((*id, paid));
+            let deliverable = ark
+                .get(id)
+                .is_some_and(|cap| cap.registered && cap.dest_known);
+            let after = if remainder == 0 {
+                0
+            } else if deliverable {
+                ark_due.push((*id, remainder));
+                0
+            } else {
+                // A kept id carries its error-held remainder on the same
+                // logical ledger row; the distribution uses a second entry.
+                pending_out.push((*id, remainder));
+                remainder
+            };
+            pending_deltas.insert(*id, pending_delta(after, old));
+            continue;
+        }
+
+        match ark.get(id) {
+            Some(cap) if cap.registered && cap.dest_known => {
+                ark_due.push((*id, *amount));
+                pending_deltas.insert(*id, pending_delta(0, old));
+            }
+            Some(cap) if cap.registered => {
+                pending_out.push((*id, *amount));
+                pending_deltas.insert(*id, pending_delta(*amount, old));
+            }
+            _ => {
+                if raw_part > 0 {
+                    forfeited.push((*id, raw_part));
+                } else if old > 0 {
+                    pending_out.push((*id, old));
+                }
+                // A prior error-held balance is never forfeited.
+                pending_deltas.insert(*id, pending_delta(old, old));
+            }
+        }
+    }
+
+    let pay_p = total.checked_sub(paid_total).ok_or(Error::Overflow)?;
+    Ok(Routing {
+        owed: owed.iter().copied().collect(),
+        kept,
+        pending: pending_out,
+        ark_due,
+        forfeited,
+        pending_deltas,
+        pay_p,
+        total,
+        pool_fee: raw.pool_sats,
+    })
+}
+
+/// Exact-owed routing for JD weights. JD deliberately does not use the
+/// pool-template denomination post-pass (SPEC §4.7, O20).
+pub fn route_jd_tiers(
     raw: &RawPayouts,
     pending: &BTreeMap<SpId, u64>,
     ark: &BTreeMap<SpId, ArkCapability>,
@@ -678,6 +821,9 @@ pub struct Distribution {
     pub a_send_x: [u8; 32],
     pub outputs: Vec<(Vec<u8>, u64)>,
     pub entries: Vec<Entry>,
+    /// Every `P_{i,k}` in k order. `entries` retains the first key for JD
+    /// compatibility; the front expands this map into the block event.
+    pub payout_keys: BTreeMap<SpId, Vec<[u8; 32]>>,
     pub fingerprint: [u8; 32],
     pub pay_p: u64,
 }
@@ -700,30 +846,61 @@ pub fn build_distribution(
     miners: &BTreeMap<SpId, MinerKeys>,
     pool_script: &[u8],
     ark_dest: &BTreeMap<SpId, Vec<u8>>,
+    max_payout_slots: usize,
+    mode: LadderMode,
 ) -> Result<Distribution, Error> {
+    if mode == LadderMode::JobDeclaration {
+        return Err(Error::JdBanding);
+    }
     let kept = sorted_by_id(&routing.kept);
-    let mut outputs = Vec::with_capacity(kept.len() + 1);
-    outputs.push((pool_script.to_vec(), routing.pay_p));
+    let mut miner_outputs = Vec::new();
     let mut entries = Vec::new();
+    let mut payout_keys = BTreeMap::new();
+    let mut required_slots = 0u64;
 
     for (id, sats) in &kept {
+        let decomposition = decompose_for_mode(*sats, max_payout_slots, mode)?;
+        required_slots = required_slots
+            .checked_add(decomposition.outputs.len() as u64)
+            .ok_or(Error::Overflow)?;
+        if required_slots > max_payout_slots as u64 {
+            return Err(Error::PayoutSlots {
+                required: required_slots,
+                max: max_payout_slots,
+            });
+        }
         let keys = miners.get(id).ok_or(Error::Derivation(*id))?;
         let ecdh = send
             .derive_pool_side(&keys.b_scan)
             .map_err(|_| Error::Derivation(*id))?;
-        let tweaks = tier_tweaks(&ecdh, 0).map_err(|_| Error::Derivation(*id))?;
-        let p = spc_output_pubkey(&keys.b_spend, &tweaks.t_onchain)
-            .map_err(|_| Error::Derivation(*id))?;
-        let p_x = p.x_only_public_key().0.serialize();
-        outputs.push((p2tr_script(&p_x), *sats));
+        let mut k_keys = Vec::with_capacity(decomposition.outputs.len());
+        for (k, rung) in decomposition.outputs.iter().enumerate() {
+            let k = u32::try_from(k).map_err(|_| Error::Overflow)?;
+            let tweaks = tier_tweaks(&ecdh, k).map_err(|_| Error::Derivation(*id))?;
+            let p = spc_output_pubkey(&keys.b_spend, &tweaks.t_onchain)
+                .map_err(|_| Error::Derivation(*id))?;
+            let p_x = p.x_only_public_key().0.serialize();
+            miner_outputs.push((p2tr_script(&p_x), *rung));
+            k_keys.push(p_x);
+        }
+        let first = k_keys
+            .first()
+            .copied()
+            .ok_or(Error::EmptyDecomposition(*id))?;
+        payout_keys.insert(*id, k_keys);
         entries.push(Entry {
             sp_id: *id,
             rail: Rail::Coinbase,
-            p_x: Some(p_x),
+            p_x: Some(first),
             dest_id: ark_dest.get(id).cloned(),
             sats: *sats,
         });
     }
+    miner_outputs.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut outputs = Vec::with_capacity(miner_outputs.len() + 1);
+    outputs.push((pool_script.to_vec(), routing.pay_p));
+    outputs.extend(miner_outputs);
+
     for (id, sats) in sorted_by_id(&routing.pending) {
         entries.push(Entry {
             sp_id: id,
@@ -758,6 +935,7 @@ pub fn build_distribution(
         a_send_x: *send.x_only(),
         outputs,
         entries,
+        payout_keys,
         fingerprint,
         pay_p: routing.pay_p,
     })
@@ -817,7 +995,7 @@ pub fn build_weights(routing: &Routing, fee_weight: u64) -> Weights {
             rail: Rail::Coinbase,
             p_x: None,
             dest_id: None,
-            sats: *sats,
+            sats: routing.owed.get(id).copied().unwrap_or(*sats),
         });
     }
     for (rail, group) in [
@@ -826,6 +1004,11 @@ pub fn build_weights(routing: &Routing, fee_weight: u64) -> Weights {
         (Rail::Forfeit, &routing.forfeited),
     ] {
         for (id, sats) in sorted_by_id(group) {
+            // Pool-template remainder entries are not JD liabilities: the
+            // exact-owed JD weight already pays the kept id's whole claim.
+            if kept_ids.contains(&id) {
+                continue;
+            }
             entries.push(Entry {
                 sp_id: id,
                 rail,

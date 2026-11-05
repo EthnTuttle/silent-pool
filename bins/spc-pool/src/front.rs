@@ -20,7 +20,7 @@
 //! no phantom balance behind. The routing of the current distribution is kept
 //! for inspection but is not applied to the ledger.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::{Arc, Mutex};
 
 use bitcoin::hashes::Hash;
@@ -28,7 +28,8 @@ use bitcoin::pow::Target;
 use bitcoin::BlockHash;
 use spc_accounting::{
     build_distribution, build_weights, raw_payouts, route_tiers, select_window, ArkCapability,
-    Distribution, MinerKeys, Routing, ShareRec, Slice, SliceAgg, SpId, TierConfig, Weights,
+    Distribution, LadderMode, MinerKeys, Routing, ShareRec, Slice, SliceAgg, SpId, TierConfig,
+    Weights,
 };
 use spc_crypto::{Network, SendKey};
 use spc_store::models::{BootstrapSnapshot, SliceRow};
@@ -70,6 +71,8 @@ pub enum FrontError {
     NoSlice,
     #[error("no send key")]
     NoSendKey,
+    #[error("denomination-ladder payouts are pool-template only; refusing JD mode (accounting.slice_fee_delta_sats > 0)")]
+    JdLadderUnsupported,
     #[error("share_difficulty must be > 0")]
     ShareDifficulty,
     #[error("share does not meet the pool share target")]
@@ -536,6 +539,9 @@ impl Front {
     /// seals the open slice, because the shares in it were mined on the old
     /// fork (SPEC §3.3, §4.2).
     pub async fn refresh(&mut self) -> Result<Job, FrontError> {
+        if self.cfg.slice_fee_delta_sats != 0 {
+            return Err(FrontError::JdLadderUnsupported);
+        }
         let template = self.source.get_template().await?;
         // Fail closed on transactions we cannot hash correctly: witness txs
         // need a BIP 141 commitment this pool does not build, and an
@@ -644,6 +650,8 @@ impl Front {
                 &self.miners,
                 &pool_script,
                 &self.ark_dest,
+                self.cfg.max_payout_slots,
+                LadderMode::PoolTemplate,
             )?
         };
 
@@ -816,22 +824,46 @@ impl Front {
         );
         if let Some(dist) = &self.distribution {
             let block_hash = bitcoin::hashes::sha256d::Hash::hash(&block.header).to_byte_array();
-            let entries = dist
-                .entries
-                .iter()
-                .map(|e| WireEntry {
-                    sp_id: e.sp_id,
-                    rail: match e.rail {
-                        spc_accounting::Rail::Coinbase => WireRail::Coinbase,
-                        spc_accounting::Rail::Ark => WireRail::Ark,
-                        spc_accounting::Rail::Pending => WireRail::Pending,
-                        spc_accounting::Rail::Forfeit => WireRail::Forfeit,
-                    },
-                    p_x: e.p_x.map(|x| x.to_vec()).unwrap_or_default(),
-                    dest_id: e.dest_id.clone().unwrap_or_default(),
-                    sats: e.sats,
-                })
-                .collect();
+            let mut entries = Vec::new();
+            for e in &dist.entries {
+                let rail = match e.rail {
+                    spc_accounting::Rail::Coinbase => WireRail::Coinbase,
+                    spc_accounting::Rail::Ark => WireRail::Ark,
+                    spc_accounting::Rail::Pending => WireRail::Pending,
+                    spc_accounting::Rail::Forfeit => WireRail::Forfeit,
+                };
+                // The existing wire entry carries one 32-byte key. Preserve
+                // that format by repeating the id for each k; payout folds
+                // these keys back into one logical settlement row. This also
+                // avoids the u8 blob-length limit of a concatenated key list.
+                let keys: Vec<Vec<u8>> = if e.rail == spc_accounting::Rail::Coinbase {
+                    dist.payout_keys
+                        .get(&e.sp_id)
+                        .map(|keys| keys.iter().map(|x| x.to_vec()).collect())
+                        .unwrap_or_else(|| e.p_x.map(|x| x.to_vec()).into_iter().collect())
+                } else {
+                    Vec::new()
+                };
+                if keys.is_empty() {
+                    entries.push(WireEntry {
+                        sp_id: e.sp_id,
+                        rail,
+                        p_x: e.p_x.map(|x| x.to_vec()).unwrap_or_default(),
+                        dest_id: e.dest_id.clone().unwrap_or_default(),
+                        sats: e.sats,
+                    });
+                } else {
+                    for p_x in keys {
+                        entries.push(WireEntry {
+                            sp_id: e.sp_id,
+                            rail,
+                            p_x,
+                            dest_id: e.dest_id.clone().unwrap_or_default(),
+                            sats: e.sats,
+                        });
+                    }
+                }
+            }
             let high_water = BTreeMap::from([(self.cfg.front_id, self.high_water.to_string())]);
             self.events.push(FrontEvent::Block(BlockEvent {
                 block_hash,
@@ -973,19 +1005,24 @@ fn hold_undeliverable(
     pending: &BTreeMap<SpId, u64>,
 ) {
     let mut held: Vec<(SpId, u64)> = Vec::new();
+    let mut held_ids = BTreeSet::new();
     let mut held_paid: u64 = 0;
     routing.kept.retain(|(id, paid)| {
         if miners.contains_key(id) {
             true
         } else {
             held_paid = held_paid.saturating_add(*paid);
-            // The liability is the whole `owed`, not the coinbase-capped
-            // amount: a partially paid id keeps its residual too (SPEC §4.6).
+            held_ids.insert(*id);
+            // The liability is the whole `owed`, not its banded paid part.
             let owed = routing.owed.get(id).copied().unwrap_or(*paid);
             held.push((*id, owed));
             false
         }
     });
+    // Do not leave a now-removed coinbase id's Ark/pending remainder behind:
+    // unknown keys hold the entire un-decomposed balance on the error rail.
+    routing.ark_due.retain(|(id, _)| !held_ids.contains(id));
+    routing.pending.retain(|(id, _)| !held_ids.contains(id));
     for (id, owed) in held {
         tracing::warn!(
             ?id,
@@ -1750,7 +1787,7 @@ pool_payout_descriptor = "DESCRIPTOR"
         let cfg = cfg_with(cfg(), |c| {
             c.fee_bps = 0;
             c.window_n = 1;
-            c.max_payout_slots = 1; // one trimmed id: the double-count vector
+            c.max_payout_slots = 1_024; // one trimmed id: the double-count vector
         });
         let mut front = Front::new(cfg, source.clone(), type32());
         front.refresh().await.unwrap();
@@ -1780,7 +1817,7 @@ pool_payout_descriptor = "DESCRIPTOR"
         let cfg = cfg_with(cfg(), |c| {
             c.fee_bps = 0;
             c.window_n = 1;
-            c.max_payout_slots = 1;
+            c.max_payout_slots = 1_024;
         });
         let mut front = Front::new(cfg, source.clone(), type32());
         front.refresh().await.unwrap();
@@ -1802,12 +1839,12 @@ pool_payout_descriptor = "DESCRIPTOR"
                 .filter(|e| e.rail == spc_accounting::Rail::Coinbase)
                 .map(|e| e.sats)
                 .collect();
-            assert_eq!(kept.len(), 1);
+            assert_eq!(kept.len(), 2);
             kept_amounts.push(kept[0]);
         }
-        // The window is the same two-share slice every time: one kept id gets
-        // `r_net / d_win = r_net / 2`, unchanged by the passing heights.
-        assert_eq!(kept_amounts[0], 312_500_000 / 2);
+        // Both raw halves clear the base rung. Each is shaped down from
+        // 156_250_000 to 156_000_000 sats, with its 250_000 remainder held.
+        assert_eq!(kept_amounts[0], 156_000_000);
         assert!(kept_amounts.windows(2).all(|w| w[0] == w[1]));
     }
 
@@ -1821,7 +1858,7 @@ pool_payout_descriptor = "DESCRIPTOR"
         let cfg = cfg_with(cfg(), |c| {
             c.fee_bps = 0;
             c.window_n = 1;
-            c.max_payout_slots = 1;
+            c.max_payout_slots = 1_024;
         });
         let mut front = Front::new(cfg, source.clone(), type32());
         front.refresh().await.unwrap();
@@ -1831,10 +1868,12 @@ pool_payout_descriptor = "DESCRIPTOR"
         front.refresh().await.unwrap();
         assert!(front.pending().is_empty());
 
-        // The routing knows one id is trimmed, but the front does not book it.
+        // Both ids have a 250_000-sat error-held remainder, but the front
+        // does not book it before confirmation.
         let routing = front.routing().expect("routing").clone();
-        assert_eq!(routing.pending.len(), 1);
+        assert_eq!(routing.pending.len(), 2);
         let trimmed = routing.pending[0];
+        assert_eq!(trimmed.1, 250_000);
 
         let mut block = share_for(&front, 0x21, 3);
         block.share_hash = [0u8; 32];
@@ -2105,18 +2144,18 @@ pool_payout_descriptor = "DESCRIPTOR"
         assert_eq!(credit.diff_fee_sum, 500);
     }
 
-    /// SPEC §4.6: a balance trimmed from one coinbase is owed in the next
+    /// SPEC §4.6: an error-held denomination remainder is owed in the next
     /// distribution. The liability comes from the payout role's `LedgerApplied`
     /// delta, not from the front's forecast.
     #[tokio::test]
-    async fn the_ledger_carries_a_trimmed_balance_into_the_next_distribution() {
+    async fn the_ledger_carries_a_remainder_into_the_next_distribution() {
         let fees = 0;
         let bits = 0x1c00_ffff; // network difficulty 256: shares are not blocks
         let source = Arc::new(MutableSource::new(template_at(800_000, bits, fees)));
         let cfg = cfg_with(cfg(), |c| {
             c.fee_bps = 0;
             c.window_n = 1;
-            c.max_payout_slots = 1; // exactly one id can be paid per coinbase
+            c.max_payout_slots = 1_024;
             c.max_slice_shares = 65_000;
         });
         let mut front = Front::new(cfg, source.clone(), type32());
@@ -2126,47 +2165,50 @@ pool_payout_descriptor = "DESCRIPTOR"
         front.on_share(share_for(&front, 0x21, 1)).unwrap();
         front.on_share(share_for(&front, 0x31, 2)).unwrap();
 
-        // Next height seals the slice: r_net split two ways, one id paid, one
-        // trimmed. No block has been found, so nothing is booked yet.
+        // Next height seals the slice: each raw half is 156_250_000, pays
+        // 156_000_000 on chain and holds a 250_000-sat remainder.
         source.set(template_at(800_001, bits, fees));
         front.refresh().await.unwrap();
         let raw_share = 312_500_000 / 2;
+        let remainder = 250_000;
         assert!(front.pending().is_empty(), "a forecast books nothing");
 
         let routing = front.routing().expect("routing").clone();
         let trimmed = *routing
             .pending
             .first()
-            .expect("one trimmed balance in the routing");
-        assert_eq!(trimmed.1, raw_share);
+            .expect("one error-held remainder in the routing");
+        assert_eq!(trimmed.1, remainder);
 
         // The payout role books the block: the delta becomes the liability.
-        let deltas: Vec<([u8; 32], i64)> = routing
-            .pending_deltas
-            .iter()
-            .map(|(id, delta)| (*id, *delta))
-            .collect();
+        // Carry just this id's remainder so the other raw half leaves enough
+        // value for the exact 156_500_000-sat band on the next template.
         assert!(front.apply_front_event(&WireFrontEvent::LedgerApplied {
             rev: 1,
             block_hash: [0x55; 32],
             republish: true,
-            pending_deltas: deltas,
+            pending_deltas: vec![(trimmed.0, 250_000)],
         }));
-        assert_eq!(front.pending().get(&trimmed.0), Some(&raw_share));
+        assert_eq!(front.pending().get(&trimmed.0), Some(&remainder));
 
-        // The next distribution owes the trimmed balance on top of its raw
-        // share, and the largest owed id takes the single coinbase slot.
+        // The next distribution owes raw + 250k = 156_500_000 exactly, so the
+        // carried remainder is consumed rather than booked a second time.
         source.set(template_at(800_002, bits, fees));
         front.refresh().await.unwrap();
         let dist = front.distribution().expect("distribution");
         let entry = dist
             .entries
             .iter()
-            .find(|e| e.sp_id == trimmed.0)
-            .expect("the trimmed id appears in the next distribution");
-        assert_eq!(entry.rail, spc_accounting::Rail::Coinbase);
-        assert_eq!(entry.sats, raw_share + raw_share);
-        assert!(entry.sats > raw_share, "the pending balance was carried");
+            .find(|e| e.sp_id == trimmed.0 && e.rail == spc_accounting::Rail::Coinbase)
+            .expect("the remainder id appears in the next distribution");
+        assert_eq!(entry.sats, raw_share + remainder);
+        assert_eq!(
+            front
+                .routing()
+                .and_then(|r| r.owed.get(&trimmed.0))
+                .copied(),
+            Some(raw_share + remainder)
+        );
     }
 
     /// SPEC §3.4: a distribution-only change (a slice sealed, pending moved by
@@ -2179,7 +2221,7 @@ pool_payout_descriptor = "DESCRIPTOR"
         let cfg = cfg_with(cfg(), |c| {
             c.fee_bps = 0;
             c.window_n = 1;
-            c.max_payout_slots = 1;
+            c.max_payout_slots = 1_024;
             c.max_slice_shares = 1; // every other share seals a slice
         });
         let mut front = Front::new(cfg, source.clone(), type32());
@@ -2210,7 +2252,7 @@ pool_payout_descriptor = "DESCRIPTOR"
             rev: 3,
             block_hash: [0x66; 32],
             republish: true,
-            pending_deltas: vec![(id_for(0x31), 400_000_000)],
+            pending_deltas: vec![(id_for(0x31), 250_000)],
         }));
         front.refresh().await.unwrap();
         let third = front.job().unwrap().job_id.clone();
@@ -2221,15 +2263,14 @@ pool_payout_descriptor = "DESCRIPTOR"
         assert_eq!(front.job().unwrap().job_id, third);
     }
 
-    /// SPEC §4.6: a held (unknown-keys) balance is the full `owed`, so a
-    /// partially kept id keeps its residual in the pending rail.
+    /// SPEC §4.6: unknown payout keys hold the whole un-decomposed `owed`,
+    /// cancelling both the rung outputs and any routed remainder component.
     #[tokio::test]
     async fn a_held_balance_keeps_the_full_owed_residual() {
-        let source = Arc::new(MockTemplateSource::new(template_at(
-            800_000,
-            0x1c00_ffff,
-            0,
-        )));
+        let mut template = template_at(800_000, 0x1c00_ffff, 0);
+        template.subsidy = 312_500_001;
+        template.coinbase_value = 312_500_001;
+        let source = Arc::new(MockTemplateSource::new(template));
         let cfg = cfg_with(cfg(), |c| {
             c.fee_bps = 0;
             c.window_n = 1;
@@ -2249,29 +2290,29 @@ pool_payout_descriptor = "DESCRIPTOR"
             slices_cursor: None,
             front_events_cursor: None,
         });
-        // A held balance pushes owed above the coinbase capacity, so the
-        // routed `kept` amount is only the payable part.
+        // The raw balances plus the prior error-held 100k still fit the same
+        // 312_500_000-sat band, leaving 100_001 sats behind without shaping.
         assert!(front.apply_front_event(&WireFrontEvent::LedgerApplied {
             rev: 2,
             block_hash: [0x21; 32],
             republish: true,
-            pending_deltas: vec![(miner, 100_000_000)],
+            pending_deltas: vec![(miner, 100_000)],
         }));
 
         front.refresh().await.unwrap();
         let routing = front.routing().expect("routing").clone();
-        // raw 312 500 000 + prior pending 100 000 000 = 412 500 000 owed.
-        assert_eq!(routing.owed.get(&miner).copied(), Some(412_500_000));
+        assert_eq!(routing.owed.get(&miner).copied(), Some(312_600_001));
+        assert!(routing.kept.is_empty(), "unknown keys emit no rung outputs");
         let held = routing
             .pending
             .iter()
             .find(|(id, _)| *id == miner)
             .copied()
             .expect("held on the pending rail");
-        assert_eq!(held.1, 412_500_000, "the full owed is held, not the cap");
+        assert_eq!(held.1, 312_600_001, "the full owed is held");
         assert_eq!(
             routing.pending_deltas.get(&miner).copied(),
-            Some(412_500_000 - 100_000_000),
+            Some(312_600_001 - 100_000),
             "delta is owed - old"
         );
         let dist = front.distribution().expect("distribution");
@@ -2281,7 +2322,7 @@ pool_payout_descriptor = "DESCRIPTOR"
             .find(|e| e.sp_id == miner)
             .expect("held entry");
         assert_eq!(entry.rail, spc_accounting::Rail::Pending);
-        assert_eq!(entry.sats, 412_500_000);
+        assert_eq!(entry.sats, 312_600_001);
     }
 
     /// A distribution-only job change seals the open slice, so a slice never
@@ -2296,7 +2337,7 @@ pool_payout_descriptor = "DESCRIPTOR"
         let cfg = cfg_with(cfg(), |c| {
             c.fee_bps = 0;
             c.window_n = 1;
-            c.max_payout_slots = 1;
+            c.max_payout_slots = 1_024;
             c.max_slice_shares = 1; // every other share seals a slice
         });
         let mut front = Front::new(cfg, source, type32());
@@ -2318,7 +2359,7 @@ pool_payout_descriptor = "DESCRIPTOR"
             rev: 2,
             block_hash: [0x31; 32],
             republish: true,
-            pending_deltas: vec![(id_for(0x31), 400_000_000)],
+            pending_deltas: vec![(id_for(0x31), 250_000)],
         }));
         front.refresh().await.unwrap();
 
@@ -2350,33 +2391,27 @@ pool_payout_descriptor = "DESCRIPTOR"
         front.on_share(share_for(&front, 0x21, 5)).unwrap();
     }
 
-    /// SPEC §4.7: JD weights are the full `owed`, not the coinbase-capped
-    /// amount.
+    /// SPEC §4.7: JD weights are exact `owed`, not the banded pool-template
+    /// payment, and kept-remainder components do not inflate `weight_P`.
     #[tokio::test]
-    async fn jd_weights_are_not_capped_by_the_coinbase() {
+    async fn jd_weights_are_exact_owed_not_banded() {
         let bits = 0x1c00_ffff;
         let source = Arc::new(MutableSource::new(template_at(800_000, bits, 0)));
         let cfg = cfg_with(cfg(), |c| {
             c.fee_bps = 0;
             c.window_n = 1;
-            c.max_payout_slots = 1;
+            c.max_payout_slots = 1_024;
         });
         let mut front = Front::new(cfg, source.clone(), type32());
         front.refresh().await.unwrap();
         front.on_share(share_for(&front, 0x21, 1)).unwrap();
-        source.set(template_at(800_001, bits, 0));
+        let mut next = template_at(800_001, bits, 0);
+        next.subsidy = 312_500_123;
+        next.coinbase_value = 312_500_123;
+        source.set(next);
         front.refresh().await.unwrap();
 
-        // A held balance pushes `owed` above the coinbase capacity.
         let id = id_for(0x21);
-        assert!(front.apply_front_event(&WireFrontEvent::LedgerApplied {
-            rev: 3,
-            block_hash: [0x44; 32],
-            republish: true,
-            pending_deltas: vec![(id, 100_000_000)],
-        }));
-        front.refresh().await.unwrap();
-
         let dist = front.distribution().unwrap();
         let paid = dist
             .entries
@@ -2384,16 +2419,14 @@ pool_payout_descriptor = "DESCRIPTOR"
             .find(|e| e.sp_id == id && e.rail == spc_accounting::Rail::Coinbase)
             .expect("coinbase entry")
             .sats;
-        assert_eq!(paid, 312_500_000, "the coinbase pays its capacity");
+        assert_eq!(paid, 312_500_000);
         let weights = front.weights().expect("weights");
-        assert_eq!(
-            weights.weights[0].1, 412_500_000,
-            "JD weight is the full owed, not the capped payout"
-        );
+        assert_eq!(weights.weights[0].1, 312_500_123);
+        assert_eq!(weights.pool_weight, 0);
     }
 
     #[tokio::test]
-    async fn fee_band_seals_on_job_fee_increase() {
+    async fn jd_mode_refuses_to_band_before_building_a_job() {
         let source = Arc::new(MutableSource::new(template_with(0x207f_ffff, 100)));
         let cfg = cfg_with(cfg(), |c| {
             c.slice_fee_delta_sats = 50;
@@ -2401,28 +2434,13 @@ pool_payout_descriptor = "DESCRIPTOR"
         });
         let mut front = Front::new(
             cfg,
-            source.clone(),
+            source,
             std::sync::Arc::new(std::sync::Mutex::new(crate::type32::Type32Store::default())),
         );
-        front.refresh().await.unwrap();
-
-        front.on_share(share(&front, 1)).unwrap();
-        assert_eq!(slice_events(&mut front).len(), 0);
-
-        // JD-style fee increase on the same height: the open slice keeps
-        // ref_fees = 100, so the share at 200 seals it.
-        source.set(template_with(0x207f_ffff, 200));
-        front.refresh().await.unwrap();
-        assert!(slice_events(&mut front).is_empty());
-
-        front.on_share(share(&front, 2)).unwrap();
-        let events = slice_events(&mut front);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].ref_fees, 100);
-
-        // The successor slice pinned the new fee level: another share at 200
-        // stays within the band and does not re-seal.
-        front.on_share(share(&front, 3)).unwrap();
+        let error = front.refresh().await.expect_err("JD banding must fail");
+        assert!(matches!(error, FrontError::JdLadderUnsupported));
+        assert!(error.to_string().contains("pool-template only"), "{error}");
+        assert!(front.job().is_none(), "no JD job was built or installed");
         assert!(slice_events(&mut front).is_empty());
     }
 
