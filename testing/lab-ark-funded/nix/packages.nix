@@ -23,6 +23,16 @@ let
   ap5-qa-source = pkgs.runCommand "ap5-qa-source-r21" { } ''
     ${pkgs.python3}/bin/python3 -B ${harness}/portable.py package-qa --repo ${src} --out "$out"
   '';
+  # test_probe_package copies the reference with shutil.copytree, which
+  # preserves the store's read-only file modes, and then rewrites one
+  # fixture to prove the runtime manifest does not hide the change. The
+  # raw store path would fail that write with EACCES inside the Nix
+  # installCheck too, so the test consumes a byte-identical writable
+  # copy; ap5-inputs keeps binding the immutable original.
+  ap5-probe-test-package = pkgs.runCommand "ap5-probe-test-package" { } ''
+    cp -r ${probe} $out
+    chmod -R u+w $out
+  '';
   spc-lab-ap5-qualified =
     assert (builtins.fromJSON (builtins.readFile (src + "/testing/lab-ark-funded/source-contract.json"))).state == "source-bound-not-tested";
     labTools.overrideAttrs (old: {
@@ -30,7 +40,7 @@ let
     nativeBuildInputs = (old.nativeBuildInputs or []) ++ [ pkgs.python3 pkgs.nodejs pkgs.chromium ];
     CHROME = "${pkgs.chromium}/bin/chromium";
     SPC_LAB_RBITCOIN_NODE = "${node}/bin/rbitcoin-node";
-    AP5_PROBE_TEST_PACKAGE = "${probe}";
+    AP5_PROBE_TEST_PACKAGE = "${ap5-probe-test-package}";
     doInstallCheck = true;
     preBuild = (old.preBuild or "") + ''
       ${pkgs.python3}/bin/python3 -B ${harness}/portable.py check-contract --source ${src}

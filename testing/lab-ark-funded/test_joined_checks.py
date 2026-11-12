@@ -88,21 +88,31 @@ class JoinedChecks(unittest.TestCase):
             with self.assertRaisesRegex(Blocked, "actual Nix build source is stale"):
                 validate_joined_features(validation, bundle, root, manifest)
 
-    def test_exact_six_row_lineage_preserves_core_guards(self):
+    def test_exact_four_row_union_lineage_preserves_core_guards(self):
         here = Path(__file__).parent
         policy = load(here / "critical-sources.json")
         lineage = load(artifact(policy["source_lineage_amendment"]))
-        expected_paths = {"crates/spc-lab-txd/src/" + name + ".rs" for name in ("actor", "admit", "builder")}
-        expected_paths |= {"bins/spc-agent/src/wallet/" + name + ".rs" for name in ("live_receive", "maintenance", "mod")}
+        # r2: the four agent-wallet rows re-frozen to the union HEAD bytes
+        # (commits 7b34914/865d80c); the r1 six-row set for actor/admit/
+        # builder/maintenance is unchanged and still matches the r1 receipt.
+        expected_paths = {"bins/spc-agent/src/wallet/" + name + ".rs"
+                          for name in ("audit_regressions", "live_receive", "mod", "scan")}
         self.assertEqual(set(lineage["files"]), expected_paths)
         self.assertEqual(len(policy["files"]), 13)
         for name, value in lineage["files"].items():
             self.assertEqual(policy["files"][name], value)
         for ref in lineage["manifests"]:
             artifact(ref)
-        self.assertEqual(policy["files"]["bins/spc-agent/src/wallet/audit_regressions.rs"], "d59b3d81ec11176b05bf0ce0da697dc628a3ab4a54901445e14e31c8fadb2777")
+        supersedes = lineage["supersedes"]
+        self.assertEqual(policy["source_lineage_amendment"]["supersedes"], supersedes)
+        r1 = json.loads(Path(supersedes["path"]).read_text())
+        self.assertEqual(sha(Path(supersedes["path"])), supersedes["sha256"])
+        for name in ("crates/spc-lab-txd/src/actor.rs", "crates/spc-lab-txd/src/admit.rs",
+                     "crates/spc-lab-txd/src/builder.rs", "bins/spc-agent/src/wallet/maintenance.rs"):
+            self.assertEqual(r1["files"][name], policy["files"][name])
+        self.assertEqual(policy["files"]["bins/spc-agent/src/wallet/audit_regressions.rs"], "857517f5976a1dddfb6281ad4134752d5c872ca59ee8288357042331114e2151")
         self.assertEqual(policy["files"]["bins/spc-agent/src/wallet/round.rs"], "10da12d69435470e4920fa8dfb8bbfbf64f24918f4dd7b3597957b23f8eac3f6")
-        self.assertEqual(policy["files"]["bins/spc-agent/src/wallet/scan.rs"], "19b4b33b1d728a6e3effce3e1fdd5f0cc90c00b360c1f22fdf71fd4d7f2434dd")
+        self.assertEqual(policy["files"]["bins/spc-agent/src/wallet/scan.rs"], "48706d13c0f3e74b66bde5d9d55a93b24b55ccc39a2b0dbd9634d9c96e7db567")
 
     def test_actual_old_w52_source_still_fails_core_guard(self):
         old = Path("/nix/store/vm95bb22061a626nd1si133xc9prjz0r-source")

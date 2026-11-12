@@ -30,7 +30,11 @@ class BundleFixture:
         self.source.mkdir()
         policy = json.loads((Path(__file__).parent / "critical-sources.json").read_text())
         self.critical = policy["files"]
-        primary = Path("/nix/store/wr1ix2s3hnhjhhmi2dv7v5cfd0mb28gc-source")
+        # r2: primary source is the preserved pre-union legacy snapshot with
+        # the four re-frozen agent-wallet rows overlaid at committed union
+        # HEAD bytes (consumer fixture source, not a receipt; the legacy
+        # no-control class cannot be built from the union tree itself).
+        primary = Path("/tmp/opencode/AP5-source-lineage-r2/fixture-primary-source")
         for name in POOL_BASE | UI_FILES | set(self.critical):
             dest = self.source / name
             dest.parent.mkdir(parents=True, exist_ok=True)
