@@ -166,6 +166,28 @@
               # at the derivation's private writable build top.
               export HOME="$NIX_BUILD_TOP"
             '';
+            # Reproduce the reviewed installCheckPhase command exactly, plus
+            # a failure-evidence capture: a failed derivation's $out is
+            # deleted, which destroyed the gate's per-step output.log in
+            # attempts 2/3 and left only the python traceback. On failure,
+            # copy the gate root into the build directory so a
+            # --keep-failed build preserves every step's captured output and
+            # the browser step's proof/failure artifacts for post-mortem.
+            # The success path is byte-identical to the reviewed phase; the
+            # intake packages.nix stays byte-exact.
+            installCheckPhase = ''
+              runHook preInstallCheck
+              gate_status=0
+              ${pkgs.python3}/bin/python3 -B ${src}/testing/lab-ark-funded/portable.py gate \
+                --source ${src} --installed "$out" --out "$out/share/ap5-qualification" \
+                || gate_status=$?
+              if [ "$gate_status" != 0 ]; then
+                echo "gate failed (exit $gate_status); gate root preserved at $NIX_BUILD_TOP/gate-failure-evidence" >&2
+                cp -a "$out/share/ap5-qualification" "$NIX_BUILD_TOP/gate-failure-evidence" || true
+                exit "$gate_status"
+              fi
+              runHook postInstallCheck
+            '';
           });
           spc-pool-ark = mkBinary "spc-pool" "rpc,ark";
           spc-agent-ark = mkBinary "spc-agent" "ark";
