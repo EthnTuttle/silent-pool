@@ -1,0 +1,20 @@
+{
+  "schema": "spc.lab.ap5.joined-gate-qualifications/v1",
+  "historical_332_sources": {
+    "1e3b3ddae2e19e9dfee66150e5fd7adfc02c46649a479e8b8ce5701540f3175f": {
+      "source_root": "/nix/store/11icfby7ni0185p093hxmbsahyl0p2dl-source"
+    }
+  },
+  "qualified_350_sources": {
+    "033a091fa0b81648fa9dbf3b161000b7783e69878f5480317fc47d4f78cdc838": {
+      "path": "/tmp/opencode/AP5-qualified-350-r1/qualification.json",
+      "sha256": "9c7790b7feeba1ba1e53ac4c88c7ec086cb8294b44f8745c53cb577d29254cba"
+    }
+  },
+  "pending_inventory": {
+    "gate_schema": "spc.lab.ap5.joined-350-gate/v1",
+    "expected_total": 350,
+    "status": "exact source-qualified completed evidence registered; live propagation remains unproved",
+    "rendered_p2p_tests_are_live_propagation_proof": false
+  }
+}

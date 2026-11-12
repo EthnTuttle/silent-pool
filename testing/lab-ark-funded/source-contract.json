@@ -1,0 +1,8 @@
+{
+  "schema": "spc.lab.ap5.committed-source-contract/v1",
+  "state": "pending-complete-committed-union-and-gate-plan",
+  "files": {},
+  "gate_plan": null,
+  "gate_plan_sha256": null,
+  "aggregate_files": []
+}

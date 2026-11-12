@@ -1,0 +1,27 @@
+--- a/flake.nix
++++ b/flake.nix
+@@ -80,6 +80,7 @@
+             scanner = spc-lab-ark-tools;
+             agent = spc-lab-ark-tools;
+             txd = spc-lab-ark-tools;
++            probe = import ./nix/lab/ark-probe.nix { inherit pkgs; };
+             inherit (arkPackages) captaind;
+           };
+           # One compilation for the local infrastructure launch closure, rather
+--- a/nix/lab/ark-runtime.nix
++++ b/nix/lab/ark-runtime.nix
+@@ -1,4 +1,4 @@
+-{ pkgs, src, lab, node, pool, miner, scanner, agent, txd, captaind }:
++{ pkgs, src, lab, node, pool, miner, scanner, agent, txd, captaind, probe }:
+ pkgs.writeShellApplication {
+   name = "spc-lab-self-hosted-ark";
+   text = ''
+@@ -10,6 +10,8 @@
+       --scanner ${scanner}/bin/spc-scan \
+       --wallet-agent-bin ${agent}/bin/spc-agent \
+       --txd ${txd}/bin/spc-lab-txd \
++      --traffic-probe ${pkgs.python3}/bin/python3 \
++      --traffic-probe-arg ${probe}/share/ark-rpc/probe.py \
+       --captaind ${captaind}/bin/captaind \
+       --grpcurl ${pkgs.grpcurl}/bin/grpcurl \
+       --postgres-bin-dir ${pkgs.postgresql_17}/bin \

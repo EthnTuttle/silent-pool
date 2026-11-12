@@ -1,0 +1,27 @@
+{
+  "schema": "spc.lab.ap5.critical-sources/v1",
+  "ap3_full": "0b0c5fd7d5b52e314a0a1aec818b13eb9d134aafa2ca93734310bed028949468",
+  "t2_full": "9c8f9511774d4e3b77d828cff99ab4958f8c75363245c21717fa298ead6d53ee",
+  "source_lineage_amendment": {
+    "path": "/tmp/opencode/AP5-source-lineage-r1/receipt.json",
+    "sha256": "d8f877b120a8105475d3c7081424ce3fb1a5db18790fc17d98cdd89fc4e75f61",
+    "scope": "parent-approved exact six rows; source lineage only, not joined Ark-feature/UI validation",
+    "t1_snapshot": "6740857f738ac71aab23054f481a8d5602df3243bb898fd75b4eb2d52a4c2442",
+    "wallet_provider_snapshot": "e97ade1235110d58b008d527518ae97fe37fcd863ebe438a383558d631d6fdb6"
+  },
+  "files": {
+    "bins/spc-agent/src/wallet/audit_regressions.rs": "d59b3d81ec11176b05bf0ce0da697dc628a3ab4a54901445e14e31c8fadb2777",
+    "bins/spc-agent/src/wallet/live_receive.rs": "4946f2bc56366446523a7ef2abbc6f8b0ed6f3c94843ffb9494db279f3137bac",
+    "bins/spc-agent/src/wallet/maintenance.rs": "add712fd8ba02a8cdccfecc17455f927357e563374e6dcf4e895a34699083b2e",
+    "bins/spc-agent/src/wallet/mod.rs": "fed07a0b60ccd243b6e51c1e331e53c38eb5932d1efbe302de036b175f3e6679",
+    "bins/spc-agent/src/wallet/round.rs": "10da12d69435470e4920fa8dfb8bbfbf64f24918f4dd7b3597957b23f8eac3f6",
+    "bins/spc-agent/src/wallet/scan.rs": "19b4b33b1d728a6e3effce3e1fdd5f0cc90c00b360c1f22fdf71fd4d7f2434dd",
+    "crates/spc-lab-txd/src/adapter.rs": "bc540d8fc8d36e4131626a3f755977d0fd7ae64b467f4c324ce999e0adc4c1f8",
+    "crates/spc-lab-txd/src/builder.rs": "998e9faab3c28db9355269a11c1e6cc6814b5ffd625dc14120469f09d1e31170",
+    "crates/spc-lab-txd/src/actor.rs": "acde4b610ffe51044f4f7c9eea86ccf18857ae204ce364af09d9077a07ef7dbe",
+    "crates/spc-lab-txd/src/admit.rs": "0c242428065fa94c897a194cd64a054e6ea2da4890d5162fa5579f6605231ee3",
+    "crates/spc-lab-txd/src/contextual_pow.rs": "ba76b99ba4bb0818e4d45e0d285689580412ed5c448baac164044f74ff055b4f",
+    "crates/spc-lab-txd/src/native_bootstrap.rs": "aace3bc500c26836809aed5160da94ed7b610eb732b4e1d8b304ad2df94ff155",
+    "crates/spc-lab-txd/src/observer.rs": "d7dea20b93bbc49302eb4d917de9fae1e5086e323a18321aebbf4ee27a89d7f5"
+  }
+}

@@ -117,6 +117,25 @@
             meta.mainProgram = "spc-lab";
           });
           inherit (arkPackages) captaind bark;
+          # Portable AP5 harness/verifier/qualification set (packet
+          # AP5-portable-integration-r1). The qualified derivation reuses the
+          # joined spc-lab-ark-tools build (same dependency/target layout) and
+          # only adds the source-contract preBuild check and the gate-plan
+          # installCheck; it is a second OUTPUT of the same build inputs, not a
+          # second application build. Until the real source-contract.json is
+          # committed (state source-bound-not-tested), evaluating
+          # spc-lab-ap5-qualified/ap5-inputs fails the contract assertion by
+          # design - the shipped template cannot qualify.
+          ap5Packages = import ./testing/lab-ark-funded/nix/packages.nix {
+            inherit pkgs rust src;
+            revision = if self ? rev then self.rev else "nix-snapshot";
+            labTools = spc-lab-ark-tools;
+            node = rbitcoin-node-ark-lab;
+            inherit (arkPackages) captaind bark;
+            probe = import ./nix/lab/ark-probe.nix { inherit pkgs; };
+          };
+          inherit (ap5Packages) ap5-tools ap5-vtxo-verifier ap5-qa-source
+            spc-lab-ap5-qualified ap5-inputs;
           spc-pool-ark = mkBinary "spc-pool" "rpc,ark";
           spc-agent-ark = mkBinary "spc-agent" "ark";
           spc-pool = mkBinary "spc-pool" "rpc";

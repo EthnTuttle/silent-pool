@@ -1,0 +1,12 @@
+{
+  "schema": "spc.lab.ap5.qa-source/v1",
+  "api": "t3-controller-r18",
+  "archive": {
+    "path": "/tmp/opencode/T3-preEOF-drain-r18/source.tar.gz",
+    "sha256": "07ffa5f1f15a59ad5ef3f0ca4002b6d501d13482223fd51bfaac14becc1d8236"
+  },
+  "manifest": {
+    "path": "/tmp/opencode/T3-preEOF-drain-r18/manifest.json",
+    "sha256": "25ad9b5d43121c4fd56bdfa13796d5f84ad469b8dc1bdfea2c374591a5d80664"
+  }
+}

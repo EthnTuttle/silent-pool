@@ -1,0 +1,12 @@
+{
+  "schema": "spc.lab.ap5.qa-source/v1",
+  "api": "t3-controller-r19",
+  "archive": {
+    "path": "/tmp/opencode/T3-fullrail-r19/source.tar.gz",
+    "sha256": "336b7f914bfdb6f8fdc04c1ec0416c2b18feafe6df05591546994a0b541d6e74"
+  },
+  "manifest": {
+    "path": "/tmp/opencode/T3-fullrail-r19/manifest.json",
+    "sha256": "db5f7f981bdd0ce2f15e1be6a981ec7e488a7410acb7eb71cff314a4a772862b"
+  }
+}

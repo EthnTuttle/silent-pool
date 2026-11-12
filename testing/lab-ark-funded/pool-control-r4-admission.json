@@ -1,0 +1,18 @@
+{
+  "schema": "spc.lab.ap5.control-layer-admission/v1",
+  "source_snapshot_sha256": "d00299c259aaa5e8098542f48f5c3c90c66737be3f965f5d65e5fd2a763914b2",
+  "tested_code_snapshot_sha256": "f764900419db45901f558c367b5485938ed1b20b5ee5abdc039e3b66c230ae0c",
+  "source_manifest": {
+    "path": "/tmp/opencode/pool-wallet-control-packet-r4/source-manifest.json",
+    "sha256": "7920cafc1a436d30e4d0dd108e562805f625742050b214ee4b435d5cfe28f9a3"
+  },
+  "same_auditor_review": {
+    "path": "/tmp/opencode/pool-wallet-control-source-review-r4.md",
+    "sha256": "956ba9ab524b8946b5d367c7e814abefafd75cfd523fa5bcae129cd9155e5d0b"
+  },
+  "focused_tests": 28,
+  "scope": "exact corrected control layer only; actual joined Nix source/rows/features still required",
+  "precontrol_g105_bundle_contains_this_layer": false,
+  "funded_or_live_restart_acceptance": false,
+  "r3_proof_schema_unchanged": true
+}

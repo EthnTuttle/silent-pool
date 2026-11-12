@@ -1,0 +1,15 @@
+{
+  "schema": "spc.lab.ap5.compiled-verifier-admission/v1",
+  "handoff": {
+    "path": "/tmp/opencode/AP5-verifier-build-r1/handoff.json",
+    "sha256": "124956923cecd8d1e4aaf0698107debaf91d2cad5147845065aec06a91fad26b"
+  },
+  "contract": {
+    "path": "/tmp/opencode/AP5-verifier-build-r1/final-source/testing/lab-ark-funded/CONTRACT-v2.md",
+    "sha256": "9cb6915a3ff8a0500e42c0846ccf3c0642fd4061c66c0701fd36e660cd85beda"
+  },
+  "binary_sha256": "5330c3ce8eaa65a4b96076badbeae420f654c33c2a611927932fab49bb8357dd",
+  "source_root": "/nix/store/3grmjmz22whyp9armd4lqpy28idr5346-source",
+  "cargo_lock_sha256": "ac24ee3b09c7c2dd8731417672b9d7b072aa6e9e04127b9c96e8ad80ae842833",
+  "scope": "approved offline verifier artifact only; no live/peer/native-audit/Ark aggregate admission"
+}

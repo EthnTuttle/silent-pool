@@ -1,0 +1,12 @@
+{
+  "checks": [],
+  "capabilities": {
+    "single-hash-budget": [],
+    "host-peering": [],
+    "fresh-registration": [],
+    "readiness": [],
+    "pool-control": [],
+    "aggregate-history": [],
+    "native-audit": []
+  }
+}

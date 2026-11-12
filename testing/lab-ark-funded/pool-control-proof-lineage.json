@@ -1,0 +1,17 @@
+{
+  "schema": "spc.lab.ap5.pool-proof-source-lineage/v1",
+  "producer_source_snapshot_sha256": "dd9f0c37d7e79474a56132170272fcd6509eb3ebdc501aaa93372e8dd8a4102b",
+  "producer_tested_code_snapshot_sha256": "8ec102f55081c58f2ff29aaadb5a78c56c9531a1245a74ffa77b484e077e0e42",
+  "input_receipt": {
+    "path": "/tmp/opencode/AP5-pool-control-r3-inputs/receipt.json",
+    "sha256": "0ad963a9c8b1901ae6f014291ae9450b34f5ee395b28ad55febe6c47ddc65c4c"
+  },
+  "public_unit_fixture_sha256": "06fc304f4e6d5828dd988ff551f5686025cb15e96859b05098f481641c77b886",
+  "producer_final_focused_tests": 25,
+  "producer_earlier_ark_tests": 54,
+  "test_counts_are_not_additive": true,
+  "auditor_recheck": "ongoing per parent; no passing verdict inferred",
+  "interface_gap": "closed by tested r3 same-wallet retained proof action",
+  "joined_control_grant_ladder_closure_verified": false,
+  "funded_ap5_executed": false
+}

@@ -1,0 +1,17 @@
+[package]
+name = "ap5-vtxo-verifier"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace]
+resolver = "2"
+
+[dependencies]
+anyhow = "=1.0.104"
+ark-lib = { version = "=0.7.1", git = "https://gitlab.com/ark-bitcoin/bark.git", rev = "c419159fa54085572f8ca72d2ba1716556a9d3eb" }
+bitcoin = "=0.32.102"
+hex = "=0.4.3"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"

@@ -1,0 +1,12 @@
+{
+  "schema": "spc.lab.ap5.qa-source/v1",
+  "api": "t3-controller-r20",
+  "archive": {
+    "path": "/tmp/opencode/T3-native-retention-r20/source.tar.gz",
+    "sha256": "cce72a37d4bb2f05fe551a718aad5d7e5d5daf3cb51e71de226af41d55620364"
+  },
+  "manifest": {
+    "path": "/tmp/opencode/T3-native-retention-r20/manifest.json",
+    "sha256": "12954d0fa956961ddce5e03cc26d0c8362db9529b06f26b8add493fa24ee5804"
+  }
+}
