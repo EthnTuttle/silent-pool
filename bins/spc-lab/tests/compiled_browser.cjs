@@ -12,8 +12,9 @@ const assets=Object.fromEntries(["index.html","app.js","style.css","lab.html","l
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 const requests=[],responses=[],exceptions=[],failures=[],logs=[],checks=[];
 class CDP {
-  constructor(url){this.id=0;this.pending=new Map();this.handlers=[];this.ws=new WebSocket(url);this.ready=new Promise((r,j)=>{this.ws.onopen=r;this.ws.onerror=j;});this.ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id){const p=this.pending.get(m.id);this.pending.delete(m.id);m.error?p.reject(new Error(m.error.message)):p.resolve(m.result);}else for(const h of this.handlers)h(m);};}
-  async send(method,params={}){await this.ready;const id=++this.id;return new Promise((resolve,reject)=>{this.pending.set(id,{resolve,reject});this.ws.send(JSON.stringify({id,method,params}));});}
+  constructor(url){this.id=0;this.pending=new Map();this.handlers=[];this.ws=new WebSocket(url);this.ready=new Promise((r,j)=>{this.open=r;this.failReady=j;setTimeout(()=>j(new Error("DevTools connection timeout")),30000);});this.ws.onopen=()=>this.open();this.ws.onerror=()=>this.failReady(new Error("DevTools connection error"));this.ws.onclose=()=>this.fail(new Error("DevTools connection closed"));this.ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id){const p=this.pending.get(m.id);if(p){this.pending.delete(m.id);clearTimeout(p.timer);m.error?p.reject(new Error(m.error.message)):p.resolve(m.result);}}else for(const h of this.handlers)h(m);};}
+  fail(e){this.failReady(e);for(const p of this.pending.values()){clearTimeout(p.timer);p.reject(e);}this.pending.clear();}
+  async send(method,params={}){await this.ready;const id=++this.id;return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{this.pending.delete(id);reject(new Error("CDP response timeout: "+method));},30000);this.pending.set(id,{resolve,reject,timer});this.ws.send(JSON.stringify({id,method,params}));});}
   async eval(expression){const r=await this.send("Runtime.evaluate",{expression,returnByValue:true,awaitPromise:true});if(r.exceptionDetails)throw new Error(r.exceptionDetails.text);return r.result.value;}
   close(){this.ws.close();}
 }
@@ -40,9 +41,11 @@ function privateJSON(file,value){fs.writeFileSync(file+".tmp",JSON.stringify(val
     assert.equal((await fetch(origin+api+"/inventory",{headers:{Authorization:`Bearer ${alice.value.token}`}})).status,403);
   }
   chrome=spawn(process.env.CHROME||"/usr/bin/google-chrome",["--headless=new","--no-sandbox","--disable-dev-shm-usage","--disable-background-networking","--remote-debugging-port=0",`--user-data-dir=${path.join(out,"chrome-profile")}`,"about:blank"],{stdio:["ignore","ignore","pipe"]});
-  const ws=await new Promise((resolve,reject)=>{let text="";const timer=setTimeout(()=>reject(new Error("Chrome timeout")),15000);chrome.stderr.on("data",b=>{text+=b;const m=text.match(/DevTools listening on (ws:\/\/[^\s]+)/);if(m){clearTimeout(timer);resolve(m[1]);}});chrome.once("error",reject);});
-  const browser=new CDP(ws),target=await browser.send("Target.createTarget",{url:"about:blank"});
-  const pages=await(await fetch(`http://127.0.0.1:${new URL(ws).port}/json/list`)).json();cdp=new CDP(pages.find(p=>p.id===target.targetId).webSocketDebuggerUrl);browser.close();
+  const cdpSessions=[];
+  chrome.once("exit",code=>{for(const c of cdpSessions)c.fail(new Error(`Chrome exited ${code} during the CDP session`));});
+  const ws=await new Promise((resolve,reject)=>{let text="";const timer=setTimeout(()=>reject(new Error("Chrome timeout")),15000);chrome.stderr.on("data",b=>{text+=b;const m=text.match(/DevTools listening on (ws:\/\/[^\s]+)/);if(m){clearTimeout(timer);resolve(m[1]);}});chrome.once("error",reject);chrome.once("exit",code=>{clearTimeout(timer);reject(new Error(`Chrome exited ${code} before DevTools`));});});
+  const browser=new CDP(ws);cdpSessions.push(browser);const target=await browser.send("Target.createTarget",{url:"about:blank"});
+  const pages=await(await fetch(`http://127.0.0.1:${new URL(ws).port}/json/list`)).json();cdp=new CDP(pages.find(p=>p.id===target.targetId).webSocketDebuggerUrl);cdpSessions.push(cdp);browser.close();
   cdp.handlers.push(m=>{if(m.method==="Runtime.exceptionThrown")exceptions.push(m.params.exceptionDetails.text);if(m.method==="Network.requestWillBeSent")requests.push({method:m.params.request.method,url:m.params.request.url});if(m.method==="Network.responseReceived")responses.push({url:m.params.response.url,status:m.params.response.status});if(m.method==="Network.loadingFailed"&&!m.params.canceled)failures.push(m.params.errorText);if(m.method==="Log.entryAdded")logs.push({level:m.params.entry.level,text:m.params.entry.text});});
   await Promise.all(["Runtime.enable","Page.enable","Network.enable","Log.enable"].map(m=>cdp.send(m)));
   await cdp.send("Emulation.setDeviceMetricsOverride",{width:390,height:844,deviceScaleFactor:1,mobile:true});
