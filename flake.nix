@@ -56,7 +56,12 @@
             # pin sha256-P3Gf1XW2CWkAO2IT6M3y37sssZsoh9Hu4osyLWd0K+E=
             # predates that lock delta and fails the Cargo.lock
             # consistency check).
-            hash = "sha256-y/pymSKJfdDGBLdzUwMbVu5+zqGIKt03IZxVZ4L61hA=";
+            # 2026-11-12: refreshed again after the fullrail e5283a85 union
+            # intake (spc-accounting ladder, pool ark wallet-control,
+            # store/aggregate join seams) changed the spc-cpu-miner /
+            # spc-lab / spc-agent dependency sets in Cargo.lock (previous
+            # pin sha256-y/pymSKJfdDGBLdzUwMbVu5+zqGIKt03IZxVZ4L61hA=).
+            hash = "sha256-Cij0Q0TwtwxODWxinPiH2kXi9DznDF4yMqMAACyDjQI=";
           };
           doCheck = false;
         };
