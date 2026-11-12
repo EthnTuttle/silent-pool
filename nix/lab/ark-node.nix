@@ -1,16 +1,23 @@
 # Explicit lab artifact, not a replacement for the default L2 node pin.
-# The AP1b + additive metadata source is an unpublished, manifest-frozen repo
-# snapshot. Until that source is published, supply this exact tree locally;
-# its NAR hash refuses a mutable or different candidate. Never ingest the
-# evidence packet directory (which also contains binaries and runtime data).
-{ pkgs, nodeSource ? "/tmp/opencode/rbitcoin-lab-profile-facts-src" }:
+# Exact tested AP1b + metadata snapshot, published in the owned rbitcoin fork.
+# Fetch Git blobs: the bundled Bitcoin corpus has export-subst attributes
+# which alter two files in archive exports. Local overrides keep the same NAR.
+{ pkgs, nodeSource ? null }:
 let
   sourceHash = "sha256-t6LQYTA738Uzstg5AsakWCJS4yGanDBTn4FSpUmhiIU=";
-  frozen = builtins.fetchTree {
+  frozen = builtins.fetchTree (if nodeSource == null then {
+    type = "git";
+    url = "https://github.com/EthnTuttle/rbitcoin.git";
+    ref = "refs/heads/silent-pool-lab-profile-facts";
+    rev = "c1505776117b1d4d42489f309af33978bbe124cc";
+    shallow = true;
+    submodules = false;
+    narHash = sourceHash;
+  } else {
     type = "path";
     path = nodeSource;
     narHash = sourceHash;
-  };
+  });
   src = pkgs.lib.cleanSourceWith {
     src = frozen.outPath;
     filter = path: type: !(builtins.elem (baseNameOf path)
