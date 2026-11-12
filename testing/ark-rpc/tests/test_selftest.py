@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from arkrpc import selftest as st  # noqa: E402
 
-TMP_PARENT = "/tmp/opencode" if os.path.isdir("/tmp/opencode") else None
+TMP_PARENT = None  # tempfile honors the caller's TMPDIR on a fresh machine.
 
 
 class ScenarioTests(unittest.TestCase):

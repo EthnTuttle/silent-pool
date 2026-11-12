@@ -1,5 +1,33 @@
 # AP-1a ark-rpc probe (read-only node capability probe)
 
+## Portable Nix package (2026-11-12)
+
+`nix/lab/ark-probe.nix` uses this repository directory, filtered to an explicit
+14-file canonical runtime closure plus the 24 public JSON fixtures needed by
+`self-test`. Reports, devcheck builds, private configs and caches are excluded
+from the installed package. The lifecycle fixture resolves its own directory;
+its installed `--compat` behavior matches the previously deployed r4 helper.
+Python tests honor `TMPDIR`, including on machines without `/tmp/opencode`.
+
+The RPC contract remains `754e1e6131955f9e5bbce7ef81b6f9aabaa2f1379ec6409f1c3a7a9e88be91f9`.
+The thin `probe.py` entry still has SHA256 `833288d7...`, but that is NOT the
+identity of the full package. The portable lifecycle file and new derivation
+paths require fresh source and program bindings; do not reuse old manifests.
+Each build writes, under `$out/share/`:
+
+- `ark-rpc-source-manifest.json`: actual installed 14-file hashes/root, retaining
+  `spc.lab.ap5.probe-source/v1` shape;
+- `ark-rpc-fixtures-manifest.json`: actual installed public fixture hashes;
+- `ark-rpc-program-binding.json`: native ELF Python, script and wrapper paths/
+  hashes plus both manifest hashes and the unchanged contract hash.
+
+The runtime adapter remains native `${python3}/bin/python3` with the derived
+`<probe>/share/ark-rpc/probe.py` argument. The runtime appends `node-probe` once;
+the convenience wrappers do not append a subcommand. Rebind the actual output
+tuple and complete source manifest in fresh runtime admission. No node/server
+build or RPC/normalization policy change follows from this packaging change.
+See `docs/decisions/2026-11-12-portable-canonical-probe.md` for provenance.
+
 ## Traffic J1/J2 candidate (2026-11-08)
 
 The same executor now emits the size-only `spc-lab-tx-rpc-consumer/1`

@@ -124,7 +124,7 @@ class LaunchProfileTests(unittest.TestCase):
 
     def test_bad_rpc_compat_cli_profiles_fail_before_effects(self):
         from arkrpc.cli import main
-        with tempfile.TemporaryDirectory(prefix="traffic-policy-test-", dir="/tmp/opencode") as root:
+        with tempfile.TemporaryDirectory(prefix="traffic-policy-test-") as root:
             for n, tokens in enumerate((["--rpc-compat-profile", "bark-v32"],
                 ["--rpc-compat-profile", "bark-v31", "--rpc-compat-profile=bark-v31"])):
                 p = namespace_profile()
@@ -233,7 +233,7 @@ class LaunchProfileTests(unittest.TestCase):
 
     def test_bad_cli_profile_has_no_effect(self):
         from arkrpc.cli import main
-        with tempfile.TemporaryDirectory(prefix="traffic-profile-test-", dir="/tmp/opencode") as root:
+        with tempfile.TemporaryDirectory(prefix="traffic-profile-test-") as root:
             bad = Path(root) / "bad.json"
             bad.write_text('{"profile_version":1,"profile_version":1}')
             bad.chmod(0o600)
@@ -257,7 +257,7 @@ class LaunchProfileTests(unittest.TestCase):
 
     def test_partial_spawn_receipt_failure_reaps_owned_child(self):
         from arkrpc import nodeproc
-        with tempfile.TemporaryDirectory(prefix="traffic-profile-test-", dir="/tmp/opencode") as out:
+        with tempfile.TemporaryDirectory(prefix="traffic-profile-test-") as out:
             node = object.__new__(ProfileOwnedNode)
             node.root = os.path.join(out, "node")
             node.datadir = os.path.join(node.root, "datadir")

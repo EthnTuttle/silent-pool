@@ -18,6 +18,9 @@ import socket
 import sys
 import time
 
+CANONICAL_PROBE_ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(CANONICAL_PROBE_ROOT))
+
 from arkrpc import nodeproc
 from arkrpc.contracts import get_profile, contract_hash
 from arkrpc.launchprofile import normalize, digest
@@ -132,7 +135,7 @@ def worker(args):
     # PDEATHSIG before any node launch or fault injection.
     nodeproc.validate_parent_handoff(helper['path'], helper['sha256'], args.parent_pid, args.parent_ticks)
     if args.case == 'cli-profile':
-        os.execve(sys.executable, [sys.executable, str(Path(__file__).with_name('probe.py')),
+        os.execve(sys.executable, [sys.executable, str(CANONICAL_PROBE_ROOT / 'probe.py'),
             'node-probe', '--binary', node['path'], '--source-name', 'sealed-L2-eb257af7',
             '--launch-profile', str(root / 'profile.json'), '--actor-exec', helper['path'],
             '--actor-exec-sha256', helper['sha256'], '--controller-pid', str(args.parent_pid),
@@ -245,7 +248,10 @@ def coordinate(args):
     libc = ctypes.CDLL(None, use_errno=True)
     assert libc.prctl(36, 1, 0, 0, 0) == 0  # subreaper, so dead ancestors' children are reaped here
     env = {'PYTHONDONTWRITEBYTECODE': '1', 'SPC_LAB_RUN_TOKEN': os.urandom(24).hex()}
-    write(root / 'profile.json', profile_for(root, node['sha256'], env))
+    profile = profile_for(root, node['sha256'], env)
+    if args.compat:
+        profile['argv'].extend(['--rpc-compat-profile', 'bark-v31'])
+    write(root / 'profile.json', profile)
     listener = socket.socket()
     listener.bind(('127.0.0.1', 0))
     assert listener.getsockname()[1] not in PROTECTED_PORTS
@@ -280,7 +286,7 @@ def coordinate(args):
     connection = None
     receipt = {'case': args.case, 'status': 'failed', 'helper_sha256': helper['sha256'], 'node_sha256': node['sha256'],
         'fixture_source_sha256': nodeproc.sha256_file(__file__), 'binding_receipt_sha256': nodeproc.sha256_file(args.binding),
-        'source_bindings': {p.name: nodeproc.sha256_file(str(p)) for p in sorted(Path(__file__).parent.joinpath('arkrpc').glob('*.py'))}}
+        'source_bindings': {p.name: nodeproc.sha256_file(str(p)) for p in sorted(CANONICAL_PROBE_ROOT.joinpath('arkrpc').glob('*.py'))}}
     try:
         connection, _ = listener.accept()
         connection.settimeout(2)
@@ -367,6 +373,7 @@ if __name__ == '__main__':
     parser.add_argument('--case', choices=CASES, required=True)
     parser.add_argument('--out', required=True)
     parser.add_argument('--binding', required=True)
+    parser.add_argument('--compat', action='store_true')
     parser.add_argument('--worker', action='store_true')
     parser.add_argument('--parent-pid', type=int)
     parser.add_argument('--parent-ticks', type=int)

@@ -22,6 +22,17 @@ Pins guarantee reproducibility and a known-good starting point; nothing here gat
 | `EthnTuttle/rbitcoin` | `c1505776117b1d4d42489f309af33978bbe124cc` (`silent-pool-lab-profile-facts`) | **Published lab build input (2026-11-12).** Exact 2106-file / 30,897,163-byte tested AP1b + consensus-facts r2 source, full manifest `f1592c935e29b0b1fdf6429ad1b84e9ae925e9a9fcccd66b04f3d090680ff20f`, Git tree `8583c44dcaf65bd0d3a4dc95cc88676c53ac58ad`, NAR `sha256-t6LQYTA738Uzstg5AsakWCJS4yGanDBTn4FSpUmhiIU=`. Fetch as Git from `https://github.com/EthnTuttle/rbitcoin.git`, with this immutable revision, `ref = "refs/heads/silent-pool-lab-profile-facts"`, `shallow = true`, `submodules = false`. Archive exports change two bundled Bitcoin files through `export-subst` and do not reproduce that NAR. This is an additional reproducibility binding, not a replacement of reference pin `7736c8e779d9271b6a0c538881f9758527bc3165` or a default/live-node selection change. Parent is the actual implementation baseline `e8cf9c9d61f7c63ae59cc11ab1179cace50ca142`; bundled Bitcoin corpus files match `bitcoin/bitcoin@f0de87f040621468b956f01f526a43a010310501`. Cargo.lock is byte-unchanged. |
 | `ark-bitcoin/bark` | `c419159fa54085572f8ca72d2ba1716556a9d3eb` | **Ark rail (2026-11-02).** The `c419159` the prototypes pin; full SHA from `spc_ark_client/Cargo.lock`. Covers `ark-lib` (address/mailbox/policy formats and the blinding formula of SPEC §11.8), `bark-server-rpc` (public gRPC surface) and `bark-wallet` (send/board/refresh semantics). The pool (`spc-pool`, feature `ark`) uses stock `bark-wallet` + `ark-lib` - no patch, no fork; the agent (`spc-agent`) uses `ark-lib` + `bark-server-rpc` via an in-tree thin wallet (SPEC §10 O13 resolved). Excluded from the pin's guarantee: server configuration defaults (`vtxo_lifetime`, fee schedule, `max_arkoor_amount`), discovered per server via `ArkInfo` at startup, never assumed. `bark-server` (`captaind`) is a dev-dependency for regtest runs only. The workspace adopts the prototype's `[patch.crates-io] ark-lib` -> git-rev mapping so `spc-crypto`'s `ark-lib = "0.7.1"` and the pinned git crate stay one package (crate identity is load-bearing: `Address`, `Vtxo` and `Keypair` types cross between `spc-crypto`, the adapter and the RPC bindings). See `docs/decisions/2026-11-02-bark-adapter.md`. |
 
+## Project-owned canonical lab probe (2026-11-12)
+
+The Python canonical probe is maintained in `testing/ark-rpc`, not in an
+external fork or a developer-local source tree. `nix/lab/ark-probe.nix` filters
+the repository-owned 14 canonical files and public test fixtures. Its contract
+hash stays `754e1e6131955f9e5bbce7ef81b6f9aabaa2f1379ec6409f1c3a7a9e88be91f9`;
+build output supplies fresh whole-source and native Python/script bindings.
+The old thin-entry hash alone does not identify a deployment. No upstream SHA
+or lockfile changes are required. See
+`docs/decisions/2026-11-12-portable-canonical-probe.md`.
+
 ## Rules
 
 - `bitcoin_core_sv2` MUST include the `block_reserved_weight(size) = max(1168 + 4·size, 2000)` fix (`warioishere/sv2-apps` `ec35ac8`, carried as `4e526de` in PR #3) in both `spc-pool` (`[template] source = "ipc"`) and `spc-agent`. Upstream `stratum-mining/sv2-apps` `main` and `v0.8.0` are excluded until it lands.
