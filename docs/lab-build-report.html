@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Silent Pool lab build report - interim draft (2026-11-12)</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 2rem auto;
+         max-width: 60rem; padding: 0 1rem; line-height: 1.5; }
+  h1 { font-size: 1.5rem; } h2 { font-size: 1.2rem; margin-top: 2rem; }
+  h3 { font-size: 1.05rem; margin-top: 1.4rem; }
+  code, pre { font-family: ui-monospace, monospace; font-size: 0.85em; }
+  pre { background: rgba(127,127,127,.12); padding: .6rem .8rem; overflow-x: auto;
+        border-radius: .3rem; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .88rem; }
+  th, td { border: 1px solid rgba(127,127,127,.4); padding: .3rem .5rem;
+           text-align: left; vertical-align: top; }
+  th { background: rgba(127,127,127,.15); }
+  .ok { color: #0a7d24; font-weight: 600; }
+  .warn { color: #a15c00; font-weight: 600; }
+  .meta { color: rgba(127,127,127,.9); font-size: .85rem; }
+  ul { padding-left: 1.2rem; } li { margin: .2rem 0; }
+</style>
+</head>
+<body>
+
+<h1>Silent Pool lab build report - interim draft</h1>
+<p class="warn"><strong>Work in progress:</strong> this records the current
+integration state. Native funding has passed its scoped experiment. The final
+write-up awaits registered wallet/miner integration and the complete funded
+Ark lifecycle experiment.</p>
+
+<h2>Short summary: how it works</h2>
+<p>Nix builds the rbitcoin node, Silent Pool services and a self-hosted
+<code>captaind</code> Ark server from pinned sources. The lab supervisor
+creates private configuration, assigns local ports, starts isolated storage
+for each pool and the Ark server, and records observations for the operator
+pages. Native mining, native bootstrap funding and unfunded Ark infrastructure
+have been verified in scoped runs; the complete funded mining-to-Ark flow is
+still being built.</p>
+<p>The intended complete flow is: CPU miners receive authenticated SV2 jobs,
+search real SHA256d headers within the declared hash budget, and submit shares
+to pool fronts. rbitcoin decides which blocks are valid. Mature native funding
+outputs supply the transaction actors, which sign ordinary fee-paying traffic
+and fund the local Ark wallets. Pool accounting assigns earnings to fixed-value
+coinbase outputs and Ark remainders; the separate Ark role executes signed
+orders, and each miner's wallet scans, receives, refreshes and offboards its
+funds. Those final joined payout and wallet steps remain under verification.</p>
+<p><strong>Final experiment target:</strong> two nodes, two pools, four miner
+processes and four SPc wallets, eight background payment wallets, one local Ark
+server, two pool Ark roles and three PostgreSQL clusters. The independent
+controls are 40 H/s aggregate mining and 0.2 ordinary transactions per second.
+Smaller recorded component fixtures have their own explicit populations.</p>
+<h2>Current completion status - 2026-11-12</h2>
+<p><strong>Current integration:</strong> all 87 ladder and 40 native packet
+coverage rows now match the primary tree. Native exchange retention passed
+33 targeted tests and build; historical payout-evidence hooks are next. The shared runner and
+post-drain independent audit are implemented; the complete live campaign has
+not passed.</p>
+<p><strong>Earlier merged check:</strong> the corrected primary gate passed
+296 Rust tests (including 162 Ark-feature agent tests), 36 Node tests and
+15 compiled-browser workflows. The omitted UI base layer and default-feature
+test gap are resolved. Browser provider inputs remain explicit fixtures.</p>
+<p><strong>Joined Nix build:</strong> all six application binaries now share
+one verified source-bearing derivation. The bootstrap phase, host-P2P and
+cleanup-attachment corrections are now in a rebuilt diagnostic bundle with
+a measured 350-check inventory. Canonical admission passed. The fresh run
+stopped before hashing because its inbound-only IBD peer observations did not
+satisfy the readiness proof. Source analysis confirms that IBD outbound sockets
+are absent from the RPC peer table and cannot transition to the expected
+follow-outbound state at genesis. The replacement v3 observer now retains raw
+handshake/socket brackets, but its final current-time/deadline check still needs
+correction and verification before a fresh run can be admitted.</p>
+<table>
+<tr><th>Component</th><th>Current evidence</th><th>Still required</th></tr>
+<tr><td>Mining, hub, access and operator pages</td><td>Integrated and tested;
+native mining demonstrated.</td><td>Combined acceptance with the funded Ark flow.</td></tr>
+<tr><td>Self-hosted Ark and rbitcoin Nix infrastructure</td><td>Built, integrated
+and tested with isolated storage, real ArkInfo and clean lifecycle handling.</td>
+<td>Funded wallet and mining-to-Ark acceptance.</td></tr>
+<tr><td>Traffic actor/controller and profile binding</td><td>Primary-integrated
+(T1 runtime + J1 activation, 42 new + 24 modified rows plus the 20-file r4
+producer copy; scoped merged-tree checks green: txd full crate, traffic_contract
+49/49, lib 58, 25 adjacent regression files, fmt/clippy clean). Candidate-side
+fresh real node/probe/driver checks passed earlier with infrastructure roles as
+explicit inert fixtures. The combined T2/contextual/destination stack is now
+primary-integrated with 122 txd, 51 controller and 58 library tests passing.</td>
+<td>Joined real pool/miner execution, acceptance-adapter integration and funded
+Ark traffic. The ignored J2 fresh-harness test remains unclaimed.</td></tr>
+<tr><td>Agent wallet/miner bridge</td><td>Integrated with the corrected wallet
+and private input provider; 162 merged Ark-feature tests passed. An earlier
+unfunded run opened and registered four wallets, with retry acknowledgments
+and clean shutdown.</td><td>Aggregate/native-verifier follow-ups and funded
+receive, refresh, offboard and miner-admission proof.</td></tr>
+<tr><td>Authenticated live wallet UI</td><td>Targeted Rust tests, clippy/builds
+and 13 compiled-server Chromium workflows passed, with exact static assets.
+Wallet/node/miner providers in that browser proof were explicit fixtures.</td>
+<td>Replay, durable-result and control-availability fixes passed a later
+63-Rust-test / 36-Node-test checkpoint and 15 compiled-browser workflows.
+The final truncated-journal guard passed 14 narrow Rust tests and builds;
+unchanged browser assets were checked against the latest CLI. The same auditor
+approved the corrected revision. Its base routes and provider joins are now
+integrated and the merged compiled-browser gate passed. Actual funded workflow
+acceptance remains.</td></tr>
+<tr><td>Native bootstrap funding</td><td>The corrected contextual executor mined
+105 canonical blocks on two real nodes and funded 80 allocation outputs under
+the declared 40 H/s budget. An independent raw-byte oracle verified consensus,
+maturity, conservation and 3,492 sats of fees.</td><td>Combine with real
+pool/miner actors and complete Ark acceptance. This funding fixture used
+inert storage/front/miner actors and two payment wallets.</td></tr>
+<tr><td>Ark funding destinations</td><td>Standard P2PKH, P2WPKH and P2TR output
+support passed scoped checks. The funded actor submitted both witness-output
+types without duplicate replay sends.</td><td>Confirm those external outputs
+and verify real transfers to the local Ark wallets. Witness inputs remain a
+separate verification path.</td></tr>
+<tr><td>Ladder and aggregate delivery</td><td>The aggregate findings and final
+cursor ACL defect are audit-closed. A fresh 40 H/s rbitcoin component run
+reserved prior pending at heights 16/17 and booked both by tip 23. Its pair
+replay covered 428 signed events, 23 blocks plus genesis and 283 SQL history
+events. Independent QA passed the pair and H1-H8 warm-up checks, with
+exact-checkpoint entitlement through H18.</td><td>Exact checkpoints for H19-H22
+and H23's SQL economic row are missing. Complete evidence capture, merged
+control/wallet integration and funded Ark acceptance remain.</td></tr>
+<tr><td>T1 user payment-wallet provider</td><td>19 tests and seven check steps
+passed for authenticated, user-scoped balances, receive addresses and
+stage-bound traffic controls. Its separate frontend join passed 14 Node checks,
+including T1-only accounts and source-time expiry.</td><td>Compiled real-provider
+workflow and funded payments. T1 balances remain separate from Ark earnings.</td></tr>
+<tr><td>Independent acceptance harness</td><td>262 offline consumer tests passed;
+real T2 evidence was verified separately. All four checker findings are closed
+by the same auditor, including send-outcome consistency, single-use send intents,
+full window coverage and cleanup verdicts. The serial multi-case campaign is
+implemented.</td><td>Verified joined binaries, complete Rule B history and its
+initial checkpoint, pre-mining proof-feed acknowledgement, live rejection and
+the funded campaign. Working-producer parsers are not live acceptance.</td></tr>
+<tr><td>Native per-job verification</td><td>The CPU activation gate passed
+56 distinct tests, checks, clippy and build. Native tests use real Noise/CPU
+work with simulated signed wallet responses. The wallet service is also compiled;
+a joint fixture proved commit then activation then first hash, with zero hashes
+before commitment. Blocked-write and clock-rollback corrections subsequently
+passed 22 targeted tests and builds, with same-auditor approval. The wallet-side
+service and aggregate-credit audit also received bounded approval.</td><td>
+Joint-fixture rerun with the corrected CPU, controller integration and full
+lifecycle/history evidence.</td></tr>
+<tr><td>Acceptance hooks and rejection constructor</td><td>The tested follow-up
+admits early operator hooks and selects version 3 before the production signer,
+with immutable replay binding. Retained checks include 114 core test instances,
+two HTTP/schema tests, clippy, fmt and sealed builds.</td><td>Merge with the
+native executor and exercise the actual funded rejection. Synthetic signature
+fixtures and route-only node evidence do not establish that live result.</td></tr>
+<tr><td>Remaining end-to-end pieces</td><td>Witness primitives and existing
+reference implementations are available.</td><td>Live mixed-witness acceptance,
+ladder and aggregate-status integration, funded Ark lifecycle including automatic
+renewal, and the combined four-user experiment.</td></tr>
+<tr><td>Funded Ark execution harness</td><td>The v2 harness passed 69 Python
+tests, retained its sealed preparation replay and reproduced the offline
+verifier lockfile. It consumes the tested same-wallet historical board-proof
+interface. The earlier actual stale tools closure
+was rejected before startup.</td><td>Verified joined binaries, compiled VTXO
+proof verifier and joined same-wallet boarding/status executor. The corrected
+executor and original-board proof retrieval passed 25 final focused tests,
+clippy and builds. The subsequent stock-Bark lock-file restart fix passed
+28 tests and builds and received same-auditor approval. Grant-path integration
+and live verification remain. Three fresh diagnostic attempts reached a
+runtime phase-handling blocker; no user payments executed in those attempts.
+That blocker is now corrected in an admitted rebuilt bundle. Recorded actors
+were reaped, but unreadable same-UID processes leave global cleanup inconclusive.</td></tr>
+</table>
+<p class="meta">This status distinguishes candidate tests from primary
+integration and unfunded checks from funded acceptance. The final report will
+replace this progress section only when the full experiment is complete.</p>
+<p class="meta">Started 2026-11-08; current progress summary updated 2026-11-10.
+The integration sections below retain their original receipt scopes.
+Primary worktree <code>/home/ethan/code/silent-pool</code>, git base
+<code>b0ab4ca34fda07c61a6335d05f598eaacc69678c</code>, index
+<code>44f21a926d4d065ac6937fb0f81b698c7b2d0627</code> (== HEAD tree; nothing
+staged, no commits - unchanged across every packet below). Authorization: the
+user's "ungate everything" grant removed workflow approval holds;
+single-build/disk/nonblocking-lock rules remained in force. This report
+summarizes actual integrated component changes, APIs and evidence; the
+per-packet receipts in <code>docs/reviews/</code> remain the authority.</p>
+
+<h2>1. Integrated packets (all receipts in docs/reviews/)</h2>
+<table>
+<tr><th>Packet</th><th>Receipt (docs/reviews/2026-11-08-*.md)</th><th>SHA256 (16)</th><th>Merged-tree validation</th></tr>
+<tr><td>Witness core</td><td><code>witness-primary-integration.md</code></td><td><code>1be892bbeba6ee80</code></td><td>prior combined gate (parent-verified)</td></tr>
+<tr><td>Traffic contract (T0)</td><td><code>traffic-contract-primary-integration.md</code></td><td><code>0337b60245518532</code></td><td>prior combined gate (parent-verified)</td></tr>
+<tr><td>Traffic wallet (T1a)</td><td><code>traffic-wallet-primary-integration.md</code></td><td><code>350f8b0e32b4eda6</code></td><td>prior combined gate (parent-verified)</td></tr>
+<tr><td>Pool operator UI</td><td><code>pool-operator-primary-integration.md</code></td><td><code>b5d91745fc32f735</code></td><td>prior combined gate (parent-verified)</td></tr>
+<tr><td>Agent wallet (AP-3a)</td><td><code>agent-wallet-primary-integration.md</code></td><td><code>599b1399befd1178</code></td><td>prior combined gate (parent-verified)</td></tr>
+<tr><td>Ark registration (AP-2)</td><td><code>ark-registration-primary-integration.md</code></td><td><code>04bbb86b7088119c</code></td><td>prior combined gate (parent-verified)</td></tr>
+<tr><td>Ark RPC probe</td><td><code>ark-rpc-probe-primary-integration.md</code></td><td><code>4dff7422a23e8413</code></td><td>prior combined gate (parent-verified)</td></tr>
+<tr><td>Live lab hub (LP-hub)</td><td><code>live-lab-hub-primary-integration.md</code></td><td><code>b6cb65b04837ab70</code></td><td>903-test broad gate, 903 pass / 0 fail / 18 ignored</td></tr>
+<tr><td>Traffic history v2 (T0)</td><td><code>traffic-history-v2-primary-integration.md</code></td><td><code>907a9153937b9f3e</code></td><td>combined Nix gate exit 0</td></tr>
+<tr><td>Expanded access (EXP-ACCESS)</td><td><code>expanded-access-primary-integration.md</code></td><td><code>2e1a984deff2e439</code></td><td>combined Nix gate exit 0</td></tr>
+<tr><td>Operator runtime (EXP-OP)</td><td><code>operator-runtime-primary-integration.md</code></td><td><code>4aea9db384786e20</code></td><td>combined Nix gate exit 0</td></tr>
+<tr><td>Traffic journal history 3 (tjv3)</td><td><code>traffic-journal-v3-primary-integration.md</code></td><td><code>5b449749e10f84d7</code></td><td class="ok">5-step gate: 137 passed / 0 failed / 2 ignored; fmt/clippy 0</td></tr>
+<tr><td>Traffic runtime (T1 + J1)</td><td><code>2026-11-09-traffic-runtime-primary-integration.md</code></td><td><code>2eb87391564286c6</code></td><td class="ok">scoped merged-tree gate: spc-lab-txd full crate 0 failed (2 pre-existing ignored), traffic_contract 49/49 (9 new J1 tests), traffic suites 1+7+0(1 ignored)+1+3, lib 58, 25 regression files, fmt/clippy 0; all-706 manifest scan 682 equal / 5 verified / 19 intentional / 0 unexpected</td></tr>
+<tr><td>T2 native funding + contextual policy + destinations</td><td><code>2026-11-10-t2-native-primary-integration.md</code></td><td><code>e0b6caee1a3d9ad6</code> (initial receipt)</td><td class="ok">31 patch paths verified; 122 txd, 51 controller and 58 library tests passed; two pre-existing ignored; fmt/clippy passed. Actual integrated wallet/Ark execution is separate.</td></tr>
+<tr><td>Self-hosted Nix Ark infrastructure</td><td><code>self-hosted-ark-primary-integration.md</code></td><td><code>290ad12a23f32bf2</code></td><td class="ok">20 focused + 7 conformance tests, fmt/clippy 0, Nix hash-binding rebound</td></tr>
+</table>
+<p class="meta">The five-packet window (hub, history-v2, EXP-ACCESS, EXP-OP,
+AP-2) closed under one combined Nix gate (exit 0; parent independently
+verified 903 pass / 0 fail / 18 ignored). tjv3 and the Ark infrastructure
+packet each carried their own scoped merged-tree gates below.</p>
+
+<h2>2. Traffic core: journal history 3 (most recent core change)</h2>
+<ul>
+<li><code>TrafficJournal</code>: typed DTO observer snapshot
+(<code>observer_snapshot</code>, owned deterministic committed-tip copy under
+the journal mutex), atomic versioned raw-header <code>RollbackEvidence</code>
+admitting lower canonical tips, send maturity rechecks, queued-intent guard.</li>
+<li>Version contract: KEY derivation <strong>v2</strong> (unchanged), CONTROL
+<code>spc-lab-tx-control/v1</code> (unchanged), JOURNAL
+<code>spc-lab-tx-journal/3</code> / <code>SUPPORTED_HISTORY_VERSION = 3</code>.
+History-2 reopen fails closed (<code>UnsupportedHistoryVersion</code>) before
+any mutation; nothing existing was migrated (by design; the sealed LIVE run
+has no tx journal).</li>
+<li>Merged-tree gate (actual): core 81 pass / 2 ignored; T0 contract +
+conformance 49 pass; projection fixture 7 pass; fmt 0; clippy 0 -
+<strong>137 / 0 / 2</strong>. Async audit: <strong>APPROVE</strong> bounded to
+the exact tested hashes (<code>ff6353c2...</code> /
+<code>df0b0545...</code>), no concrete bug, L1-L4 low follow-ups recorded
+outside merge scope.</li>
+<li>Files: <code>crates/spc-lab-txd/src/{journal,wallet,lib}.rs</code>,
+<code>tests/history3.rs</code>, T0 protocol/spec/conformance tests; the only
+projection change is one <code>cfg(test)</code> fixture line.</li>
+</ul>
+
+<h2>2a. Traffic runtime (T1) + J1 activation (newest core integration)</h2>
+<ul>
+<li>42 new files (txd actor/bootstrap/control/observer/schedule/admit,
+engine <code>traffic_runtime.rs</code>, traffic runtime/consumer/control/
+launch_profile/rpc/completion modules, j1 fixtures, 5 decisions + 5
+changelog fragments + 2 reports) and 24 modified rows (19 byte-exact;
+3 verified 3-way merges for main/engine/runtime; SPEC no-edit proven by
+reverse-splice; flake.nix exactly one added line).</li>
+<li>Producer copy: 20 <code>testing/ark-rpc</code> files at the frozen r4
+state (contract <code>754e1e61...</code>, RPC-policy golden
+<code>7d87ad97...</code>); 9 new, 11 edited, all hash-verified.</li>
+<li>ChainPolicy is field-projected from the actual node's
+<code>effective_profiles</code> (100-block maturity required, hex-parsed
+bits, fail-closed on any missing consensus fact) - no constant
+initial-bits assumption.</li>
+<li>Access/OP guards intact: unavailable kinds answered pre-parse with a
+closed rejection, never journaled; budget authority stays in the existing
+CommandLog; zero identity fields in the traffic module or txd crate.</li>
+<li>Index <code>44f21a92...</code> unchanged throughout; source recovered
+from frozen manifests only (the candidate worktree was contaminated by a
+concurrent session; engine.rs row cross-bound by two frozen worktrees).</li>
+<li>Later integration: T2/contextual/T1-DEST is now transferred and tested in
+primary. J2 fresh-harness (one ignored test), full joined funded traffic,
+Ark lifecycle and witness-spend acceptance remain unclaimed.</li>
+</ul>
+
+<h2>3. Self-hosted Nix Ark infrastructure</h2>
+
+<h3>3.1 Component changes (22 rows, all byte-exact to the tested packet)</h3>
+<table>
+<tr><th>Component</th><th>Files</th><th>Change</th></tr>
+<tr><td>Ark service (new)</td><td><code>crates/spc-lab/src/ark_service.rs</code></td>
+<td>700 lines: stock Bark server lifecycle (check-config, create, start, actual
+GetArkInfo, stock wallet RPC), leased loopback ports, separate provider
+Postgres cluster, per-pool Ark wallets/seeds/order keys, Redis ACL
+separators, fee-schedule SHA256 binding, supervisor/actor-exec cleanup.</td></tr>
+<tr><td>Engine / runtime</td><td><code>engine.rs</code>, <code>runtime.rs</code></td>
+<td><code>RuntimeOptions.ark: Option<ArkBinaries></code>;
+<code>ark_service::validate_runtime</code> at prepare; local Ark started by
+the Postgres startup hook (after storage/nodes, before fronts);
+<code>local_ark_hook_missing</code> and
+<code>ark_agent_bridge_unavailable</code> guards; node gains
+<code>--rpc-compat-profile bark-v31</code> only when a local Ark backend
+exists; two in-tree test constructors carry literal <code>ark: None</code>.</td></tr>
+<tr><td>Scenario / resources</td><td><code>scenario.rs</code>,
+<code>resource.rs</code>, <code>scenarios/lab-ark-infrastructure.json</code></td>
+<td>Explicit self-hosted Ark backend schema; unfunded infrastructure scenario
+(one node, two pools, two pool Ark roles, one stock provider, three Postgres
+clusters; <strong>zero user/miner actors</strong>).</td></tr>
+<tr><td>Inventory / lab CLI</td><td><code>inventory.rs</code>,
+<code>bins/spc-lab/src/main.rs</code>, <code>lib.rs</code></td>
+<td>Provider storage and both pool roles listed; whole-run inventory stays
+operator-only; CLI wires the ark tools into the runtime launch.</td></tr>
+<tr><td>Pool binary</td><td><code>bins/spc-pool/src/main.rs</code></td>
+<td>Conditional payout-key load (order key read only under
+<code>Role::Payout</code> - the ark-only process makes zero attempts on the
+SPc signing key); ark-provision observation block writes
+<code>provision.json</code> (0o600, <code>funded_e2e: false</code>) with the
+actual wallet funding address and observed spendable float.</td></tr>
+<tr><td>Nix packaging</td><td><code>nix/lab/{ark,ark-node,ark-runtime,ark-probe}.nix</code>,
+<code>flake.nix</code></td>
+<td>Stock captaind from Bark <code>c419159</code> (no source patch;
+upstream-supported SERVER_VERSION/BARK_VERSION/GIT_HASH env inputs only);
+node package binding the FINAL metadata source
+(<code>f1592c93...</code> full manifest, NAR
+<code>sha256-t6LQYTA738Uzstg5AsakWCJS4yGanDBTn4FSpUmhiIU=</code>, tested
+release binary <code>bba47522...</code>); full launcher closure; canonical
+r4 probe package; flake exports <code>rbitcoin-node-ark-lab</code>,
+<code>spc-lab-self-hosted-ark</code>, <code>spc-lab-ark-tools</code>,
+<code>captaind</code>, <code>bark</code>, <code>spc-pool-ark</code>,
+<code>spc-agent-ark</code>. No pins bumped; default L2 node pin unchanged.</td></tr>
+<tr><td>Tests / docs</td><td><code>tests/ark_infrastructure.rs</code>,
+<code>testing/lab-ark/*</code>, changelog + decision + report docs</td>
+<td>4 focused Rust tests (real pool-parser render without front/database
+secrets; stock protobuf metadata binds keys and rejects corruption; provider
+storage is not a pool database; deployment schema refuses hosted endpoints);
+Python lifecycle/release tooling; SPEC fragment + decision.</td></tr>
+</table>
+
+<h3>3.2 APIs and artifacts introduced</h3>
+<ul>
+<li><code>RuntimeOptions { ark: Option<ArkBinaries>, ... }</code> -
+<code>ArkBinaries</code> carries captaind/tools paths into the built-in
+runtime.</li>
+<li><code>&lt;run&gt;/private/ark-info.json</code> - schema
+<code>spc.lab.ark-info/v1</code>: local endpoint, backend_id,
+source_revision, observed_at, protobuf-JSON ark_info, and
+<code>bound.{ark_id,server_pubkey,mailbox_pubkey,fees_sha256}</code>.
+Public server data in a private artifact; no wallet secrets.</li>
+<li><code>private/ark-server-local-ark/native-funding-handoff.json</code> -
+schema <code>spc.lab.ark.native-funding/v1</code>: stock wallet RPC rounds
+address/balances.</li>
+<li><code>private/pool-ark-<id>/wallet/provision.json</code> - schema
+<code>spc.pool.ark.provision/v1</code>: onchain funding address,
+float_spendable_sats, float_target_sats, server, observed_at_unix. Startup
+evidence, not a live balance subscription.</li>
+<li>Wallet status semantics: zero server balance =>
+<code>initialized_unfunded</code>; positive =>
+<code>funding_observed_not_validated</code> (never <code>ready</code>);
+absent/invalid balance is an error.</li>
+</ul>
+
+<h3>3.3 Evidence (actual)</h3>
+<table>
+<tr><th>Check</th><th>Result</th></tr>
+<tr><td>Merged-tree focused lab tests (Nix checkPhase suite)</td>
+<td class="ok">20 passed / 0 failed (ark_infrastructure 4, lifecycle_stop 3,
+two_runs_isolation 1, supervisor_adoption 7, operator_ui_inventory 5)</td></tr>
+<tr><td>Merged-tree core3 conformance</td>
+<td class="ok">7 passed / 0 failed</td></tr>
+<tr><td>fmt --check / clippy (spc-lab, spc-pool, all targets, -D warnings)</td>
+<td class="ok">exit 0 / exit 0</td></tr>
+<tr><td>Nix hash-binding (primary source, snapshot eval, no builds)</td>
+<td class="ok">captaind <code>4mnskprw...</code>, node provenance
+<code>lbpv9zs0...</code>, tested release <code>03pw2rf9...</code> all rebound
+unchanged - output reuse, no cold rebuild</td></tr>
+<tr><td>Parent-verified tested-source results</td>
+<td>9 Nix outputs + 53 executable hashes; node 4 metadata + 22 CLI tests;
+captaind stock c419159; tools 20 tests; 3 prior unfunded live lifecycle
+cases + 1 full all-Nix launcher case (11 actors, 35 children, distinct
+Postgres system identifiers, zero floats, all stopped)</td></tr>
+<tr><td>Packet integrity</td>
+<td>full aggregate <code>6529a8f2...</code>, patch
+<code>97a370c2...</code> reproduced; 671/671 candidate rows clean; all 22
+rows byte-applied (post-hash == manifest)</td></tr>
+</table>
+<p class="meta">Primary-binary honesty: the current primary
+<code>spc-lab-ark-tools</code>/launcher derivations were not built here and
+are not claimed identical to the candidate closure (primary source includes
+the tjv3 rows); the existing Nix tools output proves the candidate API.
+Git-flake evaluation of the new <code>nix/lab/*.nix</code> files requires
+them to be tracked (staging is policy-forbidden), so hash-binding was
+verified via a clean source snapshot - the packet owner's own methodology -
+recorded in the receipt.</p>
+
+<h3>3.4 Historical unfunded-launcher boundary</h3>
+<p>The earlier <code>w52v4f6...</code> Ark-tools closure is also historical:
+its wallet source lacks the corrected AP-3b durability and scheduling fixes,
+its CLI predates the T2 join, and it contains no transaction-driver binary.
+Funded execution requires newly built, source-bound combined tools. The pinned
+rbitcoin and stock captaind dependencies can be reused unchanged.</p>
+<p>The original infrastructure-only receipt recorded
+<span class="warn">actual_engine_launch_profile_supported = false.</span>
+That engine's ownership token contained <code>:</code>, rejected by the
+canonical r4 normalizer. The full unfunded infra test records the null
+comparison, the exact error
+(<code>traffic_launch_profile_unsupported: missing or invalid ownership
+token</code>) and the observed raw ENV hash. The full-Nix-launcher
+verification (<code>/nix/store/sslr7nzw0gp3qzb68is0p44aiqpn7a74-spc-lab-self-hosted-ark</code>)
+is an <strong>unfunded infrastructure proof only</strong> - not funded
+traffic proof and not a J2 engine proof. Later T1 and native T2 checks have
+their own source and executable bindings, recorded above; this historical
+launcher result does not describe those newer binaries. Its successful
+startup must not be reused as funded acceptance.</p>
+
+<h2>4. Privacy and deployment boundaries (verified on the merged tree)</h2>
+<ul>
+<li>No identity field (<code>sp_id</code>, <code>B_scan</code>,
+<code>B_spend</code>, <code>P_i</code>, <code>user_identity</code>) crosses
+into the Ark role, its configs, or the infrastructure scenario.</li>
+<li>Ark-role configs contain no pool Postgres credentials and no Noise
+authority secrets; Redis ACLs allow order consumption / receipt publication
+and deny order publication / identity-stream access.</li>
+<li>Whole-run inventory and private hub data remain operator-only
+(authenticated); the operator claim-file token is never published.</li>
+<li>All Ark servers are self-hosted from pinned stock Nix sources
+(AGENTS.md); no hosted-provider fallback, no server fork, no remote
+endpoint.</li>
+<li>Untouched throughout: the sealed LIVE user lab run (controller 199214)
+and the parent's unfunded inspection run (controller 1441192, immutable Nix
+closure).</li>
+</ul>
+
+<h2>5. Remaining funded gates (open, not claimed)</h2>
+<ul>
+<li>Combine the tested native funding stack with real pool/miner actors and
+the corrected registered-wallet bridge, preserving both funding and fresh
+registration checks before miner activation.</li>
+<li>Confirm funding transfers to the local server and pool wallets, then verify
+board, delivery, receive, refresh, automatic stock-child renewal and offboard.</li>
+<li>Add the pool's private live-wallet boarding/status executor for externally
+funded onchain outputs; the existing automatic loop handles height-indexed
+coinbase outputs. Both paths must use the same stock wallet writer.</li>
+<li>Complete ladder settlement and all-output recovery, immutable payout/witness
+evidence, and authenticated aggregate status with continued mailbox watches.</li>
+<li>Integrate the tested, audit-approved UI replay corrections and real provider
+joins, then test the four-user flow against actual wallet results.</li>
+<li>Exercise forwarding barriers, retained-coinbase maturity rollback, genuine
+definitive rejection, restart/reorg recovery and cleanup in the joined run.
+The old T2 node logs truncate send parameters and cannot prove full historical
+forwarding or pause behavior.</li>
+</ul>
+
+<h3>Independent native-funding evidence</h3>
+<p>The archived T2 case contains 106 raw blocks including genesis. The separate
+oracle verified contextual target rules, PoW, Merkle roots, subsidy and fees,
+coinbase maturity, four distribution transactions and 80 allocation outputs.
+It also checked 189 funding scripts, six change scripts and the distinction
+between 1,809 measured hashes and 1,810 charged hashes. The external 100,000-sat
+P2WPKH and P2TR outputs were submitted but remain unconfirmed in this archive.
+No Ark lifecycle or complete T3/T4b pass is inferred from these results.</p>
+
+<h2>6. Evidence index</h2>
+<table>
+<tr><th>Artifact</th><th>Location</th></tr>
+<tr><td>Runtime-corrected admitted diagnostic</td><td><code>/tmp/opencode/runtime-fix-diagnostic-r1/bundle.json</code>; SHA256 <code>4d3778e8d4c65cffa95af483828fe1013a1d4307da32b3469801ce1624f036fd</code>. CLI <code>52e45eab...</code>; one application source root <code>/nix/store/11icfby7ni0185p093hxmbsahyl0p2dl-source</code>. Fresh execution assigned, not yet reported successful.</td></tr>
+<tr><td>Current joined Nix diagnostic bundle</td><td><code>/tmp/opencode/AP5-joined-bundle-r1/bundle.json</code>; SHA256 <code>f2c96b21ccb85300b76ba93aff218fa39861dbda531c0e424a8cb5a71e7171af</code>. Six apps share <code>/nix/store/g105903s5z1izz6wwhbm3579madx4xbh-spc-lab-ark-tools-0.1.0</code>; source <code>/nix/store/wr1ix2s3hnhjhhmi2dv7v5cfd0mb28gc-source</code>. Canonical admission/live diagnostic pending.</td></tr>
+<tr><td>Corrected merged gate and build receipt</td><td><code>/tmp/opencode/omission-correction-9th-live-wallet-ui-base/gate/summary.json</code>, <code>/tmp/opencode/AP5-joined-bundle-r1/COMPLETION-RECEIPT.md</code>; source/binary/log bindings independently checked</td></tr>
+<tr><td>Acceptance-checker recheck</td><td><code>docs/reviews/2026-11-10-funded-acceptance-consumer-review.md</code>; A1-A4 closed, final A1 bound to <code>/tmp/opencode/T3-A1-late-acceptance-fix-r4/handoff.json</code></td></tr>
+<tr><td>196-test working Rule B consumer</td><td><code>/tmp/opencode/T3-RULEB-working-parser-r5/handoff.json</code>; source packet <code>bc4ba68a...</code>, offline scope only</td></tr>
+<tr><td>Authorized cache cleanup</td><td><code>/tmp/opencode/silent-pool-incremental-cleanup-20261110.json</code>; 49.07 GiB recovered, shared metadata and sibling outputs preserved</td></tr>
+<tr><td>Combined native funding source and execution</td><td><code>/tmp/opencode/T2-native-freeze-receipt.json</code> (full <code>9c8f9511...</code>), <code>/tmp/opencode/T2-T1DEST-verification-receipt.json</code></td></tr>
+<tr><td>Independent real-data oracle</td><td><code>/tmp/opencode/T3-real-T2-independent-oracle-final-v2/receipt.json</code> (SHA256 <code>dda2c81a578c2d0446c1c208beeeb94fff00dd564f1b54e8cc248fa5151feca7</code>)</td></tr>
+<tr><td>97-test acceptance-consumer packet</td><td><code>/tmp/opencode/T3-T4b-acceptance-packet-v3/handoff.json</code>; parent verified 25 source rows and 43 real-data input seals</td></tr>
+<tr><td>990-output ladder component</td><td><code>/tmp/opencode/ladder-completion-r2-binding.json</code> (source <code>415d21fa...</code>), <code>/tmp/opencode/ladder-completion-native-r3/receipt.json</code>; stock Bitcoin component scope, no funded Ark claim</td></tr>
+<tr><td>tjv3 final receipt</td><td><code>docs/reviews/2026-11-08-traffic-journal-v3-primary-integration.md</code> (<code>5b449749...</code>)</td></tr>
+<tr><td>T1/J1 receipt</td><td><code>docs/reviews/2026-11-09-traffic-runtime-primary-integration.md</code> (<code>2eb87391...</code>)</td></tr>
+<tr><td>T1/J1 external manifest</td><td><code>/tmp/opencode/traffic-runtime-j1-primary-integration-manifest.json</code> (<code>ada73515...</code>)</td></tr>
+<tr><td>T1/J1 packet authority</td><td><code>/tmp/opencode/traffic-runtime-j1-final-manifest-full.json</code>, delta <code>/tmp/opencode/t1-final-delta.json</code>, 3-way workspace <code>/tmp/opencode/t1-3way/</code>, producer r4 manifest <code>/tmp/opencode/traffic-probe-profile-r4-manifest-full.json</code></td></tr>
+<tr><td>tjv3 external manifest</td><td><code>/tmp/opencode/traffic-journal-v3-primary-integration-manifest.json</code></td></tr>
+<tr><td>tjv3 audit (APPROVE)</td><td><code>docs/reviews/2026-11-08-traffic-journal-v3-review.md</code> (<code>2efba991...</code>)</td></tr>
+<tr><td>Ark infra receipt</td><td><code>docs/reviews/2026-11-08-self-hosted-ark-primary-integration.md</code> (<code>290ad12a...</code>)</td></tr>
+<tr><td>Ark infra external manifest</td><td><code>/tmp/opencode/self-hosted-ark-primary-integration-manifest.json</code></td></tr>
+<tr><td>Ark packet authority</td><td><code>/tmp/opencode/self-hosted-ark-packet/</code> (manifest, manifest-full, package-bindings, launch-bindings, changes.patch)</td></tr>
+<tr><td>Ark report owner (source/receipt bindings)</td><td><code>docs/reviews/2026-11-08-self-hosted-ark-infrastructure.md</code> (<code>87683d7d...</code>)</td></tr>
+<tr><td>Validation logs</td><td><code>/tmp/opencode/tjv3-integration-logs/</code>, <code>/tmp/opencode/ark-integration-logs/</code>, <code>ark-validation-run.log</code>, <code>ark-nix-eval-snapshot.log</code></td></tr>
+<tr><td>Changed-row manifests (git modes)</td><td><code>/tmp/opencode/tjv3-changed-rows.json</code> (15), <code>/tmp/opencode/ark-changed-rows.json</code> (23)</td></tr>
+</table>
+<p class="meta">Historical T1/J1 receipt snapshot: SPEC had 56 changelog entries
+(<code>bfb28139...</code>); SPEC section 9 carries the lab self-hosted-Ark
+deployment requirements. Roots: Cargo.toml <code>8530ce08...</code>,
+Cargo.lock <code>6ca42938...</code> (unchanged by tjv3, the Ark packet and
+T1/J1), flake.nix <code>3e6ed332...</code> (T1/J1 added the
+<code>spc-lab-txd</code> mkBinary line; no pin change). Method note: the verified 22-row Ark
+transfer was applied with <code>git apply</code> of the packet's authority
+patch (recorded in the receipt); per the current developer + handoff
+requirement, all future file edits use <code>functions.patch</code>.</p>
+
+</body>
+</html>
