@@ -282,6 +282,8 @@ pub struct MinerSnapshot {
     pub occurred_at_mono_ms: u64,
     pub events_dropped_total: u64,
     pub stopping: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_evidence: Option<crate::evidence::CaptureInfo>,
     pub connections: Vec<ConnectionSnapshot>,
     pub workers: Vec<WorkerSnapshot>,
 }
@@ -309,6 +311,8 @@ pub enum MinerEvent {
         committed_digest: String,
         expires_at_unix_ms: u64,
         window: spc_scan::source_audit::WindowFacts,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        durable_evidence: Option<spc_scan::native_evidence::DurableHandle>,
     },
     SourceAuditUnknown {
         connection_id: ConnectionId,

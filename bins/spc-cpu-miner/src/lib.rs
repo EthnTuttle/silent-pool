@@ -8,6 +8,7 @@ pub mod config;
 pub mod connection;
 #[allow(clippy::large_enum_variant)]
 pub mod control;
+pub mod evidence;
 pub mod hash;
 pub mod ids;
 pub mod miner;

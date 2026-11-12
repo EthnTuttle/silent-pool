@@ -4058,6 +4058,7 @@ dependencies = [
  "hex",
  "proptest",
  "rand 0.8.8",
+ "rustix",
  "secp256k1 0.28.2",
  "serde",
  "serde_json",

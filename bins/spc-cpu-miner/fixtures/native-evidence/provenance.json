@@ -1,0 +1,16 @@
+{
+  "status": "GENUINELY_SCHNORR_SIGNED_COMPONENT_FIXTURE_NOT_LIVE_CAPTURE",
+  "now_ms": 1000,
+  "pool_pubkey": "5cbdf0646e5db4eaa398f365f2ea7a0e3d419b7e0330e39ce92bddedcac4f9bc",
+  "collector_pubkey": "2f01e5e15cca351daff3843fb70f3c2f0a1bdd05e5af888a67784ef3e10a2a01",
+  "wallet_pubkey": "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9",
+  "public_codec_sha256": "39c75d44c8ff16cf1e08b873eca91ad2988f9da1937ef18265e62d537d8abd99",
+  "files": {
+    "manifest.json": "13cba2fba244a1914790c510395084fc025bde2570b581ac8c3ad400b64db74f",
+    "record.json": "f12ff73e6f24126b12f7812ee2550f1e211f4793b4741c216efc9c70b8e564b3",
+    "request.json": "43020688e0b6d1c0f3ea42e7cda791efa6739acdadd19769c0eac95d72bf557b",
+    "response.json": "1d16911b57ca4be46ff533efecea3d3af3dae27cb186bf5482f9a4e39ab76a00",
+    "handle.json": "cd93e2e3551881c6d44c40cdb3d4551b4afdcc49f23bb5cfcee0b260c4726fb0"
+  },
+  "scope": "Encoding/consumer conformance fixture. Does not replace production retained bytes or establish live acceptance."
+}

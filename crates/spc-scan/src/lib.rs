@@ -22,6 +22,10 @@ pub mod audit;
 // boxing it would change the already-shared Rust construction API.
 #[allow(clippy::large_enum_variant)]
 pub mod native_activation;
+// Preserve QA's hash-bound public retention module; its explicit parity check
+// is equivalent to is_multiple_of and has no schema or validation difference.
+#[allow(clippy::manual_is_multiple_of)]
+pub mod native_evidence;
 pub mod source_audit;
 pub mod source_feed;
 

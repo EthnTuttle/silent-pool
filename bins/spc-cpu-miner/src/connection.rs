@@ -117,6 +117,16 @@ pub fn start_connection(
     next_session_slot: Arc<AtomicU32>,
     events: EventSink,
 ) -> anyhow::Result<ConnectionHandle> {
+    start_connection_with_capture(config, next_worker_slot, next_session_slot, events, None)
+}
+
+pub(crate) fn start_connection_with_capture(
+    config: ConnectionConfig,
+    next_worker_slot: Arc<AtomicU32>,
+    next_session_slot: Arc<AtomicU32>,
+    events: EventSink,
+    capture: Option<Arc<crate::evidence::CaptureStore>>,
+) -> anyhow::Result<ConnectionHandle> {
     config.validate()?;
     let (found_tx, found_rx) = mpsc::channel(SHARE_QUEUE_CAPACITY);
     let worker_count = u32::try_from(config.workers.len()).context("too many workers")?;
@@ -162,6 +172,7 @@ pub fn start_connection(
         next_session_slot,
         shutdown_rx,
         found_rx,
+        capture,
     ));
     Ok(ConnectionHandle {
         config,
@@ -184,7 +195,7 @@ enum SessionEvent {
     Shutdown,
     Incoming(Option<anyhow::Result<SerializedFrame>>),
     Found(Option<FoundShare>),
-    Approved(Result<crate::native_gate::VerifiedCandidate, &'static str>),
+    Approved(Box<Result<crate::native_gate::VerifiedCandidate, &'static str>>),
     WriterFinished(anyhow::Result<()>),
     Expired,
 }
@@ -198,6 +209,7 @@ async fn run_connection(
     next_session_slot: Arc<AtomicU32>,
     mut shutdown: watch::Receiver<bool>,
     mut found_rx: mpsc::Receiver<FoundShare>,
+    capture: Option<Arc<crate::evidence::CaptureStore>>,
 ) {
     let mut backoff = config.reconnect.initial_backoff_ms;
     loop {
@@ -229,6 +241,7 @@ async fn run_connection(
             &events,
             &mut shutdown,
             &mut found_rx,
+            capture.clone(),
         )
         .await;
         for worker in &workers {
@@ -305,6 +318,7 @@ async fn run_session(
     events: &EventSink,
     shutdown: &mut watch::Receiver<bool>,
     found_rx: &mut mpsc::Receiver<FoundShare>,
+    capture: Option<Arc<crate::evidence::CaptureStore>>,
 ) -> anyhow::Result<SessionExit> {
     let timeout_duration = Duration::from_millis(config.reconnect.handshake_timeout_ms);
     let stream = timeout(timeout_duration, TcpStream::connect(&config.endpoint))
@@ -339,6 +353,7 @@ async fn run_session(
         local,
         &mut frame_rx,
         write,
+        capture,
     )
     .await
 }
@@ -355,6 +370,7 @@ async fn run_protocol(
     local: std::net::SocketAddr,
     frame_rx: &mut mpsc::Receiver<anyhow::Result<SerializedFrame>>,
     transport: impl outbound::FrameWriter,
+    capture: Option<Arc<crate::evidence::CaptureStore>>,
 ) -> anyhow::Result<SessionExit> {
     let timeout_duration = Duration::from_millis(config.reconnect.handshake_timeout_ms);
     let mut write = outbound::Writer::new(transport);
@@ -435,7 +451,7 @@ async fn run_protocol(
     }
     set_state(events, snapshot, Some(session_slot), "channel_open", None);
 
-    let mut gate = CandidateGate::new(config);
+    let mut gate = CandidateGate::new(config).with_capture(capture);
     if !gate.required() {
         snapshot.lock().expect("snapshot lock").source_audit_state =
             Some("explicit_unaudited".into());
@@ -458,7 +474,7 @@ async fn run_protocol(
                     _ = async {match deadline {Some(at)=>tokio::time::sleep_until(at).await,None=>std::future::pending::<()>().await}} => SessionEvent::Expired,
                     incoming = frame_rx.recv() => SessionEvent::Incoming(incoming),
                     result = write.finished() => SessionEvent::WriterFinished(result),
-                    approved = gate.completed() => SessionEvent::Approved(approved),
+                    approved = gate.completed() => SessionEvent::Approved(Box::new(approved)),
                     found = found_rx.recv() => SessionEvent::Found(found),
                 }
             };
@@ -712,7 +728,7 @@ async fn run_protocol(
                     }
                 }
                 SessionEvent::Approved(approved) => {
-                    gate.finish(approved, workers, snapshot, events, session_slot);
+                    gate.finish(*approved, workers, snapshot, events, session_slot);
                 }
                 SessionEvent::Expired => {
                     let pending = gate.pending();

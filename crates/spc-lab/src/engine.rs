@@ -1336,7 +1336,17 @@ impl RunEngine {
         mut payload: Value,
     ) -> Result<MinerWireResponse, (OutcomeState, String)> {
         if matches!(operation, MinerOperation::AddConnection) {
-            self.bind_native_audit(control.miner_id(), &mut payload)
+            let ready = control
+                .request(MinerOperation::Snapshot, serde_json::json!({}))
+                .map_err(|e| (OutcomeState::RejectedPrecondition, e))?;
+            if !ready.is_success() {
+                return Err((
+                    OutcomeState::RejectedPrecondition,
+                    "native capability snapshot unavailable".into(),
+                ));
+            }
+            let advertised = ready.result.as_ref().and_then(|r| r.get("native_evidence"));
+            self.bind_native_audit(control.miner_id(), &mut payload, advertised)
                 .map_err(|e| (OutcomeState::RejectedPrecondition, e.to_string()))?;
         }
         let mut attempt = None;

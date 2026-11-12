@@ -38,6 +38,16 @@ async fn main() -> anyhow::Result<()> {
     let writer = tokio::spawn(write_output(output_rx, stdout()));
     let events = EventSink::new(output_tx.clone(), config.miner_id.clone(), Instant::now());
     let mut miner = Miner::new(config.miner_id.clone(), events);
+    if let Some(capture) = config.native_evidence.clone() {
+        let store = spc_cpu_miner::evidence::CaptureStore::open(
+            capture,
+            config.miner_id.to_string(),
+            args.config.clone(),
+        )
+        .await
+        .map_err(anyhow::Error::msg)?;
+        miner = miner.with_capture(store);
+    }
 
     for connection in config.connections {
         let command = Command {

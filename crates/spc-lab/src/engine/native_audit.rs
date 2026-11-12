@@ -121,6 +121,60 @@ fn atomic_private<T: serde::Serialize>(
 }
 
 impl RunEngine {
+    fn validate_native_evidence(
+        &self,
+        miner: &str,
+        process: &ProcessIdentity,
+        config_path: &Path,
+        advertised: Option<&Value>,
+    ) -> Result<(), EngineError> {
+        use spc_scan::native_evidence as evidence;
+        let raw = private_read(config_path, process.uid)?;
+        if hash(&raw) != process.config_sha256 {
+            return Err(failure("native evidence config changed"));
+        }
+        let config: toml::Value =
+            toml::from_str(std::str::from_utf8(&raw).map_err(|_| failure("native config UTF8"))?)
+                .map_err(|e| failure(e.to_string()))?;
+        let capture: evidence::Config = config
+            .get("native_evidence")
+            .cloned()
+            .ok_or_else(|| failure("durable native evidence capability required"))?
+            .try_into()
+            .map_err(|e: toml::de::Error| failure(e.to_string()))?;
+        capture.validate(miner).map_err(failure)?;
+        let run = self
+            .run_dir
+            .canonicalize()
+            .map_err(|e| failure(e.to_string()))?;
+        if capture.run_id != self.run_id.as_str()
+            || capture.run_manifest != run.join("run-manifest.json")
+            || capture.directory != run.join("private/native-evidence").join(miner)
+        {
+            return Err(failure("native evidence path/run binding"));
+        }
+        private_dir(&capture.directory, process.uid)?;
+        let session = capture.directory.join(evidence::session_name(process));
+        private_dir(&session, process.uid)?;
+        let manifest_bytes = private_read(&session.join("manifest.json"), process.uid)?;
+        let manifest = evidence::decode_manifest(&manifest_bytes).map_err(failure)?;
+        if manifest.config != capture
+            || manifest.process != *process
+            || manifest.miner_id != miner
+            || manifest.config_path != config_path
+        {
+            return Err(failure("native durable evidence process binding"));
+        }
+        if let Some(advertised) = advertised {
+            let expected = serde_json::json!({"schema":evidence::LOCATOR_SCHEMA,"capability":evidence::CAPABILITY,
+                "directory":capture.directory,"manifest_relative_path":format!("{}/manifest.json",evidence::session_name(process)),
+                "manifest_sha256":evidence::sha256_hex(&manifest_bytes)});
+            if advertised != &expected {
+                return Err(failure("native evidence capability mismatch"));
+            }
+        }
+        Ok(())
+    }
     fn native_process(
         &self,
         role: &str,
@@ -214,6 +268,7 @@ impl RunEngine {
         &self,
         miner: &MinerId,
         payload: &mut Value,
+        advertised: Option<&Value>,
     ) -> Result<(), EngineError> {
         let process = self
             .manifest
@@ -386,6 +441,9 @@ impl RunEngine {
             return Err(failure("wallet native socket identity mismatch"));
         }
         let (peer, peer_config) = self.native_process("miner", miner.as_str())?;
+        let advertised =
+            advertised.ok_or_else(|| failure("native durable evidence capability absent"))?;
+        self.validate_native_evidence(miner.as_str(), &peer, &peer_config, Some(advertised))?;
         if peer.uid != wallet_process.uid || peer.boot_id != wallet_process.boot_id {
             return Err(failure("native host/UID binding mismatch"));
         }
@@ -540,6 +598,7 @@ impl RunEngine {
             }
             for peer in &registry.peers {
                 let (actual, path) = self.native_process("miner", &peer.miner_id)?;
+                self.validate_native_evidence(&peer.miner_id, &actual, &path, None)?;
                 if actual != peer.process || path != Path::new(&peer.config_path) {
                     return Err(failure("native CPU replaced"));
                 }

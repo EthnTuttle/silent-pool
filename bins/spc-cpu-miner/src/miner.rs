@@ -3,7 +3,7 @@ use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 
 use crate::config::{validate_id, ConnectionConfig};
-use crate::connection::{start_connection, ConnectionHandle};
+use crate::connection::{start_connection_with_capture, ConnectionHandle};
 use crate::control::{Command, CommandLedger, CommandResult, Operation};
 use crate::ids::{ConnectionId, MinerId, WorkerId};
 use crate::report::{EventSink, MinerSnapshot};
@@ -18,6 +18,7 @@ pub struct Miner {
     next_session_slot: Arc<AtomicU32>,
     ledger: CommandLedger,
     stopping: bool,
+    capture: Option<Arc<crate::evidence::CaptureStore>>,
 }
 
 impl Miner {
@@ -31,11 +32,17 @@ impl Miner {
             next_session_slot: Arc::new(AtomicU32::new(0)),
             ledger: CommandLedger::default(),
             stopping: false,
+            capture: None,
         }
     }
 
     pub fn is_stopping(&self) -> bool {
         self.stopping
+    }
+
+    pub fn with_capture(mut self, capture: Arc<crate::evidence::CaptureStore>) -> Self {
+        self.capture = Some(capture);
+        self
     }
 
     pub async fn execute(&mut self, command: Command) -> CommandResult {
@@ -224,11 +231,12 @@ impl Miner {
             .iter()
             .map(|worker| worker.id.clone())
             .collect();
-        let handle = start_connection(
+        let handle = start_connection_with_capture(
             config.clone(),
             Arc::clone(&self.next_worker_slot),
             Arc::clone(&self.next_session_slot),
             self.events.clone(),
+            self.capture.clone(),
         )
         .map_err(|error| error.to_string())?;
         for worker in &handle.workers {
@@ -251,6 +259,7 @@ impl Miner {
             occurred_at_mono_ms: self.events.mono_ms(),
             events_dropped_total: self.events.dropped(),
             stopping: self.stopping,
+            native_evidence: self.capture.as_ref().map(|c| c.info()),
             connections: self
                 .connections
                 .values()

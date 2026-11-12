@@ -2316,13 +2316,55 @@ fn miner_config_body(miner: &MinerId) -> String {
     )
 }
 
+fn retained_miner_config_body(
+    engine: &RunEngine,
+    run_dir: &Path,
+    miner: &MinerId,
+) -> Result<String> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    let run_dir = run_dir.canonicalize()?;
+    let uid = std::fs::metadata("/proc/self")?.uid();
+    let parent = run_dir.join("private/native-evidence");
+    let directory = parent.join(miner.as_str());
+    for path in [&parent, &directory] {
+        if !path.exists() {
+            std::fs::DirBuilder::new().mode(0o700).create(path)?;
+        }
+        let m = std::fs::symlink_metadata(path)?;
+        anyhow::ensure!(
+            m.is_dir() && m.uid() == uid && m.mode() & 0o777 == 0o700,
+            "unsafe native evidence directory"
+        );
+    }
+    let capture = spc_scan::native_evidence::Config {
+        schema: spc_scan::native_evidence::CONFIG_SCHEMA.into(),
+        run_id: engine.run_id().to_string(),
+        directory,
+        run_manifest: run_dir.join("run-manifest.json"),
+        max_records: 16384,
+        max_bytes: 268435456,
+        max_sessions: 32,
+    };
+    capture
+        .validate(miner.as_str())
+        .map_err(anyhow::Error::msg)?;
+    Ok(format!(
+        "{}\n[native_evidence]\n{}",
+        miner_config_body(miner),
+        toml::to_string(&capture)?
+    ))
+}
+
 fn write_initial_miner_configs(engine: &RunEngine, run_dir: &Path) -> Result<()> {
     for miner in &engine.scenario().miners {
         let path = run_dir
             .join("private")
             .join(format!("miner-{}.toml", miner.id));
         if !path.exists() {
-            write_private_bytes(&path, miner_config_body(&miner.id).as_bytes())?;
+            write_private_bytes(
+                &path,
+                retained_miner_config_body(engine, run_dir, &miner.id)?.as_bytes(),
+            )?;
         }
     }
     Ok(())
@@ -2335,7 +2377,7 @@ struct MinerConfigProvisioner {
 impl MinerProvisioner for MinerConfigProvisioner {
     fn prepare_miner(
         &self,
-        _engine: &RunEngine,
+        engine: &RunEngine,
         miner: &MinerId,
         implementation: &str,
     ) -> Result<(), String> {
@@ -2352,8 +2394,9 @@ impl MinerProvisioner for MinerConfigProvisioner {
             // Idempotent: never regenerate an identity/config after a crash.
             return Ok(());
         }
-        write_private_bytes(&path, miner_config_body(miner).as_bytes())
-            .map_err(|error| error.to_string())
+        let body =
+            retained_miner_config_body(engine, &self.run_dir, miner).map_err(|e| e.to_string())?;
+        write_private_bytes(&path, body.as_bytes()).map_err(|error| error.to_string())
     }
 }
 

@@ -314,6 +314,9 @@ pub fn parse_authority_public_key(value: &str) -> Result<Secp256k1PublicKey, Con
 pub struct MinerConfig {
     pub config_version: u16,
     pub miner_id: MinerId,
+    /// Startup-only controller-derived path. No per-command capture write API.
+    #[serde(default)]
+    pub native_evidence: Option<spc_scan::native_evidence::Config>,
     #[serde(default = "default_event_queue")]
     pub event_queue_capacity: usize,
     pub connections: Vec<ConnectionConfig>,
@@ -329,6 +332,11 @@ impl MinerConfig {
             return Err(ConfigError::Version(self.config_version));
         }
         validate_id(&self.miner_id)?;
+        if let Some(capture) = &self.native_evidence {
+            capture
+                .validate(&self.miner_id)
+                .map_err(|e| ConfigError::SourceAudit(e.into()))?;
+        }
         if !(1..=65_536).contains(&self.event_queue_capacity) {
             return Err(ConfigError::EventQueue);
         }

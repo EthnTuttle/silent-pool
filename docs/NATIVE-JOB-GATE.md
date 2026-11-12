@@ -4,6 +4,10 @@ Schema: `spc.native-job-gate/1`. Shared implementation:
 [`native_activation.rs`](../crates/spc-scan/src/native_activation.rs).
 This is CPU-to-existing-wallet local transport, not an Ark-server protocol.
 
+Full lab profiles additionally require the source-owned
+[durable public evidence capture](NATIVE-EVIDENCE.md) before activation. Its
+versioned envelope retains the actual bytes without changing this wire codec.
+
 ## Frames and public evidence
 
 Each frame is U32 little-endian length followed by UTF8 JSON. Requests are

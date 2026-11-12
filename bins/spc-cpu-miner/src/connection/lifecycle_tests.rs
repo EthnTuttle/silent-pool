@@ -225,6 +225,13 @@ struct Fixture {
 }
 impl Fixture {
     async fn start(id: &str, shares: bool) -> Self {
+        Self::start_with_capture(id, shares, None).await
+    }
+    async fn start_with_capture(
+        id: &str,
+        shares: bool,
+        capture: Option<Arc<crate::evidence::CaptureStore>>,
+    ) -> Self {
         let dir = tempfile::Builder::new()
             .prefix("native-backpressure-")
             .permissions(std::fs::Permissions::from_mode(0o700))
@@ -380,6 +387,7 @@ impl Fixture {
                 "127.0.0.1:34254".parse().unwrap(),
                 &mut frame_rx,
                 transport,
+                capture,
             )
             .await;
         });
@@ -690,4 +698,307 @@ async fn outbound_queue_is_bounded_and_drop_discards_partial_transport() {
     assert_eq!(partial.len(), 1);
     assert_eq!(probe.completed.load(Ordering::SeqCst), 0);
     assert_eq!(probe.calls.lock().unwrap().len(), 1);
+}
+
+fn capture_fixture(records: u64) -> (tempfile::TempDir, Arc<crate::evidence::CaptureStore>) {
+    let dir = tempfile::Builder::new()
+        .prefix("native-evidence-test-")
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir_in("/tmp/opencode")
+        .unwrap();
+    let store = crate::evidence::CaptureStore::test_store(dir.path(), records);
+    (dir, store)
+}
+fn fixture_keys() -> wire::VerificationKeys {
+    wire::VerificationKeys {
+        wallet: key(7).x_only_public_key().0,
+        collector: key(8).x_only_public_key().0,
+        pool: key(9).x_only_public_key().0,
+    }
+}
+async fn retained_event(
+    f: &mut Fixture,
+) -> (
+    spc_scan::native_evidence::DurableHandle,
+    crate::report::EventEnvelope,
+) {
+    timeout(Duration::from_secs(2), async {
+        loop {
+            if let OutputMessage::Event(event) =
+                f.events.recv().await.expect("native event stream closed")
+            {
+                if let MinerEvent::SourceAuditCommitted {
+                    durable_evidence, ..
+                } = &event.event
+                {
+                    return (
+                        durable_evidence.clone().expect("required durable handle"),
+                        *event,
+                    );
+                }
+            }
+        }
+    })
+    .await
+    .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn durable_public_bytes_exist_before_activation_and_exact_replay_is_immutable() {
+    use spc_scan::native_evidence as evidence;
+    let (_dir, store) = capture_fixture(16);
+    let delay = crate::evidence::TestDelay::new();
+    let _release = delay.guard();
+    store.delay_next(delay.clone());
+    let mut f = Fixture::start_with_capture("retained", false, Some(store.clone())).await;
+    let pending = f.request().await;
+    let request_bytes = wire::encode_request(&pending.request).unwrap();
+    let response_bytes = wire::encode_response(&approved(&pending.request)).unwrap();
+    pending.release.send(()).unwrap();
+    timeout(Duration::from_secs(2), delay.entered.notified())
+        .await
+        .unwrap();
+    assert_eq!(f.attempts(), 0);
+    assert!(f.snapshot.lock().unwrap().active_job.is_none());
+    let before_capture = serde_json::json!({"worker":f.worker.snapshot(),"connection":f.snapshot.lock().unwrap().clone()});
+    while let Ok(OutputMessage::Event(event)) = f.events.try_recv() {
+        assert!(!matches!(
+            event.event,
+            MinerEvent::SourceAuditCommitted { .. }
+                | MinerEvent::JobActivated { .. }
+                | MinerEvent::AuditFirstHash { .. }
+        ));
+    }
+    delay.release();
+    let (handle, committed) = retained_event(&mut f).await;
+    let info = store.info();
+    let path = info.directory.join(&handle.record_relative_path);
+    let bytes = std::fs::read(&path).unwrap();
+    let manifest = std::fs::read(info.directory.join(&handle.manifest_relative_path)).unwrap();
+    let (record, request, _) =
+        evidence::decode_record(&bytes, &manifest, &handle, &fixture_keys()).unwrap();
+    assert_eq!(record.request_json_hex, hex::encode(&request_bytes));
+    assert_eq!(record.response_json_hex, hex::encode(&response_bytes));
+    assert_eq!(request.nonce, pending.request.nonce);
+    assert_eq!(record.activation, "not_asserted");
+    assert_eq!(std::fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
+    f.hash().await;
+    let mut after_commit = Vec::new();
+    timeout(Duration::from_secs(2), async {
+        loop {
+            if let OutputMessage::Event(event) = f.events.recv().await.expect("first-hash event") {
+                let first_hash = matches!(event.event, MinerEvent::AuditFirstHash { .. });
+                after_commit.push(event);
+                if first_hash {
+                    break;
+                }
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let activated = after_commit
+        .iter()
+        .find(|e| matches!(e.event, MinerEvent::JobActivated { .. }))
+        .unwrap();
+    let hashed = after_commit
+        .iter()
+        .find(|e| matches!(e.event, MinerEvent::AuditFirstHash { .. }))
+        .unwrap();
+    assert!(committed.event_id < activated.event_id && activated.event_id < hashed.event_id);
+    if let Ok(output) = std::env::var("SPC_NATIVE_EVIDENCE_TEST_OUTPUT") {
+        use std::io::Write;
+        use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+        let output = std::path::PathBuf::from(output);
+        assert!(
+            output.starts_with("/tmp/opencode")
+                && output
+                    .components()
+                    .all(|c| !matches!(c, std::path::Component::ParentDir))
+        );
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&output)
+            .unwrap();
+        let observed = serde_json::json!({
+            "scope":"actual retention writer/protocol/hash-worker component with signed simulated wallet and fixture startup metadata; not controller/full-history acceptance",
+            "before_capture":before_capture,"committed":committed,"after_commit":after_commit,
+            "request_digest":handle.request_digest,"record_sha256":handle.record_sha256,
+            "wallet_pubkey":fixture_keys().wallet.to_string(),"collector_pubkey":fixture_keys().collector.to_string(),"pool_pubkey":fixture_keys().pool.to_string()
+        });
+        for (name, data) in [
+            ("record.json", bytes.clone()),
+            ("manifest.json", manifest.clone()),
+            ("handle.json", serde_json::to_vec(&handle).unwrap()),
+            ("locator.json", serde_json::to_vec(&info).unwrap()),
+            (
+                "observation.json",
+                serde_json::to_vec_pretty(&observed).unwrap(),
+            ),
+        ] {
+            let mut file = std::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .mode(0o600)
+                .open(output.join(name))
+                .unwrap();
+            file.write_all(&data).unwrap();
+            file.sync_all().unwrap();
+        }
+        std::fs::File::open(output).unwrap().sync_all().unwrap();
+    }
+    let repeated = store
+        .retain(
+            request_bytes.clone(),
+            response_bytes.clone(),
+            fixture_keys(),
+            record.verified_at_unix_ms,
+            Instant::now() + Duration::from_secs(1),
+            Arc::new(AtomicBool::new(true)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(handle, repeated);
+    assert_eq!(bytes, std::fs::read(&path).unwrap());
+    let mut different_wire_bytes = response_bytes.clone();
+    different_wire_bytes.push(b' ');
+    assert!(store
+        .retain(
+            request_bytes.clone(),
+            different_wire_bytes,
+            fixture_keys(),
+            record.verified_at_unix_ms,
+            Instant::now() + Duration::from_secs(1),
+            Arc::new(AtomicBool::new(true))
+        )
+        .await
+        .is_err());
+    let mut changed = bytes.clone();
+    changed[0] = b'[';
+    assert!(evidence::decode_record(&changed, &manifest, &handle, &fixture_keys()).is_err());
+    let mut foreign = handle.clone();
+    foreign.request_digest = "00".repeat(32);
+    assert!(evidence::decode_record(&bytes, &manifest, &foreign, &fixture_keys()).is_err());
+    f.stop().await;
+    // A missing record is not silently reconstructed from remembered success.
+    std::fs::remove_file(&path).unwrap();
+    assert!(store
+        .retain(
+            request_bytes,
+            response_bytes,
+            fixture_keys(),
+            record.verified_at_unix_ms,
+            Instant::now() + Duration::from_secs(1),
+            Arc::new(AtomicBool::new(true))
+        )
+        .await
+        .is_err());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retention_budget_and_permission_failure_leave_candidate_unknown() {
+    for failure_mode in 0..3 {
+        let permissions = failure_mode == 1;
+        let (_dir, store) = capture_fixture(if failure_mode == 2 { 16 } else { 1 });
+        let mut f =
+            Fixture::start_with_capture("failed-retention", false, Some(store.clone())).await;
+        if permissions {
+            let info = store.info();
+            std::fs::set_permissions(
+                info.directory.join(info.manifest_relative_path),
+                std::fs::Permissions::from_mode(0o644),
+            )
+            .unwrap();
+        } else {
+            f.activate().await;
+            if failure_mode == 2 {
+                store.exhaust_bytes_for_test();
+            }
+            f.job(2, false).await;
+        }
+        let pending = f.request().await;
+        pending.release.send(()).unwrap();
+        timeout(Duration::from_secs(2), async {
+            while f.snapshot.lock().unwrap().source_audit_state.as_deref() != Some("unknown") {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(f.snapshot.lock().unwrap().active_job.is_none());
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let attempts = f.attempts();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert_eq!(attempts, f.attempts());
+        if permissions {
+            assert_eq!(attempts, 0);
+        }
+        f.stop().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn blocked_retention_is_cancelled_on_supersession_and_stop_without_publication() {
+    let (_dir, store) = capture_fixture(16);
+    let delay = crate::evidence::TestDelay::new();
+    let _release = delay.guard();
+    store.delay_next(delay.clone());
+    let mut f = Fixture::start_with_capture("cancel-retention", false, Some(store.clone())).await;
+    let old = f.request().await;
+    old.release.send(()).unwrap();
+    timeout(Duration::from_secs(2), delay.entered.notified())
+        .await
+        .unwrap();
+    f.job(2, false).await;
+    let new = f.request().await;
+    assert!(new.request.candidate_epoch > old.request.candidate_epoch);
+    new.release.send(()).unwrap();
+    // New request can reach the wallet while old storage is genuinely blocked.
+    f.handle.as_ref().unwrap().request_stop();
+    assert_eq!(f.attempts(), 0);
+    delay.release();
+    f.stop().await;
+    assert_eq!(f.attempts(), 0);
+    while let Ok(OutputMessage::Event(event)) = f.events.try_recv() {
+        assert!(!matches!(
+            event.event,
+            MinerEvent::SourceAuditCommitted { .. }
+                | MinerEvent::JobActivated { .. }
+                | MinerEvent::AuditFirstHash { .. }
+        ));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn expired_blocking_retention_returns_no_durable_authority() {
+    let (_dir, store) = capture_fixture(16);
+    let delay = crate::evidence::TestDelay::new();
+    let _release = delay.guard();
+    store.delay_next(delay.clone());
+    let mut f = Fixture::start("retention-timeout", false).await;
+    let request = f.request().await;
+    let req = wire::encode_request(&request.request).unwrap();
+    let response = wire::encode_response(&approved(&request.request)).unwrap();
+    let deadline = Instant::now() + Duration::from_millis(100);
+    let captured = store.clone();
+    let task = tokio::spawn(async move {
+        captured
+            .retain(
+                req,
+                response,
+                fixture_keys(),
+                crate::native_gate::now_ms().unwrap(),
+                deadline,
+                Arc::new(AtomicBool::new(true)),
+            )
+            .await
+    });
+    timeout(Duration::from_secs(2), delay.entered.notified())
+        .await
+        .unwrap();
+    tokio::time::sleep_until((deadline + Duration::from_millis(10)).into()).await;
+    delay.release();
+    assert!(task.await.unwrap().is_err());
+    assert_eq!(f.attempts(), 0);
+    f.stop().await;
 }

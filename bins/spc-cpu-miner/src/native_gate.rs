@@ -54,6 +54,7 @@ impl ClockSample {
 pub(crate) struct VerifiedCandidate {
     proof: VerifiedActivation,
     verified_at: ClockSample,
+    durable: Option<spc_scan::native_evidence::DurableHandle>,
 }
 
 fn activation_deadline(
@@ -134,6 +135,8 @@ pub struct CandidateGate {
     pending: Option<JoinHandle<Result<VerifiedCandidate, &'static str>>>,
     active: Option<Arc<AuditPermit>>,
     retry_at: Option<Instant>,
+    capture: Option<Arc<crate::evidence::CaptureStore>>,
+    current: Option<Arc<AtomicBool>>,
 }
 impl CandidateGate {
     pub fn new(config: &ConnectionConfig) -> Self {
@@ -144,10 +147,19 @@ impl CandidateGate {
             pending: None,
             active: None,
             retry_at: None,
+            capture: None,
+            current: None,
         }
     }
     pub fn required(&self) -> bool {
         self.config.source_audit.required()
+    }
+    pub(crate) fn with_capture(
+        mut self,
+        capture: Option<Arc<crate::evidence::CaptureStore>>,
+    ) -> Self {
+        self.capture = capture;
+        self
     }
     pub fn invalidate(
         &mut self,
@@ -159,6 +171,9 @@ impl CandidateGate {
         }
         if let Some(task) = self.pending.take() {
             task.abort();
+        }
+        if let Some(current) = self.current.take() {
+            current.store(false, Ordering::SeqCst);
         }
         if let Some(permit) = self.active.take() {
             permit.revoke();
@@ -250,10 +265,16 @@ impl CandidateGate {
         }
         let task_request = request.clone();
         let config = self.config.source_audit.clone();
+        let capture = self.capture.clone();
+        let current = Arc::new(AtomicBool::new(true));
+        self.current = Some(current.clone());
         self.pending = Some(tokio::spawn(async move {
-            tokio::time::timeout_at(admission_deadline.into(), exchange(&config, &task_request))
-                .await
-                .unwrap_or(Err("native_gate_timeout"))
+            tokio::time::timeout_at(
+                admission_deadline.into(),
+                exchange(&config, &task_request, capture, admission_deadline, current),
+            )
+            .await
+            .unwrap_or(Err("native_gate_timeout"))
         }));
         self.candidate = Some(Candidate {
             request,
@@ -304,10 +325,25 @@ impl CandidateGate {
             let verified = result?;
             let proof = &verified.proof;
             let candidate = self.candidate.as_ref().ok_or("native_gate_superseded")?;
+            if !self
+                .current
+                .as_ref()
+                .is_some_and(|c| c.load(Ordering::SeqCst))
+            {
+                return Err("native_gate_superseded");
+            }
             if proof.candidate_epoch != self.epoch
                 || proof.request_digest != candidate.request.signing_digest()?
             {
                 return Err("native_gate_superseded");
+            }
+            let durable = verified.durable.clone();
+            if self.capture.is_some()
+                && durable
+                    .as_ref()
+                    .is_none_or(|h| h.request_digest != hex::encode(proof.request_digest))
+            {
+                return Err("native_evidence_required");
             }
             let permit = Arc::new(AuditPermit::new(verified, candidate.admission_deadline)?);
             let p = &permit.proof;
@@ -324,6 +360,7 @@ impl CandidateGate {
                 committed_digest: hex::encode(p.committed_digest),
                 expires_at_unix_ms: p.expires_at_unix_ms,
                 window: p.window,
+                durable_evidence: durable,
             }) || !events.try_emit(MinerEvent::JobActivated {
                 connection_id: self.config.id.clone(),
                 job: JobSnapshot::from(candidate.job.as_ref()),
@@ -376,6 +413,9 @@ impl CandidateGate {
 }
 impl Drop for CandidateGate {
     fn drop(&mut self) {
+        if let Some(current) = self.current.take() {
+            current.store(false, Ordering::SeqCst);
+        }
         if let Some(t) = self.pending.take() {
             t.abort();
         }
@@ -433,6 +473,9 @@ fn private_socket(config: &SourceAuditConfig) -> Result<(), &'static str> {
 async fn exchange(
     config: &SourceAuditConfig,
     request: &CandidateRequest,
+    capture: Option<Arc<crate::evidence::CaptureStore>>,
+    admission_deadline: Instant,
+    current: Arc<AtomicBool>,
 ) -> Result<VerifiedCandidate, &'static str> {
     private_socket(config)?;
     let SourceAuditConfig::Required {
@@ -460,13 +503,13 @@ async fn exchange(
         return Err("native_gate_peer");
     }
     private_socket(config)?;
-    let bytes = wire::encode_request(request)?;
+    let request_bytes = wire::encode_request(request)?;
     stream
-        .write_u32_le(bytes.len() as u32)
+        .write_u32_le(request_bytes.len() as u32)
         .await
         .map_err(|_| "native_gate_transport")?;
     stream
-        .write_all(&bytes)
+        .write_all(&request_bytes)
         .await
         .map_err(|_| "native_gate_transport")?;
     stream.flush().await.map_err(|_| "native_gate_transport")?;
@@ -490,7 +533,30 @@ async fn exchange(
         &keys,
         verified_at.wall_ms,
     )?;
-    Ok(VerifiedCandidate { proof, verified_at })
+    let deadline = admission_deadline.min(verified_at.deadline(proof.expires_at_unix_ms)?);
+    let durable = match capture {
+        Some(store) => Some(
+            store
+                .retain(
+                    request_bytes,
+                    bytes,
+                    keys,
+                    verified_at.wall_ms,
+                    deadline,
+                    current.clone(),
+                )
+                .await?,
+        ),
+        None => None,
+    };
+    if !current.load(Ordering::SeqCst) || Instant::now() >= deadline {
+        return Err("native_evidence_expired_or_cancelled");
+    }
+    Ok(VerifiedCandidate {
+        proof,
+        verified_at,
+        durable,
+    })
 }
 
 #[cfg(test)]
