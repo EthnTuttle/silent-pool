@@ -1,0 +1,60 @@
+{
+  "files": [
+    {
+      "bytes": 21575,
+      "executable": false,
+      "path": "Cargo.lock",
+      "sha256": "ac24ee3b09c7c2dd8731417672b9d7b072aa6e9e04127b9c96e8ad80ae842833"
+    },
+    {
+      "bytes": 431,
+      "executable": false,
+      "path": "Cargo.toml",
+      "sha256": "5819d847cbb25a665c65b6f231eba73e441810ba231d8b9907e9734ed919fe40"
+    },
+    {
+      "bytes": 5732,
+      "executable": false,
+      "path": "LOCK.md",
+      "sha256": "b51b3f125679aba6d5f1618f852b277a8939254c3c7c1eda653d0013001dfd6d"
+    },
+    {
+      "bytes": 12968,
+      "executable": false,
+      "path": "fixtures/stock-public.json",
+      "sha256": "ae2f24d0a91bb17d9a4e841cd08106b26fb664ca4ab1c17d313c592ba08b2091"
+    },
+    {
+      "bytes": 1931,
+      "executable": false,
+      "path": "freeze_stock_vectors.py",
+      "sha256": "a2263978ef4d78d098bdd366fefdfa16aa9830e9c299a25715763db40326e2e8"
+    },
+    {
+      "bytes": 3897,
+      "executable": false,
+      "path": "lock_seed.py",
+      "sha256": "436ccf8d2afe5ccee97f5936dd14fa4185ca71ef5efa722f6067b03ec3b384a5"
+    },
+    {
+      "bytes": 845,
+      "executable": false,
+      "path": "package.nix",
+      "sha256": "3624d02866b816c074e2079518bd169df5f5df6b3790227c05c1ac320e06f601"
+    },
+    {
+      "bytes": 3758,
+      "executable": false,
+      "path": "src/main.rs",
+      "sha256": "0479874d39eae99ce6508be915cac3838251c94bffaed631918412e097126f19"
+    },
+    {
+      "bytes": 7947,
+      "executable": false,
+      "path": "src/vectors.rs",
+      "sha256": "df9f101bf364d12b730d081dbc886623f2336bf8c5688cb3aa9c1e25a0f91bc4"
+    }
+  ],
+  "schema": "spc.qa.public-verifier-source-policy/1",
+  "scope": "same approved verifier source and binary; fresh build logs required"
+}

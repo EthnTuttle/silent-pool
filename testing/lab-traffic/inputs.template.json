@@ -1,0 +1,32 @@
+{
+  "schema": "spc-lab-funded-acceptance-inputs/1",
+  "base_revision": "b0ab4ca34fda07c61a6335d05f598eaacc69678c",
+  "source_snapshot_sha256": "REPLACE_WITH_ACTUAL_COMBINED_SOURCE_DIGEST",
+  "payout_policy": "design-fixed-ladder",
+  "path_env": "/usr/bin:/bin",
+  "binaries": {},
+  "definitive_rejection_binding": {
+    "source_sha256": "f1592c935e29b0b1fdf6429ad1b84e9ae925e9a9fcccd66b04f3d090680ff20f",
+    "binary_sha256": "bba4752298aff258adb6cce99c6db849b02f50736a8ec32766ed1710045051aa",
+    "consensus_fingerprint": "4634ab3e2ca66aa9d319b35d89131f7ad1fc48c3b315435652282fe9e20b79d3"
+  },
+  "probe_script": {"path": "REPLACE_WITH_CANONICAL_PROBE_SCRIPT", "sha256": "REPLACE_WITH_SHA256"},
+  "policy": {
+    "genesis": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+    "pow_limit_bits": 545259519,
+    "initial_target_bits": 537919487,
+    "regtest_pow_bits_overlay": 537919487,
+    "no_pow_retargeting": true,
+    "allow_min_difficulty_blocks": true,
+    "target_spacing": 600,
+    "target_timespan": 1209600,
+    "difficulty_adjustment_interval": 2016,
+    "enforce_bip94": false,
+    "retarget_floor_bits": null,
+    "subsidy_initial_sats": 5000000000,
+    "subsidy_halving_interval": 150,
+    "coinbase_maturity": 100
+  },
+  "consensus_field_map": {},
+  "consensus_source_facts": {}
+}
