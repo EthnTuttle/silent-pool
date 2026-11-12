@@ -406,14 +406,10 @@
               '';
               checkPhase = ''
                 runHook preCheck
-                # --release matches every other consumer of these suites
-                # (the assembler gate receipts, spc-lab-ark-tools' checkPhase
-                # and the committed gate-plan.json rust steps). The frozen
-                # wallet_control stall test asserts elapsed < 7s against the
-                # 5s READ_DEADLINE; debug-profile execution of step()'s
-                # durable control-dir writes does not fit that margin under
-                # parallel test load, so a debug-profile check fails a
-                # release-green suite.
+                # --release aligns this check with the production-artifact
+                # profile and committed gate plan. Historical debug timing
+                # failures are retained; their mechanism is unproven.
+                # See docs/reviews/2026-11-12-pool-wallet-stall-coverage.md.
                 cargo test --release -p spc-crypto --features ark --offline
                 cargo test --release -p spc-pool --features rpc,ark --offline
                 cargo test --release -p spc-agent --features ark --offline

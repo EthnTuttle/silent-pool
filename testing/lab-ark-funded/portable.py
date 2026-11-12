@@ -15,7 +15,8 @@ import subprocess
 import os
 
 from common import (artifact, check_bundle, encoded, fresh_root, load, require, sha,
-                    probe_invocation, POOL_CONTROL_R4_FILES, POOL_CONTROL_R4_REVIEW)
+                    probe_invocation, POOL_CONTROL_R4_FILES, POOL_CONTROL_R4_REVIEW,
+                    POOL_CONTROL_STALL_COVERAGE_REVIEW)
 from gate_inventory import rust_cases, node_cases
 from joined_checks import UI_FILES, cargo_command, validate_joined_features
 from portable_verifier import nix_source, descriptor as verifier_descriptor
@@ -288,8 +289,10 @@ def assemble(outputs_file, output):
                'source_snapshot_sha256': 'd00299c259aaa5e8098542f48f5c3c90c66737be3f965f5d65e5fd2a763914b2',
                'tested_code_snapshot_sha256': 'f764900419db45901f558c367b5485938ed1b20b5ee5abdc039e3b66c230ae0c',
                'same_auditor_review': ref(source / 'testing/lab-ark-funded/provenance/pool-control-r4-review.md'),
+               'stall_coverage_review': ref(source / 'docs/reviews/2026-11-12-pool-wallet-stall-coverage.md'),
                'files': pool, 'checks': [c for c in validation['checks'] if c['purpose'].startswith('pool-ark-')]}
     require(control['same_auditor_review']['sha256'] == POOL_CONTROL_R4_REVIEW['sha256']
+            and control['stall_coverage_review']['sha256'] == POOL_CONTROL_STALL_COVERAGE_REVIEW['sha256']
             and all(pool.get(n) == h for n, h in POOL_CONTROL_R4_FILES.items()), 'actual control source lacks approved R4 binding')
     write(root / 'pool-control-source-policy.json', control)
     aggregate = {n: files[n] for n in contract['aggregate_files']}

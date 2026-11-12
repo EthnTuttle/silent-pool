@@ -7,19 +7,30 @@ import unittest
 
 from common import Blocked, artifact, load, sha, verify_source, validate_pool_control_admission, check_bundle
 from joined_checks import UI_FILES, cargo_command, validate_joined_features
-from common import POOL_CONTROL_R4_FILES, POOL_CONTROL_R4_REVIEW
+from common import POOL_CONTROL_R4_FILES, POOL_CONTROL_R4_REVIEW, POOL_CONTROL_STALL_COVERAGE_REVIEW
 
 
 class JoinedChecks(unittest.TestCase):
     def test_r4_source_layer_requires_exact_review_code_and_approved_rows(self):
+        stall = Path(__file__).parents[2] / 'docs/reviews/2026-11-12-pool-wallet-stall-coverage.md'
         policy = {"source_snapshot_sha256": "d00299c259aaa5e8098542f48f5c3c90c66737be3f965f5d65e5fd2a763914b2",
                   "tested_code_snapshot_sha256": "f764900419db45901f558c367b5485938ed1b20b5ee5abdc039e3b66c230ae0c",
-                  "same_auditor_review": copy.deepcopy(POOL_CONTROL_R4_REVIEW), "files": dict(POOL_CONTROL_R4_FILES)}
+                  "same_auditor_review": copy.deepcopy(POOL_CONTROL_R4_REVIEW),
+                  "stall_coverage_review": {"path": str(stall.resolve()), "sha256": sha(stall)},
+                  "files": dict(POOL_CONTROL_R4_FILES)}
         # Layer eligibility only. Canonical bundle admission separately requires
         # actual code presence, all Nix rows/root, binaries and feature evidence.
         validate_pool_control_admission(policy)
         changed = copy.deepcopy(policy)
         changed["same_auditor_review"]["sha256"] = "00" * 32
+        with self.assertRaises(Blocked):
+            validate_pool_control_admission(changed)
+        changed = copy.deepcopy(policy)
+        changed["stall_coverage_review"]["sha256"] = "00" * 32
+        with self.assertRaises(Blocked):
+            validate_pool_control_admission(changed)
+        changed = copy.deepcopy(policy)
+        del changed["stall_coverage_review"]
         with self.assertRaises(Blocked):
             validate_pool_control_admission(changed)
         changed = copy.deepcopy(policy)

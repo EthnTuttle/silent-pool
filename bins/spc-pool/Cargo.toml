@@ -69,6 +69,10 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+# Stall-coverage tests use Tokio's controlled runtime clock (start_paused);
+# dev-only feature, no version/pin/lockfile change.
+# See docs/reviews/2026-11-12-pool-wallet-stall-coverage.md.
+tokio = { workspace = true, features = ["test-util"] }
 ark-lib = { version = "0.7.1", features = ["test-util"] }
 channels_sv2 = "8.0.0"
 proptest.workspace = true

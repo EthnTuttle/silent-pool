@@ -1398,6 +1398,33 @@ impl Controller {
         Ok(())
     }
 
+    /// One production queue iteration: preserve the operation guard through
+    /// outcome/fault persistence, then release it BEFORE cursor persistence.
+    /// The cursor callback is synchronous work in production, but its future
+    /// seam lets tests stop at this exact boundary without a wall-clock SLA.
+    async fn process_key_with_capacity<W, A, F>(
+        &self,
+        wallet: &W,
+        key: &str,
+        operation_lock: &tokio::sync::Mutex<()>,
+        advance: A,
+    ) where
+        W: WalletOwner,
+        A: FnOnce() -> F,
+        F: std::future::Future<Output = anyhow::Result<()>>,
+    {
+        {
+            let _owner = operation_lock.lock().await;
+            if self.process_key(wallet, key).await.is_err() {
+                let _ = self.fault(&format!("{key}.request"), "entry_unavailable", true);
+            }
+        }
+        if advance().await.is_err() {
+            tracing::warn!("queue cursor unavailable");
+        }
+        tokio::task::yield_now().await;
+    }
+
     pub async fn run<C, R>(
         self,
         wallet: StockOwner,
@@ -1435,20 +1462,13 @@ impl Controller {
             match self.next_keys() {
                 Ok(keys) => {
                     for key in keys {
-                        {
-                            let _owner = wallet.client.operation_lock.lock().await;
-                            if self.process_key(&wallet, &key).await.is_err() {
-                                let _ = self.fault(
-                                    &format!("{key}.request"),
-                                    "entry_unavailable",
-                                    true,
-                                );
-                            }
-                        }
-                        if self.advance(&key).is_err() {
-                            tracing::warn!("queue cursor unavailable");
-                        }
-                        tokio::task::yield_now().await;
+                        self.process_key_with_capacity(
+                            &wallet,
+                            &key,
+                            wallet.client.operation_lock.as_ref(),
+                            || std::future::ready(self.advance(&key)),
+                        )
+                        .await;
                     }
                 }
                 Err(_) => tracing::warn!("queue inventory unavailable; observations deferred"),
@@ -2444,6 +2464,23 @@ mod tests {
         board_refreshed: bool,
         stall_observation: bool,
         round_imports: Vec<RoundImportFacts>,
+        observation_probe: Option<Arc<ObservationProbe>>,
+    }
+
+    #[derive(Default)]
+    struct ObservationProbe {
+        entered: tokio::sync::Notify,
+        attempts: std::sync::atomic::AtomicUsize,
+        dropped: std::sync::atomic::AtomicBool,
+    }
+
+    struct ObservationDrop(Arc<ObservationProbe>);
+    impl Drop for ObservationDrop {
+        fn drop(&mut self) {
+            self.0
+                .dropped
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
     }
 
     struct Sim(Arc<Mutex<SimState>>);
@@ -2459,7 +2496,17 @@ mod tests {
             Ok(self.0.lock().unwrap().round_imports.clone())
         }
         async fn observe(&self) -> anyhow::Result<Observation> {
-            let stall = self.0.lock().unwrap().stall_observation;
+            let (stall, probe) = {
+                let state = self.0.lock().unwrap();
+                (state.stall_observation, state.observation_probe.clone())
+            };
+            let _drop = probe.as_ref().map(|probe| ObservationDrop(probe.clone()));
+            if let Some(probe) = &probe {
+                probe
+                    .attempts
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                probe.entered.notify_one();
+            }
             if stall {
                 std::future::pending::<()>().await;
             }
@@ -3480,33 +3527,179 @@ mod tests {
         assert_eq!(sim.0.lock().unwrap().prepares, 1);
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn stalled_read_releases_send_capacity_without_freshening_balances() {
-        let path = dir();
-        let c = Controller::open(&path).unwrap();
-        let sim = Sim::new();
-        sim.0.lock().unwrap().stall_observation = true;
-        let req = request("stalled-read", Action::Snapshot);
+    fn stalled_owner() -> (Arc<Sim>, Arc<ObservationProbe>) {
+        let owner = Arc::new(Sim::new());
+        let probe = Arc::new(ObservationProbe::default());
+        {
+            let mut state = owner.0.lock().unwrap();
+            state.stall_observation = true;
+            state.observation_probe = Some(probe.clone());
+        }
+        (owner, probe)
+    }
+
+    fn assert_unavailable_snapshot(c: &Controller, req: &Request, owner: &Sim) {
+        let record = result(c, req);
+        record.validate().unwrap();
+        assert_eq!(record.result.state, State::Rejected);
+        assert_eq!(
+            record.result.error_code.as_deref(),
+            Some("fresh_observation_unavailable")
+        );
+        assert!(record.result.onchain_trusted_sats.is_none());
+        assert!(record.result.float_spendable_sats.is_none());
+        assert!(record.result.observed_at_unix_ms.is_none());
+        assert!(record.result.observed_tip_height.is_none());
+        let state = owner.0.lock().unwrap();
+        assert_eq!(state.observations, 0);
+        assert_eq!(state.prepares, 0);
+        assert_eq!(state.starts, 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stalled_snapshot_obeys_read_deadline_and_persists_unavailable() {
+        use super::super::wallet_control_io::READ_DEADLINE;
+        use std::sync::atomic::Ordering::SeqCst;
+        assert_eq!(READ_DEADLINE, Duration::from_secs(5));
+        let c = Arc::new(Controller::open(&dir()).unwrap());
+        let (owner, probe) = stalled_owner();
+        let req = request("controlled-read-deadline", Action::Snapshot);
         enqueue(&c, &req);
-        let capacity = Arc::new(tokio::sync::Mutex::new(()));
-        let guard = capacity.lock().await;
-        let waiting = capacity.clone();
-        let sender = tokio::spawn(async move {
-            let _guard = waiting.lock().await;
-            true
+        let worker_controller = c.clone();
+        let worker_owner = owner.clone();
+        let key = req.key();
+        let start = tokio::time::Instant::now();
+        // This is the real process_key -> observe_read -> tokio::timeout path.
+        // Files remain durable; only the runtime's clock is controlled.
+        let worker = tokio::spawn(async move {
+            worker_controller
+                .process_key(worker_owner.as_ref(), &key)
+                .await
         });
-        let start = std::time::Instant::now();
-        c.step(&sim).await.unwrap();
-        drop(guard);
-        assert!(tokio::time::timeout(Duration::from_secs(1), sender)
+        tokio::time::timeout(Duration::from_secs(1), probe.entered.notified())
             .await
+            .expect("snapshot never entered its observation");
+        assert_eq!(probe.attempts.load(SeqCst), 1);
+        tokio::time::advance(READ_DEADLINE - Duration::from_millis(1)).await;
+        tokio::task::yield_now().await;
+        assert!(!worker.is_finished(), "read timed out before READ_DEADLINE");
+        assert!(!probe.dropped.load(SeqCst));
+        tokio::time::advance(Duration::from_millis(1)).await;
+        tokio::time::timeout(Duration::from_secs(1), worker)
+            .await
+            .expect("read deadline did not resolve")
             .unwrap()
-            .unwrap());
-        assert!(start.elapsed() < Duration::from_secs(7));
-        let result = result(&c, &req).result;
-        assert!(result.onchain_trusted_sats.is_none());
-        assert!(result.observed_at_unix_ms.is_none());
-        assert_eq!(sim.0.lock().unwrap().starts, 0);
+            .unwrap();
+        assert_eq!(tokio::time::Instant::now() - start, READ_DEADLINE);
+        assert!(
+            probe.dropped.load(SeqCst),
+            "timed-out observation was not dropped"
+        );
+        assert_eq!(probe.attempts.load(SeqCst), 1);
+        assert_unavailable_snapshot(&c, &req, &owner);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn production_key_span_releases_capacity_before_cursor_commit() {
+        use super::super::wallet_control_io::READ_DEADLINE;
+        use std::sync::atomic::Ordering::SeqCst;
+        let c = Arc::new(Controller::open(&dir()).unwrap());
+        let (owner, probe) = stalled_owner();
+        let req = request("production-read-capacity", Action::Snapshot);
+        enqueue(&c, &req);
+        // The production helper acquires this mutex, just as run passes the
+        // actual BarkWalletClient::operation_lock. The test never owns/drops
+        // the controller's guard itself.
+        let capacity = Arc::new(tokio::sync::Mutex::new(()));
+        let cursor_entered = Arc::new(tokio::sync::Notify::new());
+        let allow_cursor = Arc::new(tokio::sync::Notify::new());
+        let competing_operation_done = Arc::new(tokio::sync::Notify::new());
+        let worker_controller = c.clone();
+        let worker_owner = owner.clone();
+        let worker_capacity = capacity.clone();
+        let cursor_signal = cursor_entered.clone();
+        let cursor_release = allow_cursor.clone();
+        let capacity_observed = competing_operation_done.clone();
+        let key = req.key();
+        let worker = tokio::spawn(async move {
+            let cursor_controller = worker_controller.clone();
+            let cursor_capacity = worker_capacity.clone();
+            let cursor_key = key.clone();
+            worker_controller
+                .process_key_with_capacity(
+                    worker_owner.as_ref(),
+                    &key,
+                    worker_capacity.as_ref(),
+                    move || async move {
+                        // A fair Tokio mutex may reserve the released permit for
+                        // the queued waiter before that task is polled. Observe
+                        // its completion instead of mistaking that reservation
+                        // for the controller still holding the guard.
+                        tokio::time::timeout(Duration::from_secs(1), capacity_observed.notified())
+                            .await
+                            .expect("cursor reached before controller released capacity");
+                        // Moving guard release after cursor persistence must fail.
+                        assert!(
+                            cursor_capacity.try_lock().is_ok(),
+                            "cursor entered while operation guard held"
+                        );
+                        cursor_signal.notify_one();
+                        cursor_release.notified().await;
+                        cursor_controller.advance(&cursor_key)
+                    },
+                )
+                .await;
+        });
+        tokio::time::timeout(Duration::from_secs(1), probe.entered.notified())
+            .await
+            .expect("production helper never entered its observation");
+        assert!(
+            capacity.try_lock().is_err(),
+            "production helper did not acquire capacity"
+        );
+        let waiting = capacity.clone();
+        let waiting_controller = c.clone();
+        let waiting_owner = owner.clone();
+        let waiting_request = req.clone();
+        let waiter = tokio::spawn(async move {
+            {
+                let _permit = waiting.lock().await;
+                assert_unavailable_snapshot(&waiting_controller, &waiting_request, &waiting_owner);
+                assert!(!waiting_controller.dir.present("cursor.json").unwrap());
+            }
+            competing_operation_done.notify_one();
+        });
+        tokio::time::advance(READ_DEADLINE - Duration::from_millis(1)).await;
+        tokio::task::yield_now().await;
+        assert!(
+            !waiter.is_finished(),
+            "competing operation entered before read outcome"
+        );
+        assert!(!probe.dropped.load(SeqCst));
+        tokio::time::advance(Duration::from_millis(1)).await;
+        // This virtual-time watchdog detects a stuck/mis-scoped guard. It is
+        // not a new production latency limit on fsync or money operations.
+        tokio::time::timeout(Duration::from_secs(1), cursor_entered.notified())
+            .await
+            .expect("production helper did not reach the unlocked cursor boundary");
+        assert!(probe.dropped.load(SeqCst));
+        assert_unavailable_snapshot(&c, &req, &owner);
+        assert!(!c.dir.present("cursor.json").unwrap());
+        assert!(!worker.is_finished(), "cursor barrier was bypassed");
+        tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("send capacity unavailable before cursor commit")
+            .unwrap();
+        allow_cursor.notify_one();
+        tokio::time::timeout(Duration::from_secs(1), worker)
+            .await
+            .expect("cursor completion did not finish")
+            .unwrap();
+        assert_eq!(
+            c.dir.read::<String>("cursor.json").unwrap(),
+            Some(req.key())
+        );
+        assert_eq!(probe.attempts.load(SeqCst), 1);
     }
 
     #[test]

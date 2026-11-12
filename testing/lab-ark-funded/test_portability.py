@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from common import (Blocked, POOL_CONTROL_R4_FILES, POOL_CONTROL_R4_REVIEW,
+                    POOL_CONTROL_STALL_COVERAGE_REVIEW,
                     sha, validate_pool_control_admission)
 from portable import (CAPABILITIES, CAPABILITY_PURPOSES, PURPOSES, VERIFIER_STATIC, check_contract, check_lineage,
                       committed_rows, validate_plan)
@@ -94,12 +95,16 @@ for row in manifest['files']:
     def test_public_R4_review_relocates_but_changed_bytes_reject(self):
         original = HERE / 'provenance/pool-control-r4-review.md'
         self.assertEqual(sha(original), POOL_CONTROL_R4_REVIEW['sha256'])
+        stall_review = HERE.parents[1] / 'docs/reviews/2026-11-12-pool-wallet-stall-coverage.md'
+        self.assertEqual(sha(stall_review), POOL_CONTROL_STALL_COVERAGE_REVIEW['sha256'])
         with tempfile.TemporaryDirectory(prefix='ap5-portable-') as tmp:
             target = Path(tmp) / 'public-review.md';shutil.copyfile(original, target)
+            stall_target = Path(tmp) / 'stall-review.md';shutil.copyfile(stall_review, stall_target)
             policy = {'source_snapshot_sha256': 'd00299c259aaa5e8098542f48f5c3c90c66737be3f965f5d65e5fd2a763914b2',
                       'tested_code_snapshot_sha256': 'f764900419db45901f558c367b5485938ed1b20b5ee5abdc039e3b66c230ae0c',
                       'files': dict(POOL_CONTROL_R4_FILES),
-                      'same_auditor_review': {'path': str(target), 'sha256': sha(target)}}
+                      'same_auditor_review': {'path': str(target), 'sha256': sha(target)},
+                      'stall_coverage_review': {'path': str(stall_target), 'sha256': sha(stall_target)}}
             validate_pool_control_admission(policy)
             target.write_text('substituted review')
             with self.assertRaises(Blocked):validate_pool_control_admission(policy)
