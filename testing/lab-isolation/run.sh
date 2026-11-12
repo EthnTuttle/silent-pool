@@ -27,9 +27,11 @@
 # no-bypass assertions are `inconclusive` there.
 #
 # Usage: testing/lab-isolation/run.sh [--artifacts DIR] [--backend auto|netns|relay]
-# Artifacts default to /tmp/opencode/LP4a-<utc>-<rand>.
+# Artifacts default to a fresh private directory under
+# ${SPC_LAB_RUN_ROOT:-${XDG_RUNTIME_DIR:-/tmp}/spc-lab}.
 # Exit code: 0 when every test passed, 1 otherwise, 2 when no backend applies.
 set -uo pipefail
+umask 077
 
 TEST_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "$TEST_DIR/../.." && pwd)
@@ -49,7 +51,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 if [ -z "$ART" ]; then
-    ART="/tmp/opencode/LP4a-$(date -u +%Y%m%dT%H%M%SZ)-$(od -An -tx1 -N3 /dev/urandom | tr -d ' \n')"
+    ART="${SPC_LAB_RUN_ROOT:-${XDG_RUNTIME_DIR:-/tmp}/spc-lab}/LP4a-$(date -u +%Y%m%dT%H%M%SZ)-$(od -An -tx1 -N3 /dev/urandom | tr -d ' \n')"
 fi
 mkdir -p "$ART"
 RUN_DIR="$ART/run"

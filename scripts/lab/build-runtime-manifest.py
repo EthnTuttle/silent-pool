@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """Build the annotated LP-runtime review manifest.
 
+Historical review-session tool: the INPUTS below are local packet
+archives from the 2026-11 lab review campaigns, not fresh-setup
+preconditions and not part of the lab runtime. Reproducing a review
+manifest requires those preserved archives; building or running the lab
+never invokes this script.
+
 The full aggregate covers every reviewed file. `code_snapshot_sha256` is the
 same computation with mutable run-report files excluded; freeze that hash
 before building/running the proof, then add the report afterwards. Input

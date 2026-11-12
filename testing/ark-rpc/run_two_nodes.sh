@@ -21,8 +21,8 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-OLD_BIN="${OLD_BIN:-/tmp/opencode/rbitcoin-lab-retarget-profile/target/debug/rbitcoin-node}"
-NEW_BIN="${NEW_BIN:-/tmp/opencode/rbitcoin-v0.9-lab/target/dev/debug/rbitcoin-node}"
+OLD_BIN="${OLD_BIN:-}"
+NEW_BIN="${NEW_BIN:-}"
 R2_DIR_L2="2026-11-08-r2-l2-eb257af7"
 R2_DIR_V09="2026-11-08-r2-v09lab-bcb6d5ee"
 
@@ -41,8 +41,8 @@ fi
 DEVRECEIPT=""
 if [ "${SKIP_DEVCHECK:-0}" != "1" ]; then
     echo "==> devcheck gate (golden vectors vs the pinned crate types)"
-    DEVLOG="$(mktemp /tmp/opencode/AP1a-devcheck-log.XXXXXX)"
-    DEVRECEIPT="$(mktemp /tmp/opencode/AP1a-devcheck-receipt.XXXXXX.json)"
+    DEVLOG="$(mktemp "${TMPDIR:-/tmp}/spc-lab-devcheck-log.XXXXXX")"
+    DEVRECEIPT="$(mktemp "${TMPDIR:-/tmp}/spc-lab-devcheck-receipt.XXXXXX.json")"
     set +e
     (cd "$HERE/devcheck" && ./run.sh) >"$DEVLOG" 2>&1
     DEVEXIT=$?

@@ -7,6 +7,13 @@ provider is used. This is component evidence, not full funded lab acceptance.
 import argparse,base64,hashlib,importlib.util,json,os,pathlib,secrets,socket,subprocess,time,urllib.request
 
 ROOT=pathlib.Path(__file__).resolve().parents[1]
+# Historical local postgres instance (the ladder-completion campaign); a
+# fresh machine points SPC_LAB_PG_SOCKET/PORT/USER at its own provisioned
+# cluster. Portable pg provisioning is tracked as remaining work; these
+# defaults are labelled local archive, not fresh-setup preconditions.
+PG_SOCK=os.environ.get('SPC_LAB_PG_SOCKET','/tmp/opencode/ladder-completion-pg-r1/socket')
+PG_PORT=os.environ.get('SPC_LAB_PG_PORT','55479')
+PG_USER=os.environ.get('SPC_LAB_PG_USER','ethan')
 def write(path,value):
     path.write_text(json.dumps(value,indent=2)+'\n' if not isinstance(value,str) else value);path.chmod(0o600)
 def port():
@@ -56,8 +63,9 @@ def main():
         wait(lambda:rpc('getblockchaininfo'));assert rpc('getblockcount')==0
         start('redis',[redis,'--bind','127.0.0.1','--port',str(ports['redis']),'--requirepass',password,'--save','','--appendonly','no','--dir',str(private)])
         db='ladder_native_'+secrets.token_hex(4)
-        subprocess.run([pg+'/createdb','-h','/tmp/opencode/ladder-completion-pg-r1/socket','-p','55479',db],check=True)
-        pgurl=f'postgresql://ethan@localhost/{db}?host=/tmp/opencode/ladder-completion-pg-r1/socket&port=55479'
+        pgsock,pgport,pguser=PG_SOCK,PG_PORT,PG_USER
+        subprocess.run([pg+'/createdb','-h',pgsock,'-p',pgport,db],check=True)
+        pgurl=f'postgresql://{pguser}@localhost/{db}?host={pgsock}&port={pgport}'
         identity=json.loads(subprocess.check_output([binaries['spc-scan']['path'],'gen-address','--network','regtest']))
         authority=json.loads(subprocess.check_output([binaries['spc-scan']['path'],'gen-address','--network','regtest']))
         write(private/'identity.json',identity)
@@ -121,7 +129,7 @@ workers=[{{id="native-0",budget={{hashes_per_second=3,total_attempts=200}},ntime
         tip=rpc('getblockcount');height=tip-6;blockhash=rpc('getblockhash',[height])
         def settlement():
             query=f"SELECT jsonb_build_object('status',bf.status,'height',bf.height,'window_target',ds.window_target::text,'work_unit_version',ds.work_unit_version,'window_rule',ds.window_rule,'high_water',ds.high_water,'logical_entries',jsonb_array_length(ds.entries),'key_count',jsonb_array_length(ds.entries->0->'p_x'),'owed_sats',ds.entries->0->'owed_sats','entry_sats',ds.entries->0->'sats','ledger_rows',(SELECT count(*) FROM ledger_history lh WHERE lh.block_hash=bf.block_hash),'paid_sats',(SELECT sum(paid_sats) FROM ledger_history lh WHERE lh.block_hash=bf.block_hash)) FROM block_found bf JOIN distribution_snapshot ds ON ds.fingerprint=bf.fingerprint WHERE bf.height={height} AND bf.status='confirmed'"
-            output=subprocess.check_output([pg+'/psql','-h','/tmp/opencode/ladder-completion-pg-r1/socket','-p','55479','-d',db,'-Atq','-c',query],text=True).strip()
+            output=subprocess.check_output([pg+'/psql','-h',PG_SOCK,'-p',PG_PORT,'-d',db,'-Atq','-c',query],text=True).strip()
             return json.loads(output) if output else None
         booked=wait(settlement,60)
         assert booked['logical_entries']==1 and booked['key_count']==990 and booked['ledger_rows']==1

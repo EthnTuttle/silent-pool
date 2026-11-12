@@ -149,7 +149,7 @@ cmd_up() {
     [ -n "$SPEC" ] || fail_usage "up needs --spec"
     [ -f "$SPEC" ] || fail_usage "spec file not found: $SPEC"
     if [ -z "$RUN_DIR" ]; then
-        RUN_DIR="/tmp/opencode/LP4a-$(date -u +%Y%m%dT%H%M%SZ)-$(lab_run_token)"
+        RUN_DIR="${SPC_LAB_RUN_ROOT:-${XDG_RUNTIME_DIR:-/tmp}/spc-lab}/LP4a-$(date -u +%Y%m%dT%H%M%SZ)-$(lab_run_token)"
     fi
     mkdir -p -m 0700 "$RUN_DIR" || fail_usage "cannot create run directory: $RUN_DIR"
     chmod 0700 "$RUN_DIR"

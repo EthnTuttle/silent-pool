@@ -6,15 +6,16 @@
 # tests; excluded from the packet manifest hash.
 #
 # Requirements:
-#   - BARK_CHECKOUT: the pinned bark checkout (default
-#     /tmp/opencode/bark-c419159, commit c419159). The path in
-#     Cargo.toml must point at its REAL location (see README.md).
+#   - BARK_CHECKOUT: the pinned bark checkout (required; commit
+#     c419159 per UPSTREAM_DEPS.md - clone it at that exact SHA). The
+#     path in Cargo.toml must point at its REAL location (see
+#     README.md).
 #   - a cargo registry cache with the pinned crates (offline build).
 
 set -eu
 
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-BARK_CHECKOUT="${BARK_CHECKOUT:-/tmp/opencode/bark-c419159}"
+BARK_CHECKOUT="${BARK_CHECKOUT:-}"
 EXPECT_REV="c419159fa54085572f8ca72d2ba1716556a9d3eb"
 
 if [ ! -d "$BARK_CHECKOUT/bitcoin-ext" ]; then

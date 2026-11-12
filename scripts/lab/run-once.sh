@@ -11,8 +11,8 @@ RUN_DIR=""
 DURATION=""
 KEEP=""
 HEADLESS=0
-RUN_ROOT="${SPC_LAB_RUN_ROOT:-/tmp/opencode/LP3-runs}"
-LOG="${SPC_LAB_LOG:-/tmp/opencode/LP3-run-once.log}"
+RUN_ROOT="${SPC_LAB_RUN_ROOT:-${XDG_RUNTIME_DIR:-/tmp}/spc-lab/runs}"
+LOG="${SPC_LAB_LOG:-$RUN_ROOT/run-once.log}"
 
 usage() {
   cat <<'USAGE'

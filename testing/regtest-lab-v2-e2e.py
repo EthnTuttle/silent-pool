@@ -2682,7 +2682,7 @@ class SelfTests(unittest.TestCase):
              ["646656a84cbb5001f96559d98511499eaba35501d93038dc9560cd787bc764ff"]),
         ]
         for filename, approved, rejected in rows:
-            path = Path("/home/ethan/code/silent-pool/docs/reviews") / filename
+            path = SCRIPT_DIR.parent / "docs" / "reviews" / filename
             if not path.exists():
                 continue
             text = path.read_text()
@@ -2713,7 +2713,11 @@ class SelfTests(unittest.TestCase):
         self.assertNotEqual(miner_job_number("12345678"), pool_job_number("12345678"))
 
     def test_canonical_evidence_join_and_nonuniform_intervals(self):
-        source = Path("/tmp/opencode/LP-live-retarget-run6/private")
+        # Historical local archive (the 2026-11-08 retarget campaign run);
+        # not a fresh-setup precondition - the test skips when absent.
+        source = Path(os.environ.get(
+            "SPC_LAB_RETARGET_EVIDENCE_ROOT",
+            "/tmp/opencode/LP-live-retarget-run6/private"))
         if not (source / "retarget-evidence.json").exists():
             self.skipTest("frozen retarget artifact not present")
         evidence = load_json(source / "retarget-evidence.json")
@@ -2725,7 +2729,7 @@ class SelfTests(unittest.TestCase):
         unknown = dict(original_api[0])
         unknown["params"] = '["' + "00" * 80 + '"]'
         fixture_rows = original_api + [duplicate, rejected, unknown]
-        with tempfile.TemporaryDirectory(dir="/tmp/opencode") as temporary:
+        with tempfile.TemporaryDirectory() as temporary:
             private = Path(temporary) / "private"
             private.mkdir()
             for name in ["observations.jsonl", "node.log"]:
@@ -2772,7 +2776,7 @@ class SelfTests(unittest.TestCase):
     def test_scenario_strictness_and_permissions(self):
         baseline = Scenario.load(SCRIPT_DIR / "lab-live" / "baseline.json")
         self.assertEqual(baseline.raw["confirmation_depth"], 6)
-        with tempfile.TemporaryDirectory(dir="/tmp/opencode") as temporary:
+        with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "scenario.json"
             atomic_write(path, baseline.raw)
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
@@ -2797,7 +2801,7 @@ class SelfTests(unittest.TestCase):
         port = allocator.reserve("first", 0)
         with self.assertRaises(LabError):
             allocator.reserve("second", port)
-        with tempfile.TemporaryDirectory(dir="/tmp/opencode") as temporary:
+        with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             atomic_write(root / "member", b"abc")
             manifest = {"base": "00" * 20, "files": [{"path": "member", "sha256": sha256_file(root / "member")}]}
@@ -2811,7 +2815,7 @@ class SelfTests(unittest.TestCase):
 
     def test_owned_graceful_forced_and_foreign_cleanup(self):
         code = "import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); print('ready',flush=True); time.sleep(60)"
-        with tempfile.TemporaryDirectory(dir="/tmp/opencode") as temporary:
+        with tempfile.TemporaryDirectory() as temporary:
             manager = ProcessManager(Path(temporary), uuid.uuid4().hex)
             try:
                 log = Path(temporary) / "child.log"
@@ -2836,7 +2840,7 @@ class SelfTests(unittest.TestCase):
         run.secrets = ["very-secret"]
         redacted = run.redacted_error(LabError("x", "do not print very-secret"))
         self.assertNotIn("very-secret", json.dumps(redacted))
-        with tempfile.TemporaryDirectory(dir="/tmp/opencode") as temporary:
+        with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "pool.log"
             atomic_write(path, '2026 INFO spc_evidence: event=accounted evidence={"share_hash":"aa","generation":"2"}\n')
             tail = PoolEvidenceTail(path)

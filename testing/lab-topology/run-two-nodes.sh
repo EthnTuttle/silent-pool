@@ -21,7 +21,7 @@ REPO_ROOT=$(cd "$TEST_DIR/../.." && pwd)
 LAB_DIR="$REPO_ROOT/scripts/lab"
 
 ART=""
-NODE_BIN="${SPC_LAB_RBITCOIN_NODE:-/tmp/opencode/rbitcoin-lab-retarget-profile/target/debug/rbitcoin-node}"
+NODE_BIN="${SPC_LAB_RBITCOIN_NODE:-}"
 while [ $# -gt 0 ]; do
     case "$1" in
         --artifacts) ART="$2"; shift 2 ;;
@@ -32,7 +32,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 if [ -z "$ART" ]; then
-    ART="/tmp/opencode/LP-topology-$(date -u +%Y%m%dT%H%M%SZ)-$(od -An -tx1 -N3 /dev/urandom | tr -d ' \n')"
+    ART="${SPC_LAB_RUN_ROOT:-${XDG_RUNTIME_DIR:-/tmp}/spc-lab}/LP-topology-$(date -u +%Y%m%dT%H%M%SZ)-$(od -An -tx1 -N3 /dev/urandom | tr -d ' \n')"
 fi
 mkdir -p "$ART"
 
@@ -44,7 +44,7 @@ P2P_PORT=18444
 say() { printf '[topology] %s\n' "$*"; }
 fail() { printf '[topology] FAIL %s\n' "$*" >&2; exit 1; }
 
-[ -x "$NODE_BIN" ] || fail "the node binary is missing: $NODE_BIN"
+[ -x "$NODE_BIN" ] || fail "node binary not set: pass --node or set SPC_LAB_RBITCOIN_NODE to a rbitcoin-node built from the pinned source (see UPSTREAM_DEPS.md); got '$NODE_BIN'"
 command -v nsenter >/dev/null || fail "nsenter is missing"
 command -v python3 >/dev/null || fail "python3 is missing"
 
