@@ -1,38 +1,20 @@
 // Actual native CPU / wallet-service joint component test. Source history and
 // wallet startup metadata are explicit fixtures, not funded acceptance.
+#[path = "joint_artifact.rs"]
+mod joint_artifact;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "explicit sealed native CPU binary and output receipt required"]
 async fn sealed_native_cpu_waits_for_actual_wallet_collector_commit_before_first_hash() {
-    use bitcoin::hashes::{sha256, Hash, HashEngine};
     // Supplied by the retention owner's exact shared DTO module (017fa69f...).
     // The primary union must include that module; no wallet production change.
     use spc_scan::native_evidence as evidence;
-    use std::io::Read;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    let output =
-        PathBuf::from(std::env::var("SPC_NATIVE_JOINT_RECEIPT").expect("fresh receipt output"));
-    assert!(output.is_absolute() && output.starts_with("/tmp/opencode") && !output.exists());
-    let artifact_root = output.with_extension("capture");
-    assert!(
-        !artifact_root.exists(),
-        "retention artifacts must use a fresh directory"
-    );
-    let binary = PathBuf::from(std::env::var("SPC_NATIVE_CPU_BIN").expect("sealed CPU path"));
-    let mut hash = sha256::Hash::engine();
-    let mut file = std::fs::File::open(&binary).unwrap();
-    let mut chunk = [0u8; 65536];
-    loop {
-        let n = file.read(&mut chunk).unwrap();
-        if n == 0 {
-            break;
-        }
-        hash.input(&chunk[..n]);
-    }
-    let binary_hash = sha256::Hash::from_engine(hash).to_string();
-    assert_eq!(
-        binary_hash,
-        "fbef4e1c02a8f722705b75dc6a17d79793fc7e73d77cfa06aba250e983c7e5ea"
-    );
+    let artifact = joint_artifact::load().expect("verified same-source Nix CPU artifact required");
+    let binary = artifact.binary_path.clone();
+    let binary_hash = artifact.binary_sha256.clone();
+    let results = joint_results_directory();
+    let output = results.path().join("receipt.json");
+    let artifact_root = results.path().join("capture");
     let mut f = Fixture::new().await;
     let context = f.runtime.context.clone();
     // Same fully verified empty-history fixture, now delivered to the actual
@@ -528,7 +510,7 @@ async fn sealed_native_cpu_waits_for_actual_wallet_collector_commit_before_first
             &io::private_read(&run_manifest, context.instance.process.uid).unwrap(),
         );
         let receipt = serde_json::json!({"scope":"actual sealed retention-enabled native CPU + actual typed wallet service; fixture wallet startup metadata and independent-key synthetic empty-history collector; not actual controller/full-history/funded acceptance or separate N1/N2 coverage",
-            "native_binary_sha256":binary_hash,"wallet_source_code":std::env::var("SPC_WALLET_TEST_SOURCE").ok(),
+            "native_binary_sha256":binary_hash,"build_artifact":artifact,
             "startup_snapshot":startup,"capture_config":capture,"capture_locator":locator,"capture_manifest":manifest,
             "capture_manifest_sha256":manifest_hash,"retained_handle":handle,"retained_record_sha256":evidence::sha256_hex(&record_bytes),
             "request_sha256":record.request_sha256,"response_sha256":record.response_sha256,
@@ -540,6 +522,27 @@ async fn sealed_native_cpu_waits_for_actual_wallet_collector_commit_before_first
     collecting.await.unwrap();
     f.runtime.stop().await.unwrap();
     listener.abort();
+    // Keep the receipt and exact retained bytes for the Nix check's install hook.
+    eprintln!("native joint results: {}", results.keep().display());
+}
+
+fn joint_results_directory() -> tempfile::TempDir {
+    use std::os::unix::fs::MetadataExt;
+    let parent = std::env::var_os("SPC_NATIVE_JOINT_RESULTS").map(PathBuf::from);
+    let mut builder = tempfile::Builder::new();
+    builder
+        .prefix("native-joint-")
+        .permissions(std::fs::Permissions::from_mode(0o700));
+    if let Some(parent) = parent {
+        assert!(parent.is_absolute());
+        assert_eq!(parent.canonicalize().unwrap(), parent);
+        let meta = std::fs::symlink_metadata(&parent).unwrap();
+        assert!(meta.is_dir() && meta.mode() & 0o777 == 0o700);
+        assert_eq!(meta.uid(), rustix::process::getuid().as_raw());
+        builder.tempdir_in(parent).unwrap()
+    } else {
+        builder.tempdir().unwrap()
+    }
 }
 
 fn joint_capture_file(root: &Path, relative: &str, bound: usize, uid: u32) -> Vec<u8> {

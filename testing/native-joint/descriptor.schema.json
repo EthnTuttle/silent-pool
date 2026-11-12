@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Build-generated same-source native joint artifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "kind", "binary_path", "binary_sha256", "binary_bytes", "source_id", "source_path", "source_nar_sha256", "derivation_path", "derivation_sha256", "output_path"],
+  "properties": {
+    "schema": {"const": "spc.native-joint-artifact/1"},
+    "kind": {"const": "same-source-nix"},
+    "binary_path": {"type": "string", "pattern": "^/nix/store/[0-9abcdfghijklmnpqrsvwxyz]{32}-[A-Za-z0-9+._?=-]+/bin/spc-cpu-miner$"},
+    "binary_sha256": {"$ref": "#/$defs/sha256"},
+    "binary_bytes": {"type": "integer", "minimum": 1, "maximum": 1073741824},
+    "source_id": {"type": "string", "pattern": "^(git:[0-9a-f]{40}|nix-snapshot)$"},
+    "source_path": {"$ref": "#/$defs/storePath"},
+    "source_nar_sha256": {"$ref": "#/$defs/sha256"},
+    "derivation_path": {"type": "string", "pattern": "^/nix/store/[0-9abcdfghijklmnpqrsvwxyz]{32}-[A-Za-z0-9+._?=-]+\\.drv$"},
+    "derivation_sha256": {"$ref": "#/$defs/sha256"},
+    "output_path": {"$ref": "#/$defs/storePath"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "storePath": {"type": "string", "pattern": "^/nix/store/[0-9abcdfghijklmnpqrsvwxyz]{32}-[A-Za-z0-9+._?=-]+$"}
+  }
+}

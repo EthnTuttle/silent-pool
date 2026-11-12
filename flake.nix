@@ -35,6 +35,11 @@
           inherit src;
           rustc = rust;
           cargo = rust;
+          # Same-source binding for the wallet-native-joint check: set from
+          # the flake itself, never a shell variable. A clean git checkout
+          # claims its commit; a dirty-tree snapshot stays "nix-snapshot" and
+          # carries its true NAR/path binding instead of a commit claim.
+          SPC_BUILD_SOURCE_ID = if self ? rev then "git:${self.rev}" else "nix-snapshot";
           # bark-server-rpc's build script generates protobuf code and
           # needs a `protoc` on PATH.
           PROTOC = "${pkgs.protobuf}/bin/protoc";
@@ -154,18 +159,70 @@
             node --test bins/spc-lab/tests/*.test.cjs > $out
           '';
 
-          test-ark = pkgs.rustPlatform.buildRustPackage (common // {
-            pname = "spc-ark-feature-tests";
-            version = "0.1.0";
-            doCheck = true;
-            checkPhase = ''
-              runHook preCheck
-              cargo test -p spc-crypto --features ark --offline
-              cargo test -p spc-pool --features rpc,ark --offline
-              cargo test -p spc-agent --features ark --offline
-              runHook postCheck
-            '';
-          });
+          # Same-source native CPU / wallet joint component check. The hook
+          # builds the CPU from this exact filtered source, generates the
+          # immutable artifact descriptor from the real derivation, and
+          # compiles the anchors into the wallet test before Cargo compiles
+          # the test binary. No historical binary, archive or fixed temporary
+          # path is an input; only SPC_NATIVE_JOINT_RESULTS is runtime-set.
+          wallet-native-joint =
+            let
+              joint = import ./nix/checks/wallet-native-joint.nix {
+                inherit pkgs common;
+                cpu = self.packages.${system}.spc-cpu-miner;
+              };
+            in pkgs.rustPlatform.buildRustPackage (common // {
+              pname = "wallet-native-joint";
+              version = "0.1.0";
+              doCheck = true;
+              inherit (joint) preBuild preCheck;
+              buildPhase = ''
+                runHook preBuild
+                cargo test --offline --locked -p spc-agent --features ark --lib --no-run
+                runHook postBuild
+              '';
+              checkPhase = ''
+                runHook preCheck
+                ${pkgs.python3}/bin/python3 -B testing/native-joint/test_artifact.py
+                cargo test --offline --locked -p spc-agent --features ark --lib \
+                  wallet::native_audit::tests::joint_artifact::tests::
+                cargo test --offline --locked -p spc-agent --features ark --lib \
+                  wallet::native_audit::tests::sealed_native_cpu_waits_for_actual_wallet_collector_commit_before_first_hash \
+                  -- --exact --nocapture
+                runHook postCheck
+              '';
+              installPhase = joint.installResults;
+            });
+
+          # Normal ark feature tests: the joint test's ignore marker is
+          # removed, so every derivation that compiles spc-agent ark lib
+          # tests must carry the same anchors (compile-time) and a fresh
+          # results directory (runtime), and preserve the receipt on install.
+          test-ark =
+            let
+              joint = import ./nix/checks/wallet-native-joint.nix {
+                inherit pkgs common;
+                cpu = self.packages.${system}.spc-cpu-miner;
+              };
+            in pkgs.rustPlatform.buildRustPackage (common // {
+              pname = "spc-ark-feature-tests";
+              version = "0.1.0";
+              doCheck = true;
+              inherit (joint) preBuild preCheck;
+              installPhase = ''
+                runHook preInstall
+                mkdir -p "$out"
+                ${joint.installResults}
+                runHook postInstall
+              '';
+              checkPhase = ''
+                runHook preCheck
+                cargo test -p spc-crypto --features ark --offline
+                cargo test -p spc-pool --features rpc,ark --offline
+                cargo test -p spc-agent --features ark --offline
+                runHook postCheck
+              '';
+            });
         };
 
         devShells.default = pkgs.mkShell ({
