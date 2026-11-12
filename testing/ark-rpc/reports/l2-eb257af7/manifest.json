@@ -1,0 +1,105 @@
+{
+  "manifest_version": 1,
+  "generated_utc": "2026-11-08T05:19:29Z",
+  "run_token": "AP1a-58e665e4c9d9",
+  "probe": "ap1a-ark-rpc-probe",
+  "probe_version": "1.0.0",
+  "contract_hash": "48894548fc322b2b54da4d2e30c4ca9c8eadb20c72e7607ca86e7a8b12a3a4b7",
+  "base_commit": "b0ab4ca34fda07c61a6335d05f598eaacc69678c",
+  "base_commit_note": "worktree HEAD at probe time; the probe files themselves are uncommitted changes in this packet, hashed below",
+  "freeze_recipe": {
+    "description": "sha256 of every source file under testing/ark-rpc at probe time (reports/, __pycache__ and caches excluded). To reproduce: re-run the probe from a tree whose file hashes match this map and the same pinned node binary.",
+    "files": {
+      ".gitignore": "862263fa1f46c20f0d1e4dac5ffcc75abd55c08211b2c3864c5f8764b9d87793",
+      "README.md": "12de105a52bb13b8ae8760252090f3b97e046b81b07c9af38797e4248ba8d3b8",
+      "arkrpc/__init__.py": "f1eb4050ffa8b21124df93d2b6cf2839b7f1118eb3c216a43285ddeb24587cce",
+      "arkrpc/cli.py": "50b589d39e1d5f187bfa98b356d4873751ca45967c7b602160c6dcdb3a426c0e",
+      "arkrpc/client.py": "bd465db1a4cda2b008e59dab0ddc3be3d44c85f0b733682aa51cf793cf92ac23",
+      "arkrpc/contracts.py": "dc408d76781188262db4fc1f4eec508ea9985163c353c25a8b10d66d95fa5936",
+      "arkrpc/nodeproc.py": "eb6b15b52d3c6f5ddc9dfe923318886484057e28bbd4c67c7c3e86f17f4dc52e",
+      "arkrpc/probe.py": "04a62e448d9d15aa766e5b221673f26818a143aeb53547608188636c211b6acf",
+      "arkrpc/reporting.py": "2edea955016272debd7c7dfae8add1c56c287a8acae51f3f556e752a31352cc6",
+      "arkrpc/schemadef.py": "5ca8de7c3e23add2de1fc7b66a98a5a3931e5826949e4cdbe18509041b611b05",
+      "arkrpc/selftest.py": "790b8bc3344f4e99cf45b90b1d88054df84560a22d5df8cd7adf53db71dd1823",
+      "fixtures/base_responses.json": "526f64c5a418ca69ff575d88c8135281c36f30a0ddaa05ed94a90ce668ab951c",
+      "fixtures/scenarios/auth_fail.json": "3f32b846b0cdfe2fc2f8a8dd25ef99dee736863729610432b338e6b1981a39b5",
+      "fixtures/scenarios/baseline_190000.json": "d15496377d9306ad2eefc82e88312b5b8a981484cc3c786309358c0183bce9b7",
+      "fixtures/scenarios/method_not_found.json": "f86a07303d75a3457e25e4a29ea28ca210730c4c773a97c7d64ca53258eb2086",
+      "fixtures/scenarios/no_txindex.json": "b0a0a06d8ee4ed9e882814b53c3adc99e0850551aab212c9f58635b9ba08c441",
+      "fixtures/scenarios/shape_mismatch.json": "4757fb9e0c1e4d9055f618098779f482b07d7ec738600d228ffa1c6148715869",
+      "fixtures/scenarios/version_310000_only.json": "2ad3f855504033a59e2649ee0c92fd3f78fbec38e0759354e08ca6b6344cd9a6",
+      "fixtures/scenarios/version_missing.json": "f37b1b528ffdf65286efb09b7a45fb2c0c94f0579f86d68b994abd4a61f1cd63",
+      "fixtures/scenarios/version_wrong_type.json": "005242779d4932d4a27a4b5d2e4854542c6a2995a1e08f409596d3530c54d600",
+      "fixtures/scenarios/wrong_genesis.json": "387cc59bd648418800b751ff922950b8344826326948ae045b9545544bc7883b",
+      "fixtures/scenarios/wrong_network.json": "e5c729454b01cf446ebbf157ec6a2c920878e9079926ae452d4906748a5ea658",
+      "probe.py": "833288d7b4a9491ff9cfa4d7186328f38f04e7fe7e5ef1c135496b5f9a62754a",
+      "report.schema.json": "869da20cf782a18ac7137052512cdf86efa310a381f592cc9a3e1423dd9c6dfb",
+      "run_two_nodes.sh": "f4c3ac91579f9a01c0c26b3070087cbcad8ad45e5f837151ce6203c3157ad6f1",
+      "tests/test_contracts.py": "f1eb6d9aaad498e602c35580f489fb74bed959847c0cf974321c942102dabbf2",
+      "tests/test_reporting.py": "b0976e372f6f4fd7f2cd0114a17fbda18e233e3b1b8e842a5c9a8caf0cd2a58c",
+      "tests/test_selftest.py": "a7300fda4c11d2fa3b5e56062f830f8553628187292803249aed984bc06a194d"
+    }
+  },
+  "node": {
+    "description": {
+      "label": "l2-eb257af7",
+      "binary": "/tmp/opencode/rbitcoin-lab-retarget-profile/target/debug/rbitcoin-node",
+      "binary_sha256": "eb257af7c10cdf0ded584adfadf2ae8124466304b13d26c17f855e76f9320f7c",
+      "argv": [
+        "/tmp/opencode/rbitcoin-lab-retarget-profile/target/debug/rbitcoin-node",
+        "--network",
+        "regtest",
+        "--datadir",
+        "/tmp/opencode/AP1a-58e665e4c9d9/l2-eb257af7/datadir",
+        "--rpc",
+        "--rpc-listen",
+        "127.0.0.1:40825",
+        "--rpc-cookie-file",
+        "/tmp/opencode/AP1a-58e665e4c9d9/l2-eb257af7/rpc.cookie",
+        "--no-listen",
+        "--no-seeds",
+        "--no-discover",
+        "--max-run-secs",
+        "240"
+      ],
+      "env": {
+        "RBITCOIN_RPC_PACKAGE_DIALECT": "1"
+      },
+      "rpc_url": "http://127.0.0.1:40825",
+      "cookie_file": "rpc.cookie",
+      "cookie_note": "written by the launcher before start (user:pass, mode 0600, no trailing newline); contents never recorded",
+      "network": "regtest",
+      "isolation": [
+        "--no-listen",
+        "--no-seeds",
+        "--no-discover",
+        "loopback rpc only"
+      ],
+      "max_run_secs": 240,
+      "dialect_env": {
+        "RBITCOIN_RPC_PACKAGE_DIALECT": "1"
+      }
+    },
+    "exit": {
+      "returncode": 0,
+      "signal": null,
+      "uptime_s": 0.352
+    }
+  },
+  "dialect_provenance": {
+    "RBITCOIN_RPC_PACKAGE_DIALECT": "1",
+    "note": "set in the node environment by the probe launcher. The package-topology dialect is an RPC-surface knob in the rbitcoin source (mempool submitpackage gates on Core IsChildWithParents topology only when this is set), not a consensus parameter. Source-inspected at crates/rbitcoin-rpc/src/methods/mempool.rs (PACKAGE_TOPOLOGY_DISALLOWED)."
+  },
+  "upstream_source_pins": [
+    {
+      "name": "bark (pinned)",
+      "commit": "c419159",
+      "role": "RPC contract source of truth (see UPSTREAM_DEPS.md)"
+    },
+    {
+      "name": "rbitcoin-lab-retarget-profile",
+      "binary_sha256": "eb257af7c10cdf0ded584adfadf2ae8124466304b13d26c17f855e76f9320f7c",
+      "role": "probed node binary (approved L2)"
+    }
+  ]
+}

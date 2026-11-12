@@ -24,10 +24,10 @@
 //! clause 4), which runs on every tick.
 //!
 //! Fail-closed posture: an outpoint that left the active chain is dropped
-//! (logged), never boarded blind; a board attempt that fails releases its
-//! decision so a later tick retries; a crash after a claim but before the
-//! board leaves the output unboarded (funds stay on-chain - the safe
-//! direction) until an operator re-boards manually.
+//! (logged), never boarded blind. A generic board error retains its decision:
+//! it is not evidence that nothing was submitted. Stock pending checkpoints
+//! own recovery; the automatic loop never releases a possibly submitted input
+//! merely because an RPC or persistence call returned an error.
 
 use std::str::FromStr;
 
@@ -96,8 +96,8 @@ pub trait BoardRegistry: Send + Sync {
     /// Claim the one boarding decision for `outpoint`: `true` the first
     /// time, `false` once it is decided (boarded or deliberately skipped).
     async fn claim_decision(&self, outpoint: OutPoint) -> Result<bool, String>;
-    /// Release a claim whose board attempt failed, so a later tick
-    /// retries.
+    /// Release only with definite pre-effect evidence. A generic board error
+    /// is not such evidence; the automatic loop retains that claim.
     async fn release_decision(&self, outpoint: OutPoint) -> Result<(), String>;
 }
 
@@ -378,20 +378,29 @@ impl<C: BoardChain, W: BarkClient, R: BoardRegistry> BoardingLoop<C, W, R> {
             tracing::warn!(error = %e, "ark wallet maintenance failed");
         }
         let tip = self.chain.tip_height().await?;
-        self.scan(tip).await?;
+        self.scan(tip, u32::MAX).await?;
         self.board_matured(tip).await
+    }
+
+    /// Safe chain observation is independent of new-board admission.
+    pub async fn scan_only(&self) -> Result<(), String> {
+        self.scan(self.chain.tip_height().await?, 32).await
+    }
+
+    pub async fn refill_only(&self) -> Result<(), String> {
+        self.board_matured(self.chain.tip_height().await?).await
     }
 
     /// Scan every unscanned height up to `tip` for a pool output, then
     /// re-scan the reorg window so a replaced coinbase is still seen.
-    async fn scan(&self, tip: u32) -> Result<(), String> {
+    async fn scan(&self, tip: u32, limit: u32) -> Result<(), String> {
         let cursor = self.registry.scanned_height().await?;
         let start = match cursor {
             Some(h) => h.saturating_add(1),
             // First start: one maturity period plus margin below the tip.
             None => tip.saturating_sub(self.policy.backfill_blocks),
         };
-        for height in start..=tip {
+        for height in start..=tip.min(start.saturating_add(limit - 1)) {
             self.scan_height(height).await?;
             self.registry.set_scanned_height(height).await?;
         }
@@ -438,6 +447,9 @@ impl<C: BoardChain, W: BarkClient, R: BoardRegistry> BoardingLoop<C, W, R> {
     /// Board every matured pool output that needs boarding.
     async fn board_matured(&self, tip: u32) -> Result<(), String> {
         for output in self.registry.pool_outputs().await? {
+            if !self.client.board_capacity_available().await? {
+                break;
+            }
             if tip < output.height.saturating_add(self.policy.maturity_blocks) {
                 continue;
             }
@@ -460,9 +472,9 @@ impl<C: BoardChain, W: BarkClient, R: BoardRegistry> BoardingLoop<C, W, R> {
                     txid = %hex::encode(&output.outpoint.txid.as_byte_array()[..8]),
                     vout = output.outpoint.vout,
                     error = %e,
-                    "boarding a matured pool output failed; releasing the decision for retry"
+                    "boarding outcome unresolved; retaining the outpoint decision"
                 );
-                self.registry.release_decision(output.outpoint).await?;
+                return Err(e);
             }
         }
         Ok(())
@@ -666,18 +678,24 @@ impl BoardRegistry for RedisBoardRegistry {
 #[cfg(feature = "rpc")]
 pub struct RpcBoardChain {
     client: bitcoincore_rpc::Client,
+    read_deadline: std::sync::Mutex<std::time::Instant>,
 }
 
 #[cfg(feature = "rpc")]
 impl RpcBoardChain {
     pub fn new(url: &str, user: &str, pass: &str) -> Result<Self, bitcoincore_rpc::Error> {
-        let auth = if user.is_empty() {
-            bitcoincore_rpc::Auth::None
-        } else {
-            bitcoincore_rpc::Auth::UserPass(user.to_string(), pass.to_string())
-        };
+        let mut http = bitcoincore_rpc::jsonrpc::simple_http::Builder::new()
+            .url(url)
+            .map_err(|e| bitcoincore_rpc::Error::ReturnedError(e.to_string()))?
+            .timeout(std::time::Duration::from_secs(1));
+        if !user.is_empty() {
+            http = http.auth(user, Some(pass));
+        }
         Ok(Self {
-            client: bitcoincore_rpc::Client::new(url, auth)?,
+            client: bitcoincore_rpc::Client::from_jsonrpc(
+                bitcoincore_rpc::jsonrpc::Client::with_transport(http.build()),
+            ),
+            read_deadline: std::sync::Mutex::new(std::time::Instant::now()),
         })
     }
 }
@@ -687,12 +705,25 @@ impl RpcBoardChain {
 impl BoardChain for RpcBoardChain {
     async fn tip_height(&self) -> Result<u32, String> {
         use bitcoincore_rpc::RpcApi;
+        *self
+            .read_deadline
+            .lock()
+            .map_err(|_| "chain budget mutex")? =
+            std::time::Instant::now() + std::time::Duration::from_secs(5);
         let count = self.client.get_block_count().map_err(|e| e.to_string())?;
         u32::try_from(count).map_err(|_| "tip exceeds u32".to_string())
     }
 
     async fn coinbase(&self, height: u32) -> Result<Option<Coinbase>, String> {
         use bitcoincore_rpc::RpcApi;
+        if std::time::Instant::now()
+            >= *self
+                .read_deadline
+                .lock()
+                .map_err(|_| "chain budget mutex")?
+        {
+            return Err("chain scan budget exhausted".into());
+        }
         let hash = match self.client.get_block_hash(u64::from(height)) {
             Ok(hash) => hash,
             // RPC_INVALID_PARAMETER: the chain has not reached `height`.
@@ -720,6 +751,14 @@ impl BoardChain for RpcBoardChain {
 
     async fn outpoint_active(&self, outpoint: OutPoint) -> Result<bool, String> {
         use bitcoincore_rpc::RpcApi;
+        if std::time::Instant::now()
+            >= *self
+                .read_deadline
+                .lock()
+                .map_err(|_| "chain budget mutex")?
+        {
+            return Err("chain read budget exhausted".into());
+        }
         let txout = self
             .client
             .get_tx_out(&outpoint.txid, outpoint.vout, Some(false))
@@ -963,6 +1002,7 @@ mod tests {
 
     fn mock_vtxo(sats: u64, expiry: u32) -> super::super::bark_transport::TrackedVtxo {
         super::super::bark_transport::TrackedVtxo {
+            proof: vec![],
             id: [3; 36],
             sats,
             expiry_height: expiry,
@@ -1206,9 +1246,78 @@ mod tests {
         );
     }
 
-    /// A board failure releases the decision so the next tick retries.
     #[tokio::test]
-    async fn a_failed_board_releases_the_decision() {
+    async fn pending_stock_board_does_not_stop_bounded_pool_output_scanning() {
+        struct PendingWallet;
+        #[async_trait::async_trait]
+        impl BarkClient for PendingWallet {
+            async fn board_capacity_available(&self) -> Result<bool, String> {
+                Ok(false)
+            }
+            async fn list_vtxos(
+                &self,
+            ) -> Result<Vec<super::super::bark_transport::TrackedVtxo>, String> {
+                Ok(vec![])
+            }
+            async fn send_arkoor_payment(
+                &self,
+                _: &super::super::bark_transport::ArkPayment,
+            ) -> Result<Vec<super::super::bark_transport::TrackedVtxo>, String> {
+                Err("unused".into())
+            }
+            async fn board_funding_address(&self) -> Result<(Address, u32), String> {
+                panic!("pending capacity must prevent a new board")
+            }
+            async fn board_psbt(&self, _: &Psbt, _: u32) -> Result<(), String> {
+                panic!("pending capacity must prevent a new board")
+            }
+            async fn onchain_address(&self) -> Result<Address, String> {
+                Err("unused".into())
+            }
+            async fn maintenance(&self) -> Result<(), String> {
+                Ok(())
+            }
+            async fn feerate_sat_vb(&self) -> Result<u64, String> {
+                Ok(1)
+            }
+        }
+        let (kc, output, coinbase) = setup();
+        let mut blocks = HashMap::new();
+        blocks.insert(100u32, coinbase);
+        let lp = BoardingLoop::new(
+            MockChain {
+                tip: 200,
+                blocks,
+                inactive: HashSet::new(),
+            },
+            PendingWallet,
+            InMemoryRegistry::default(),
+            kc,
+            BoardingPolicy::new(500_000, 3024),
+        );
+        lp.scan_only().await.unwrap();
+        assert_eq!(lp.registry.scanned_height().await.unwrap(), Some(31));
+        for _ in 0..5 {
+            lp.scan_only().await.unwrap();
+            lp.refill_only().await.unwrap();
+        }
+        assert_eq!(lp.registry.scanned_height().await.unwrap(), Some(191));
+        assert!(lp
+            .registry
+            .pool_outputs()
+            .await
+            .unwrap()
+            .iter()
+            .any(|o| o.outpoint == output.outpoint));
+        assert!(
+            lp.registry.claim_decision(output.outpoint).await.unwrap(),
+            "pending board prevented every new claim"
+        );
+    }
+
+    /// A generic board failure cannot release a possibly submitted input.
+    #[tokio::test]
+    async fn a_failed_board_retains_the_decision() {
         let (kc, output, coinbase) = setup();
         let mut blocks = HashMap::new();
         blocks.insert(100u32, coinbase);
@@ -1267,12 +1376,11 @@ mod tests {
             kc,
             BoardingPolicy::new(500_000, 3024),
         );
-        lp.tick().await.unwrap();
-        // The failure released the decision, so the outpoint can be
-        // claimed again (a later tick retries the board).
+        assert!(lp.tick().await.is_err());
+        // No generic error can authorize another attempt with this input.
         assert!(
-            lp.registry.claim_decision(output.outpoint).await.unwrap(),
-            "a failed board releases its decision for retry"
+            !lp.registry.claim_decision(output.outpoint).await.unwrap(),
+            "an ambiguous board retains its decision"
         );
     }
 }

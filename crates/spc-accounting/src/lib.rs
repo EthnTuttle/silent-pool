@@ -5,6 +5,9 @@
 
 #![deny(unsafe_code)]
 
+pub mod ladder;
+pub use ladder::{band_amount, decompose, LADDER_BASE_RUNGS_SATS};
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
@@ -12,6 +15,13 @@ use spc_crypto::{spc_output_pubkey, tier_tweaks, SendKey};
 use thiserror::Error;
 
 pub type SpId = [u8; 32];
+pub mod economic;
+pub mod ladder;
+pub use ladder::{
+    band_amount, decompose, decomposition_len, LADDER_BASE_RUNGS_SATS, LADDER_BASE_SATS,
+};
+#[cfg(test)]
+mod ladder_completion_tests;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum Error {
@@ -23,8 +33,16 @@ pub enum Error {
     Threshold,
     #[error("arithmetic overflow")]
     Overflow,
+    #[error("payout needs {required} outputs, maximum {max}")]
+    PayoutSlots { required: u64, max: usize },
     #[error("derivation failed for {0:?}")]
     Derivation(SpId),
+    #[error("payout slots exceeded: {required} required, cap {max}")]
+    PayoutSlots { required: u64, max: usize },
+    #[error("full denomination entitlement exceeds available block revenue")]
+    EntitlementExceedsRevenue,
+    #[error("full denomination output set exceeds coinbase weight budget")]
+    PayoutWeight,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,6 +69,8 @@ pub struct Slice {
     pub shares: Vec<ShareRec>,
     pub difficulty: u128,
     pub root: [u8; 32],
+    pub work_unit_version: WorkUnitVersion,
+    pub work_unit_fingerprint: Option<[u8; 32]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -85,7 +105,34 @@ impl Slice {
             shares: Vec::new(),
             difficulty: 0,
             root: [0u8; 32],
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
         }
+    }
+
+    /// Open a v2 slice. Every aggregate and window built from it carries the
+    /// same profile fingerprint; no v1-to-v2 conversion is possible here.
+    pub fn new_v2(
+        slice_id: u64,
+        height: u32,
+        prev_hash: [u8; 32],
+        front_id: u8,
+        ref_job_id: u64,
+        ref_fees: u64,
+        work_unit_fingerprint: [u8; 32],
+    ) -> Self {
+        let mut slice = Self::new(slice_id, height, prev_hash, front_id, ref_job_id, ref_fees);
+        slice.work_unit_version = WorkUnitVersion::V2;
+        slice.work_unit_fingerprint = Some(work_unit_fingerprint);
+        slice
+    }
+
+    /// Checked v2 push. Difficulty and share list are unchanged on overflow.
+    pub fn push_v2(&mut self, share: ShareRec) -> Result<(), WorkUnitError> {
+        let next = work_unit::checked_add_slice_work(self.difficulty, share.d)?;
+        self.difficulty = next;
+        self.shares.push(share);
+        Ok(())
     }
 
     /// SPEC §4.2 sealing rule.
@@ -132,7 +179,35 @@ impl Slice {
             diff_fee_sum,
             per_id,
             root: self.root,
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
         }
+    }
+
+    /// Checked v2 aggregation of every `d`, `d*f` and `diff_fee_sum`.
+    pub fn agg_v2(&self) -> Result<SliceAgg, WorkUnitError> {
+        let mut per_id: BTreeMap<SpId, (u128, u128)> = BTreeMap::new();
+        let mut diff_fee_sum = 0u128;
+        for s in &self.shares {
+            let d = u128::from(s.d);
+            let df = work_unit::checked_fee_work(d, u128::from(s.job_fees))?;
+            let e = per_id.entry(s.sp_id).or_insert((0u128, 0u128));
+            e.0 = work_unit::checked_add_slice_work(e.0, s.d)?;
+            e.1 = work_unit::checked_add_fee_work(e.1, df)?;
+            diff_fee_sum = work_unit::checked_add_fee_work(diff_fee_sum, df)?;
+        }
+        Ok(SliceAgg {
+            slice_id: self.slice_id,
+            height: self.height,
+            prev_hash: self.prev_hash,
+            front_id: self.front_id,
+            difficulty: self.difficulty,
+            diff_fee_sum,
+            per_id,
+            root: self.root,
+            work_unit_version: WorkUnitVersion::V2,
+            work_unit_fingerprint: self.work_unit_fingerprint,
+        })
     }
 }
 
@@ -184,6 +259,8 @@ pub struct SliceAgg {
     pub diff_fee_sum: u128,
     pub per_id: BTreeMap<SpId, (u128, u128)>,
     pub root: [u8; 32],
+    pub work_unit_version: WorkUnitVersion,
+    pub work_unit_fingerprint: Option<[u8; 32]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -192,6 +269,20 @@ pub struct Window {
     pub t: usize,
     pub d_win: u128,
     pub high_water: BTreeMap<u8, String>,
+}
+
+impl Window {
+    pub fn underfilled(&self, window_target: u128) -> bool {
+        self.d_win < window_target
+    }
+
+    pub fn underfill(&self, window_target: u128) -> u128 {
+        window_target.saturating_sub(self.d_win)
+    }
+
+    pub fn target_overshoot(&self, window_target: u128) -> u128 {
+        self.d_win.saturating_sub(window_target)
+    }
 }
 
 /// SPEC §4.3. `slices_desc` is newest first; the finding slice is skipped.
@@ -220,6 +311,46 @@ pub fn select_window(
         d_win,
         high_water,
     }
+}
+
+/// v2 selects whole slices newest-first with checked version-matched work.
+pub fn select_window_v2(
+    slices_desc: &[SliceAgg],
+    finding_slice_id: u64,
+    target: u128,
+    high_water: BTreeMap<u8, String>,
+    expected_fingerprint: Option<[u8; 32]>,
+) -> Result<Window, WorkUnitError> {
+    if target == 0 {
+        return Err(WorkUnitError::WindowTargetZero);
+    }
+    let mut slices = Vec::new();
+    let mut actual_sum = 0u128;
+    for s in slices_desc {
+        if s.slice_id == finding_slice_id {
+            continue;
+        }
+        if s.work_unit_version != WorkUnitVersion::V2
+            || s.work_unit_fingerprint != expected_fingerprint
+            || s.work_unit_fingerprint.is_none()
+        {
+            return Err(WorkUnitError::WorkUnitRestoreMismatch {
+                slice_id: s.slice_id,
+            });
+        }
+        slices.push(s.clone());
+        actual_sum = work_unit::checked_add_window_work(actual_sum, s.difficulty)?;
+        if actual_sum >= target {
+            break;
+        }
+    }
+    let t = slices.len();
+    Ok(Window {
+        slices,
+        t,
+        d_win: actual_sum,
+        high_water,
+    })
 }
 
 /// Raw payouts before pending and tier routing (SPEC §4.4).
@@ -304,6 +435,85 @@ pub fn raw_payouts(
     })
 }
 
+/// Checked v2 payout products (SPEC section 4.4). Every fee numerator,
+/// denominator, aggregate and final conversion is checked; v1's saturating
+/// function above is deliberately untouched.
+pub fn raw_payouts_v2(
+    window: &Window,
+    subsidy: u64,
+    fees: u64,
+    fee_bps: u16,
+) -> Result<RawPayouts, WorkUnitError> {
+    if window.d_win == 0 || window.slices.is_empty() {
+        return Err(WorkUnitError::PayoutWindowEmpty);
+    }
+    if fee_bps > 10_000 {
+        return Err(WorkUnitError::PayoutProductOverflow);
+    }
+    if let Some(offender) = window
+        .slices
+        .iter()
+        .find(|s| s.work_unit_version != WorkUnitVersion::V2 || s.work_unit_fingerprint.is_none())
+    {
+        return Err(WorkUnitError::WorkUnitRestoreMismatch {
+            slice_id: offender.slice_id,
+        });
+    }
+    let fee_bps = u128::from(fee_bps);
+    let subsidy_fee = work_unit::checked_mul_div_u128(u128::from(subsidy), fee_bps, 10_000)?;
+    let fee_fee = work_unit::checked_mul_div_u128(u128::from(fees), fee_bps, 10_000)?;
+    let r_net = u128::from(subsidy)
+        .checked_sub(subsidy_fee)
+        .ok_or(WorkUnitError::PayoutProductOverflow)?;
+    let f_net = u128::from(fees)
+        .checked_sub(fee_fee)
+        .ok_or(WorkUnitError::PayoutProductOverflow)?;
+    let t = u128::try_from(window.slices.len()).map_err(|_| WorkUnitError::Overflow)?;
+
+    let mut per_id_diff: BTreeMap<SpId, u128> = BTreeMap::new();
+    let mut per_id_fee: BTreeMap<SpId, u128> = BTreeMap::new();
+    for s in &window.slices {
+        let fee_den = work_unit::checked_mul_div_u128(t, s.diff_fee_sum, 1)?;
+        for (id, (d, df)) in &s.per_id {
+            let e = per_id_diff.entry(*id).or_insert(0);
+            *e = work_unit::checked_add_window_work(*e, *d)?;
+            if fee_den != 0 {
+                let fee_term = work_unit::checked_mul_div_u128(f_net, *df, fee_den)?;
+                let e = per_id_fee.entry(*id).or_insert(0);
+                *e = work_unit::checked_add_fee_work(*e, fee_term)
+                    .map_err(|_| WorkUnitError::PayoutProductOverflow)?;
+            }
+        }
+    }
+
+    let mut raw: BTreeMap<SpId, u64> = BTreeMap::new();
+    let mut total = 0u128;
+    for (id, d_window) in per_id_diff {
+        let subsidy_term = work_unit::checked_mul_div_u128(r_net, d_window, window.d_win)?;
+        let fee_term = per_id_fee.get(&id).copied().unwrap_or(0);
+        let value = subsidy_term
+            .checked_add(fee_term)
+            .ok_or(WorkUnitError::PayoutProductOverflow)?;
+        total = total
+            .checked_add(value)
+            .ok_or(WorkUnitError::PayoutProductOverflow)?;
+        let value = u64::try_from(value).map_err(|_| WorkUnitError::PayoutProductOverflow)?;
+        raw.insert(id, value);
+    }
+    let reward = u128::from(subsidy)
+        .checked_add(u128::from(fees))
+        .ok_or(WorkUnitError::PayoutProductOverflow)?;
+    let pool_sats = reward
+        .checked_sub(total)
+        .ok_or(WorkUnitError::PayoutProductOverflow)?;
+    Ok(RawPayouts {
+        raw,
+        pool_sats: u64::try_from(pool_sats).map_err(|_| WorkUnitError::PayoutProductOverflow)?,
+        r_net: u64::try_from(r_net).map_err(|_| WorkUnitError::PayoutProductOverflow)?,
+        f_net: u64::try_from(f_net).map_err(|_| WorkUnitError::PayoutProductOverflow)?,
+    })
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TierConfig {
     pub fee_bps: u16,
@@ -330,44 +540,154 @@ impl TierConfig {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArkCapability {
     pub registered: bool,
+    /// Durable Postgres commit known to this front. Unlike `registered`, this
+    /// can be true before full delivery fields have propagated.
+    pub registration_committed: bool,
     /// The destination `U_i` plus delivery is available to this front.
     pub dest_known: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Routing {
-    /// Full `owed(id) = raw(id) + prior_pending(id)` for every routed id,
-    /// **before** the pool-template coinbase cap. JD weights are built from
-    /// this map (SPEC §4.7 `weight_id = owed(id)`), so a balance that the
-    /// coinbase can only partly pay still carries its full weight and O11
-    /// scales it at settlement.
+    /// Full `owed = raw + prior_pending` before denomination shaping.
+    /// JD uses this exact weight; pool-template mode pays every canonical rung
+    /// or fails closed, never substituting a capacity-limited entitlement.
     pub owed: BTreeMap<SpId, u64>,
-    /// Coinbase outputs: `(sp_id, sats actually paid)`. Sum is at most
-    /// `T − pool_sats`, so `pay_p` always covers the pool fee.
+    /// Coinbase outputs: `(sp_id, sats actually paid)`. In pool-template mode
+    /// their full rung sum is at most T. Repaying prior pending can make the
+    /// net pool output smaller than gross `pool_fee` (SPEC §4.6/§11.9).
     pub kept: Vec<(SpId, u64)>,
-    /// Balances that wait in full for a later coinbase (trimmed, over-cap,
-    /// pending-only, or registered without a propagated destination).
+    /// Full error-held balances: unknown keys, pending-only, or committed
+    /// registration without a derived destination. Never a pool capacity trim.
     pub pending: Vec<(SpId, u64)>,
-    /// Balances that become an Ark send due at `H_f + confirmation_depth`.
+    /// Ark obligations, including kept-row remainders as components of the
+    /// same logical coinbase ledger row, due at `H_f + confirmation_depth`.
     pub ark_due: Vec<(SpId, u64)>,
     /// Current-block earnings confiscated from an unregistered miner below
-    /// `C`. A prior pending balance is never forfeited, so this is the
+    /// base rung (C in exact JD routing). Prior pending is never forfeited: the
     /// block's raw portion only (SPEC §11.1).
     pub forfeited: Vec<(SpId, u64)>,
     /// Delta to apply to the prior pending balance to obtain the new one.
     ///
-    /// The `pending` rail lists balances that wait in full; a kept id the
-    /// coinbase could only partly cover, and a forfeited id with a prior
-    /// balance, carry their remainder on this delta rather than a second rail
+    /// The `pending` rail lists balances that wait in full; a kept id's
+    /// undeliverable remainder, and a forfeited id's prior balance, use
+    /// this delta rather than a second rail
     /// entry, because the distribution carries exactly one entry per `sp_id`
     /// (SPEC §4.7; settlement rejects duplicate entries).
     pub pending_deltas: BTreeMap<SpId, i64>,
     pub pay_p: u64,
     pub total: u64,
+    /// Gross K = T - sum(raw), retained for bookkeeping and JD weights.
+    /// It is not a lower bound on the pool-template coinbase's net `pay_p`.
     pub pool_fee: u64,
 }
 
-/// SPEC §4.6 + §11.1. `pending` is the prior balance per id.
+/// Pool-template routing (SPEC §4.4, §11.1). No trimming or partial payment.
+/// `ark_due` includes kept-row remainder components, not a second logical rail.
+pub fn route_tiers(
+    raw: &RawPayouts,
+    pending: &BTreeMap<SpId, u64>,
+    ark: &BTreeMap<SpId, ArkCapability>,
+    cfg: &TierConfig,
+    total: u64,
+) -> Result<Routing, Error> {
+    route_tiers_with_keys(raw, pending, ark, cfg, total, None)
+}
+
+/// Hold full entitlement for restored identities without known public keys
+/// before capacity validation; unknown keys never consume payout slots.
+pub fn route_tiers_with_keys(
+    raw: &RawPayouts,
+    pending: &BTreeMap<SpId, u64>,
+    ark: &BTreeMap<SpId, ArkCapability>,
+    cfg: &TierConfig,
+    total: u64,
+    known: Option<&BTreeSet<SpId>>,
+) -> Result<Routing, Error> {
+    cfg.validate()?;
+    ladder::validate_ladder(cfg.coinbase_threshold_sats, cfg.dust_limit_sats)?;
+    let ids: BTreeSet<_> = raw.raw.keys().chain(pending.keys()).copied().collect();
+    let mut result = Routing {
+        owed: BTreeMap::new(),
+        kept: vec![],
+        pending: vec![],
+        ark_due: vec![],
+        forfeited: vec![],
+        pending_deltas: BTreeMap::new(),
+        pay_p: total,
+        total,
+        pool_fee: raw.pool_sats,
+    };
+    let mut slots = 0u64;
+    let mut paid = 0u64;
+    for id in ids {
+        let old = pending.get(&id).copied().unwrap_or(0);
+        let raw_part = raw.raw.get(&id).copied().unwrap_or(0);
+        let owed = raw_part.checked_add(old).ok_or(Error::Overflow)?;
+        if owed == 0 {
+            continue;
+        }
+        result.owed.insert(id, owed);
+        let deliverable = ark
+            .get(&id)
+            .is_some_and(|c| c.registration_committed && c.dest_known);
+        let committed = ark
+            .get(&id)
+            .is_some_and(|c| c.registration_committed || c.registered);
+        let after;
+        if owed >= LADDER_BASE_SATS && known.is_some_and(|ids| !ids.contains(&id)) {
+            result.pending.push((id, owed));
+            after = owed;
+        } else if owed >= LADDER_BASE_SATS {
+            let (onchain, remainder) = band_amount(owed);
+            slots = slots
+                .checked_add(decomposition_len(owed))
+                .ok_or(Error::Overflow)?;
+            paid = paid.checked_add(onchain).ok_or(Error::Overflow)?;
+            result.kept.push((id, onchain));
+            if deliverable && remainder > 0 {
+                result.ark_due.push((id, remainder));
+            }
+            after = if deliverable { 0 } else { remainder };
+        } else if deliverable {
+            result.ark_due.push((id, owed));
+            after = 0;
+        } else if committed || raw_part == 0 {
+            result.pending.push((id, owed));
+            after = owed;
+        } else {
+            result.forfeited.push((id, raw_part));
+            after = old;
+        }
+        let delta = i128::from(after) - i128::from(old);
+        result
+            .pending_deltas
+            .insert(id, i64::try_from(delta).map_err(|_| Error::Overflow)?);
+    }
+    let max = cfg.max_payout_slots.min(ladder::MAX_LADDER_OUTPUTS);
+    if slots > max as u64 {
+        return Err(Error::PayoutSlots {
+            required: slots,
+            max,
+        });
+    }
+    // CompactSize output count grows at 253. Include the pool output;
+    // witness overhead is supplied by the caller and conservatively counted.
+    let count_wu = if slots + 2 >= 253 { 8 } else { 0 };
+    let weight = u64::from(cfg.overhead_wu) + slots * 172 + count_wu;
+    if weight > u64::from(cfg.budget_wu) {
+        return Err(Error::PayoutWeight);
+    }
+    result.pay_p = total
+        .checked_sub(paid)
+        .ok_or(Error::EntitlementExceedsRevenue)?;
+    // K was already deducted from fresh raw. Old liabilities are paid through
+    // signed delta = E-P: pay_p = K + ark + forfeit + sum(delta). No independent
+    // gross-fee/rounding floor belongs here; actual rung payments must fit T.
+    Ok(result)
+}
+
+/// Exact-weight JD routing. This explicit path is independent of slice fee delta.
 ///
 /// `owed(id) = raw(id) + pending(id)` is computed for every id present in
 /// **either** map (SPEC §4.6), so an id that only carries a prior pending
@@ -402,7 +722,7 @@ pub struct Routing {
 /// prior balance is left on the pending ledger (`pending_delta = 0`). A
 /// pending-only id below `C` therefore routes to the `pending` rail with
 /// `pending_delta = 0`.
-pub fn route_tiers(
+pub fn route_jd_tiers(
     raw: &RawPayouts,
     pending: &BTreeMap<SpId, u64>,
     ark: &BTreeMap<SpId, ArkCapability>,
@@ -480,14 +800,14 @@ pub fn route_tiers(
         }
 
         match ark.get(id) {
-            Some(cap) if cap.registered && cap.dest_known => {
+            Some(cap) if cap.registration_committed && cap.dest_known => {
                 ark_due.push((*id, *amount));
                 // The balance leaves the pending ledger and becomes an Ark
                 // send due; `failed_to_pending` re-credits it if the send
                 // fails (§11.3), so it must not sit in both places.
                 pending_deltas.insert(*id, pending_delta(0, old));
             }
-            Some(cap) if cap.registered => {
+            Some(cap) if cap.registration_committed || cap.registered => {
                 // Committed registration, destination not propagated yet.
                 pending_out.push((*id, *amount));
                 pending_deltas.insert(*id, pending_delta(*amount, old));
@@ -557,6 +877,24 @@ pub fn claim_jd(
     let scaled = (owed as u128) * ((t_actual - fixed_outputs_sats) as u128);
     let v = scaled / weight_total as u128;
     Ok(u64::try_from(v).unwrap_or(u64::MAX))
+}
+
+/// Checked v2 JD claim; no saturating final conversion.
+pub fn claim_jd_v2(
+    owed: u64,
+    t_actual: u64,
+    fixed_outputs_sats: u64,
+    weight_total: u64,
+) -> Result<u64, WorkUnitError> {
+    if weight_total == 0 || fixed_outputs_sats > t_actual {
+        return Err(WorkUnitError::PayoutProductOverflow);
+    }
+    let value = work_unit::checked_mul_div_u128(
+        u128::from(owed),
+        u128::from(t_actual - fixed_outputs_sats),
+        u128::from(weight_total),
+    )?;
+    u64::try_from(value).map_err(|_| WorkUnitError::PayoutProductOverflow)
 }
 
 /// JD settlement for one id. `paid` is read from the mined coinbase.
@@ -666,8 +1004,11 @@ pub enum Rail {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
     pub sp_id: SpId,
+    /// Full frozen entitlement, including the Ark/error-held remainder.
+    pub owed_sats: u64,
     pub rail: Rail,
-    pub p_x: Option<[u8; 32]>,
+    /// Keys in contiguous derivation-index order, never global script order.
+    pub p_x: Vec<[u8; 32]>,
     pub dest_id: Option<Vec<u8>>,
     pub sats: u64,
 }
@@ -691,8 +1032,7 @@ pub struct MinerKeys {
 
 /// Build the pool-template (sats) distribution (SPEC §4.7).
 ///
-/// Output order is `[pool output] ++ [miner outputs sorted by sp_id]` as the
-/// spec requires, so the fingerprint is independent of the trim order.
+/// Bind greedy amounts to k, then globally sort miner outputs by script.
 pub fn build_distribution(
     height: u32,
     send: &SendKey,
@@ -711,15 +1051,25 @@ pub fn build_distribution(
         let ecdh = send
             .derive_pool_side(&keys.b_scan)
             .map_err(|_| Error::Derivation(*id))?;
-        let tweaks = tier_tweaks(&ecdh, 0).map_err(|_| Error::Derivation(*id))?;
-        let p = spc_output_pubkey(&keys.b_spend, &tweaks.t_onchain)
-            .map_err(|_| Error::Derivation(*id))?;
-        let p_x = p.x_only_public_key().0.serialize();
-        outputs.push((p2tr_script(&p_x), *sats));
+        let owed = *routing.owed.get(id).ok_or(Error::Overflow)?;
+        let decomposition = decompose(owed, ladder::MAX_LADDER_OUTPUTS)?;
+        if decomposition.paid != *sats {
+            return Err(Error::Overflow);
+        }
+        let mut p_x = Vec::with_capacity(decomposition.outputs.len());
+        for (k, amount) in decomposition.outputs.iter().enumerate() {
+            let tweaks = tier_tweaks(&ecdh, k as u32).map_err(|_| Error::Derivation(*id))?;
+            let p = spc_output_pubkey(&keys.b_spend, &tweaks.t_onchain)
+                .map_err(|_| Error::Derivation(*id))?;
+            let key = p.x_only_public_key().0.serialize();
+            outputs.push((p2tr_script(&key), *amount));
+            p_x.push(key);
+        }
         entries.push(Entry {
             sp_id: *id,
+            owed_sats: owed,
             rail: Rail::Coinbase,
-            p_x: Some(p_x),
+            p_x,
             dest_id: ark_dest.get(id).cloned(),
             sats: *sats,
         });
@@ -727,17 +1077,22 @@ pub fn build_distribution(
     for (id, sats) in sorted_by_id(&routing.pending) {
         entries.push(Entry {
             sp_id: id,
+            owed_sats: routing.owed[&id],
             rail: Rail::Pending,
-            p_x: None,
+            p_x: vec![],
             dest_id: None,
             sats,
         });
     }
     for (id, sats) in sorted_by_id(&routing.ark_due) {
+        if routing.kept.iter().any(|(kept_id, _)| *kept_id == id) {
+            continue;
+        }
         entries.push(Entry {
             sp_id: id,
+            owed_sats: routing.owed[&id],
             rail: Rail::Ark,
-            p_x: None,
+            p_x: vec![],
             dest_id: ark_dest.get(&id).cloned(),
             sats,
         });
@@ -745,13 +1100,34 @@ pub fn build_distribution(
     for (id, sats) in sorted_by_id(&routing.forfeited) {
         entries.push(Entry {
             sp_id: id,
+            owed_sats: routing.owed[&id],
             rail: Rail::Forfeit,
-            p_x: None,
+            p_x: vec![],
             dest_id: None,
             sats,
         });
     }
 
+    if outputs.len() - 1 > ladder::MAX_LADDER_OUTPUTS {
+        return Err(Error::PayoutSlots {
+            required: (outputs.len() - 1) as u64,
+            max: ladder::MAX_LADDER_OUTPUTS,
+        });
+    }
+    let sum = outputs
+        .iter()
+        .try_fold(0u64, |sum, o| sum.checked_add(o.1))
+        .ok_or(Error::Overflow)?;
+    if sum != routing.total {
+        return Err(Error::EntitlementExceedsRevenue);
+    }
+    outputs[1..].sort_by(|a, b| a.0.cmp(&b.0));
+    if outputs[1..].windows(2).any(|w| w[0].0 == w[1].0)
+        || outputs[1..].iter().any(|o| o.0 == pool_script)
+    {
+        return Err(Error::Overflow);
+    }
+    entries.sort_by_key(|e| e.sp_id);
     let fingerprint = fingerprint(height, send.x_only(), &outputs);
     Ok(Distribution {
         height,
@@ -814,10 +1190,11 @@ pub fn build_weights(routing: &Routing, fee_weight: u64) -> Weights {
     for (id, sats) in &kept {
         entries.push(Entry {
             sp_id: *id,
+            owed_sats: routing.owed.get(id).copied().unwrap_or(*sats),
             rail: Rail::Coinbase,
-            p_x: None,
+            p_x: vec![],
             dest_id: None,
-            sats: *sats,
+            sats: routing.owed.get(id).copied().unwrap_or(*sats),
         });
     }
     for (rail, group) in [
@@ -828,10 +1205,11 @@ pub fn build_weights(routing: &Routing, fee_weight: u64) -> Weights {
         for (id, sats) in sorted_by_id(group) {
             entries.push(Entry {
                 sp_id: id,
+                owed_sats: routing.owed.get(&id).copied().unwrap_or(sats),
                 rail,
-                p_x: None,
+                p_x: vec![],
                 dest_id: None,
-                sats,
+                sats: routing.owed.get(&id).copied().unwrap_or(sats),
             });
         }
     }
@@ -864,5 +1242,14 @@ pub fn fingerprint(height: u32, a_x: &[u8; 32], outputs: &[(Vec<u8>, u64)]) -> [
     sha256::Hash::from_engine(eng).to_byte_array()
 }
 
+/// Pure v2 work-unit arithmetic (LP-1a precursor): reference-target family,
+/// consensus compact decode, O(1) issuance selection, network-block window
+/// target and checked wide-arithmetic helpers. See the module docs for the
+/// integration boundary.
+pub mod work_unit;
+pub use work_unit::{WindowRule, WorkUnitError, WorkUnitProfile, WorkUnitVersion};
+
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod v2_integration_tests;

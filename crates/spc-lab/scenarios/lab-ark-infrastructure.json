@@ -1,0 +1,81 @@
+{
+  "scenario_version": 1,
+  "expanded_access": true,
+  "run": {
+    "id": "lab-self-hosted-ark",
+    "seed": 20261108,
+    "time_policy": {"chain_time": "node_header", "miner_ntime": "hold", "mock_node_time": null},
+    "warmup": {"blocks": 0, "window_fills": 0, "exclude_from_statistics": true}
+  },
+  "network": {
+    "id": "net-regtest",
+    "consensus_profile": {
+      "required_capability": "spc.node.regtest.pow_baseline",
+      "profile_fingerprint": null,
+      "requirements": {"pow_limit_bits": "207fffff"}
+    }
+  },
+  "nodes": [{
+    "id": "node-a", "network_id": "net-regtest", "implementation": "rbitcoin-node",
+    "p2p": {"listen": "127.0.0.1:0"}, "rpc": {"listen": "127.0.0.1:0"},
+    "tdp": {"listen": "127.0.0.1:0", "session_cap": 8}
+  }],
+  "pools": [
+    {
+      "id": "pool-a", "network_id": "net-regtest", "node_ids": ["node-a"], "implementation": "spc-pool",
+      "work_profile": {
+        "work_unit_version": 2,
+        "reference_target": "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "share_work_multiplier": 2, "max_work_multiplier": 4294967296,
+        "max_window_target_units": "18446744073709551616", "window_rule": "network_block_work",
+        "window_n": 8, "max_slice_shares": 4
+      },
+      "storage": {"redis_instance_id": "redis-pool-a", "postgres_database_id": "pg-pool-a"}
+    },
+    {
+      "id": "pool-b", "network_id": "net-regtest", "node_ids": ["node-a"], "implementation": "spc-pool",
+      "work_profile": {
+        "work_unit_version": 2,
+        "reference_target": "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "share_work_multiplier": 2, "max_work_multiplier": 4294967296,
+        "max_window_target_units": "18446744073709551616", "window_rule": "network_block_work",
+        "window_n": 8, "max_slice_shares": 4
+      },
+      "storage": {"redis_instance_id": "redis-pool-b", "postgres_database_id": "pg-pool-b"}
+    }
+  ],
+  "fronts": [
+    {"id": "front-a1", "pool_id": "pool-a", "roles": ["front", "payout", "api"],
+     "listen": {"sv2": "127.0.0.1:0", "sv1": null, "jd": "127.0.0.1:0", "api": "127.0.0.1:0"}},
+    {"id": "front-b1", "pool_id": "pool-b", "roles": ["front", "payout", "api"],
+     "listen": {"sv2": "127.0.0.1:0", "sv1": null, "jd": "127.0.0.1:0", "api": "127.0.0.1:0"}}
+  ],
+  "identities": [],
+  "miners": [],
+  "ark_backends": [{
+    "id": "local-ark", "implementation": "captaind", "listen": "127.0.0.1:0",
+    "local": {
+      "deployment": "self_hosted", "node_id": "node-a",
+      "vtxo_lifetime": 432, "max_vtxo_exit_depth": 100,
+      "required_board_confirmations": 3, "min_board_amount_sats": 20000,
+      "round_interval_secs": 10, "round_submit_secs": 2, "round_sign_secs": 2
+    }
+  }],
+  "resources": {
+    "redis_instances": [
+      {"id": "redis-pool-a", "owner_pool_id": "pool-a", "port": 0, "dir": "redis/pool-a"},
+      {"id": "redis-pool-b", "owner_pool_id": "pool-b", "port": 0, "dir": "redis/pool-b"}
+    ],
+    "postgres_databases": [
+      {"id": "pg-pool-a", "owner_pool_id": "pool-a", "database": "spc_lab_a", "role": "spc_lab_a", "port": 0},
+      {"id": "pg-pool-b", "owner_pool_id": "pool-b", "database": "spc_lab_b", "role": "spc_lab_b", "port": 0}
+    ]
+  },
+  "links": [
+    {"id": "pool-a-node", "from": {"kind": "pool", "id": "pool-a"}, "to": {"kind": "node", "id": "node-a"}, "policy": "normal"},
+    {"id": "pool-b-node", "from": {"kind": "pool", "id": "pool-b"}, "to": {"kind": "node", "id": "node-a"}, "policy": "normal"},
+    {"id": "ark-node", "from": {"kind": "ark", "id": "local-ark"}, "to": {"kind": "node", "id": "node-a"}, "policy": "normal"},
+    {"id": "pool-a-ark", "from": {"kind": "pool", "id": "pool-a"}, "to": {"kind": "ark", "id": "local-ark"}, "policy": "normal"},
+    {"id": "pool-b-ark", "from": {"kind": "pool", "id": "pool-b"}, "to": {"kind": "ark", "id": "local-ark"}, "policy": "normal"}
+  ], "phases": [], "assertions": [], "statistics": []
+}

@@ -1,0 +1,229 @@
+{
+ "packet": "rbitcoin-bark-v31 (AP-1b node compat profile candidate)",
+ "revision": "r1",
+ "date": "2026-11-08",
+ "versioning": "r0/ is the frozen full copy of the initial packet (39 files byte-identical when archived; the parent's 27-file initial manifest /tmp/opencode/AP1b-initial-packet-manifest.json snapshot 016b90b885cb8e3131cb59962f3ac7b00b210446f7676916adfe0444d7890dd7 verified against it, aggregate reproduced; the r0 review doc docs/reviews/2026-11-08-bark-v31-profile-implementation.md sits outside the packet dir and is verified frozen against the same parent manifest). Top-level files are the live r1 candidate; this manifest records each file's r0->r1 status so no frozen history is silently overwritten. Covers the testing packet (r0/ archive excluded) plus both review docs; this manifest file itself is excluded (self-reference).",
+ "r1_changes_summary": [
+  "node candidate: RBITCOIN_RPC_COMPAT_PROFILE env knob removed (not ask-first approved); profile is CLI/conf only",
+  "node candidate: changelog.d fragment + owner docs added (docs/rpc.md, COMPAT.md)",
+  "probe runs redone in external mode: owned fresh nodes launched with explicit CLI argv by the packet-owned r1-external-run.py harness; the frozen probe runs unchanged via probe.py probe --rpc-url/--cookie-file",
+  "devcheck golden-vector gate run and bound separately (12 vectors, exit 0)",
+  "candidate binary rebuilt (b75dad84...), patch/manifest re-frozen, decision fragment updated to CLI/conf-only",
+  "r0 review doc left frozen; corrected report is docs/reviews/2026-11-08-bark-v31-profile-implementation-r1.md"
+ ],
+ "files": [
+  {
+   "path": "docs/reviews/2026-11-08-bark-v31-profile-implementation-r1.md",
+   "sha256": "a4c819d4c3d889c141c7cade859a58ea592f04ae198373fe2a4e724c364ceffa",
+   "status": "new-in-r1"
+  },
+  {
+   "path": "docs/reviews/2026-11-08-bark-v31-profile-implementation.md",
+   "sha256": "727765de6c71664a86397a9892bb4321160d151bfef7cb5f71cb7e4d15777764",
+   "status": "unchanged-from-r0"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/baseline-binding.json",
+   "sha256": "bfffc6aa1dbb5a4d59050a3276148be8701f7c969c3817896a69a46977638467",
+   "status": "unchanged-from-r0"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/binary-build-binding.json",
+   "sha256": "47fb5bd77a9e8955e81109195016c6ca6615048ab009e9316760be6f95df1ea4",
+   "status": "replaced-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/candidate-manifest.json",
+   "sha256": "b024208c51aa1dcb5552eab5a6e78da73bac52c31c02537b4a4692cc4d95f7eb",
+   "status": "replaced-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/cleanup-receipt.json",
+   "sha256": "24c9cb70ecdcf4c5a6b8270c061caee22d70170e4f7c18e1c13aa3171b2875a8",
+   "status": "replaced-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/decision-fragment.md",
+   "sha256": "15ab21c10ba4ba78ccea04e53eaab2894fbcd8124150b5e5f9644cfd0ce81624",
+   "status": "replaced-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/devcheck-receipt.json",
+   "sha256": "ec84165af1cea003e8d6667db27dd630fefc7b04d04e6ffc2707d4bf339e8672",
+   "status": "new-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/node-candidate.patch",
+   "sha256": "97f84755b8ca470a3cc64145649eafae732913c2e2a02a116abfbe855fbb2a95",
+   "status": "replaced-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/probe-default/external-node-binding.json",
+   "sha256": "db6a1d4ad68e394828bb2f086ee9f78ac5a37b6e2ee09c430d50ea953dbbde46",
+   "status": "new-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/probe-default/node.log",
+   "sha256": "186063ddbf1300ffe8a973ca507a5264e3c8fbc91f73d462cfd15f61a58b4a9b",
+   "status": "new-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/probe-default/raw_responses.json",
+   "sha256": "353962ea9f0c0c19e2fee7e79821d86a2f079cd76268377448de094b18a57300",
+   "status": "replaced-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/probe-default/report.json",
+   "sha256": "022de0bebb45f198a1fb312f780510dedb0518773eecc3fcbdaafa7dfd5740f5",
+   "status": "replaced-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/probe-default/report.md",
+   "sha256": "10346403576e044b0e96e7832ead13b85a4b92df5579fccf5f4582603fc013b3",
+   "status": "replaced-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/probe-profile-on/external-node-binding.json",
+   "sha256": "1af9aa3e8d86d436a18ba904c26f43a365a92e3ab606c28da97466eea2951073",
+   "status": "new-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/probe-profile-on/node.log",
+   "sha256": "c11570825c8295b8496ebdc7456bd495ba5d1bd1a46a1d85aaa337db772a3373",
+   "status": "replaced-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/probe-profile-on/raw_responses.json",
+   "sha256": "d1fb5a31aaa3abe6b8f145ed4f1b84c5f036f47942abd7309e83fac297a1f85f",
+   "status": "replaced-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/probe-profile-on/report.json",
+   "sha256": "6855cd6ae9fb9b913047733dbd058ef7e2c6f4e08b186962f28718546547bbb7",
+   "status": "replaced-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/probe-profile-on/report.md",
+   "sha256": "263fa076cef13aec7bfb43ca8a6f8f7de4eeb5057e847953a2f71febaa7991fe",
+   "status": "replaced-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/r1-external-run.py",
+   "sha256": "3a354647bb1c0763f4d430ae805c843aa9eac60ace7d39ac3666445c299f42cc",
+   "status": "new-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/test-receipts/devcheck.log",
+   "sha256": "1f6c90029f7b86312bccf57c1339f00d6d578b712033e4f787072bb771d23c9e",
+   "status": "new-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/test-receipts/fmt-check.exit",
+   "sha256": "194ff5bca66278888f0f00be5c7ca523d15098ece958b14952533811089f6106",
+   "status": "new-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/test-receipts/fmt-check.log",
+   "sha256": "a412708c0129605d939cf6aa6e55ac3fbdcb19d9670e2d0656dcb5dcc859a1a7",
+   "status": "new-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/test-receipts/green-build.exit",
+   "sha256": "194ff5bca66278888f0f00be5c7ca523d15098ece958b14952533811089f6106",
+   "status": "unchanged-from-r0"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/test-receipts/green-build.log",
+   "sha256": "58eec16483d446e13c0e53d0955b64c5a2903e3e2dc4a66c3b1f6e75f854fc22",
+   "status": "replaced-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/test-receipts/green-clippy.exit",
+   "sha256": "194ff5bca66278888f0f00be5c7ca523d15098ece958b14952533811089f6106",
+   "status": "unchanged-from-r0"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/test-receipts/green-clippy.log",
+   "sha256": "b12750589d7a3a7b911c1f4bd79f976ca90c58ebcdbab9d7a3f55b8e97ea87ba",
+   "status": "replaced-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/test-receipts/green-node-conf.exit",
+   "sha256": "194ff5bca66278888f0f00be5c7ca523d15098ece958b14952533811089f6106",
+   "status": "new-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/test-receipts/green-node-conf.log",
+   "sha256": "cd339eec52ab5ad472a48f48e4bd6ffe7a8939d6a2ae5c6584f66b44081f5839",
+   "status": "new-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/test-receipts/green-node-envflags.exit",
+   "sha256": "194ff5bca66278888f0f00be5c7ca523d15098ece958b14952533811089f6106",
+   "status": "unchanged-from-r0"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/test-receipts/green-node-envflags.log",
+   "sha256": "6584b089a26b163972f2a33463b01de8c6c71370613c7fc611e67a0ad41c2d53",
+   "status": "replaced-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/test-receipts/green-node-malformed.exit",
+   "sha256": "194ff5bca66278888f0f00be5c7ca523d15098ece958b14952533811089f6106",
+   "status": "new-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/test-receipts/green-node-malformed.log",
+   "sha256": "78272704b3bfc3fd4b95f344b67f4e535018ccdab271d4e0a830e11b2327aee8",
+   "status": "new-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/test-receipts/green-node-profile.exit",
+   "sha256": "194ff5bca66278888f0f00be5c7ca523d15098ece958b14952533811089f6106",
+   "status": "unchanged-from-r0"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/test-receipts/green-node-profile.log",
+   "sha256": "09737de9bb943e876548309dcb9207b90d02a8575116b6f38f873770c5602f1b",
+   "status": "replaced-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/test-receipts/green-rpc.exit",
+   "sha256": "194ff5bca66278888f0f00be5c7ca523d15098ece958b14952533811089f6106",
+   "status": "unchanged-from-r0"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/test-receipts/green-rpc.log",
+   "sha256": "50d0d894a38c83cba66c104489f3de73b7db24d891a6c1f020133a72d0fd052e",
+   "status": "replaced-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/test-receipts/probe-default-run.log",
+   "sha256": "6dc31c1773a74aa132be754791ac361515f655eba5ce358ecac1a26216dfe2cb",
+   "status": "new-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/test-receipts/probe-profile-on-run.log",
+   "sha256": "d178dce1fe490d8f826d6c7a4115d07711d5048e1284007ca55972bd569a29e5",
+   "status": "new-in-r1"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/test-receipts/red-node.exit",
+   "sha256": "614969155d175451784673473a1d1dd11a83b2a77ba4744e00e14d3a44cf2bcd",
+   "status": "unchanged-from-r0"
+  },
+  {
+   "path": "testing/rbitcoin-bark-v31/test-receipts/red-node.log",
+   "sha256": "79e7e164ffba3da40a39c0f097c4724ab3456371a0297b27e2da182061156a40",
+   "status": "replaced-in-r1"
+  }
+ ],
+ "counts": {
+  "total": 41,
+  "unchanged_from_r0": 8,
+  "replaced_in_r1": 18,
+  "new_in_r1": 15
+ },
+ "aggregate_recipe": "sha256 of canonical JSON (sort_keys, separators (',',':')) of {'base': <worktree base b0ab4ca>, 'files': <this files list>}",
+ "aggregate_sha256": "8630a38ba2fcca481831bcf2e73f25477b98fbb2a570ff9c15ad660f77ab3d67"
+}

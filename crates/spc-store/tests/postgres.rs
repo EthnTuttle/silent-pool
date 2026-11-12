@@ -18,6 +18,33 @@ async fn store() -> Option<Store> {
     Some(store)
 }
 
+/// Create a uniquely named database for tests whose metric assertions must
+/// describe only their own fixture. This avoids both shared-database counts
+/// and racy before/after deltas when the suite runs with parallel test threads.
+async fn isolated_store(prefix: &str) -> Option<(Store, sqlx::PgPool, String)> {
+    let url = std::env::var("SPC_TEST_DATABASE_URL").ok()?;
+    let base = url.split('?').next().unwrap_or(&url);
+    let (head, _) = base
+        .rsplit_once('/')
+        .expect("SPC_TEST_DATABASE_URL has a database path");
+    let admin_url = format!("{head}/postgres");
+    let name = format!("{prefix}{}", hex::encode(uuid::Uuid::new_v4().as_bytes()));
+    let admin = sqlx::PgPool::connect(&admin_url).await.unwrap();
+    if sqlx::query(&format!("CREATE DATABASE {name}"))
+        .execute(&admin)
+        .await
+        .is_err()
+    {
+        eprintln!("skip: no CREATE DATABASE privilege on the test server");
+        return None;
+    }
+    let store = Store::connect(&format!("{head}/{name}"))
+        .await
+        .expect("connect isolated database");
+    store.migrate().await.expect("migrate isolated database");
+    Some((store, admin, name))
+}
+
 fn id() -> [u8; 32] {
     let mut out = [0u8; 32];
     out[..16].copy_from_slice(Uuid::new_v4().as_bytes());
@@ -46,6 +73,9 @@ async fn snapshot(store: &Store, fingerprint: [u8; 32]) {
             distribution_id: None,
             entries: serde_json::json!([]),
             high_water: serde_json::json!({}),
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            window_rule: WindowRule::ShareWorkLegacy,
             window_target: Some("16".into()),
         })
         .await
@@ -284,6 +314,8 @@ async fn placeholder_identity_lets_slices_book_and_registration_replaces_it() {
             difficulty: "1".into(),
             root: id(),
             shares: vec![0u8; 8],
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
             credits: vec![SliceCreditRow {
                 sp_id,
                 diff_sum: "12".into(),
@@ -384,6 +416,8 @@ async fn window_slices_to_returns_credits_up_to_the_high_water() {
             difficulty: "300".into(),
             root: id(),
             shares: vec![1],
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
             credits: vec![SliceCreditRow {
                 sp_id: alice,
                 diff_sum: "100".into(),
@@ -403,6 +437,8 @@ async fn window_slices_to_returns_credits_up_to_the_high_water() {
             difficulty: "200".into(),
             root: id(),
             shares: vec![2],
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
             credits: vec![SliceCreditRow {
                 sp_id: bob,
                 diff_sum: "200".into(),
@@ -462,6 +498,9 @@ async fn snapshot_round_trips_entries_and_high_water() {
             distribution_id: Some(42),
             entries: entries.clone(),
             high_water: high_water.clone(),
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            window_rule: WindowRule::ShareWorkLegacy,
             window_target: Some("340282366920938463463374607431768211455".into()),
         })
         .await
@@ -497,6 +536,9 @@ async fn snapshot_window_target_is_nullable_for_pre_migration_rows() {
             distribution_id: None,
             entries: serde_json::json!([]),
             high_water: serde_json::json!({"0": "1"}),
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            window_rule: WindowRule::ShareWorkLegacy,
             window_target: None,
         })
         .await
@@ -668,6 +710,7 @@ async fn ark_delivery_ids_reports_registered_miners() {
             mailbox_mode: MailboxMode::None,
             mailbox_m: None,
             mailbox_d: None,
+            epoch_fallback: EpochFallback::Static,
         })
         .await
         .unwrap();
@@ -699,6 +742,8 @@ async fn bootstrap_window_tail_carries_slice_credits() {
             difficulty: "400".into(),
             root: id(),
             shares: vec![9, 9, 9],
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
             credits: vec![SliceCreditRow {
                 sp_id: alice,
                 diff_sum: "44".into(),
@@ -760,6 +805,8 @@ async fn scrub_preserves_scheduled_ark_snapshots_and_clears_settled_ones() {
             difficulty: "10".into(),
             root: id(),
             shares: vec![1],
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
             credits: vec![SliceCreditRow {
                 sp_id: scheduled_miner,
                 diff_sum: "10".into(),
@@ -786,6 +833,9 @@ async fn scrub_preserves_scheduled_ark_snapshots_and_clears_settled_ones() {
                 "sats": 250u64,
             }]),
             high_water: serde_json::json!({"0": "1"}),
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            window_rule: WindowRule::ShareWorkLegacy,
             window_target: None,
         })
         .await
@@ -836,6 +886,9 @@ async fn scrub_preserves_scheduled_ark_snapshots_and_clears_settled_ones() {
                 "sats": 1_000u64,
             }]),
             high_water: serde_json::json!({"0": "1"}),
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            window_rule: WindowRule::ShareWorkLegacy,
             window_target: None,
         })
         .await
@@ -872,6 +925,9 @@ async fn scrub_preserves_scheduled_ark_snapshots_and_clears_settled_ones() {
             distribution_id: None,
             entries: serde_json::json!([]),
             high_water: serde_json::json!({"0": "1"}),
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            window_rule: WindowRule::ShareWorkLegacy,
             window_target: None,
         })
         .await
@@ -902,7 +958,7 @@ async fn scrub_preserves_scheduled_ark_snapshots_and_clears_settled_ones() {
         .unwrap();
 
     // tip 10_000: retain = 9_984, scrub_after = 9_900.
-    store.scrub(10_000, 16, 100).await.unwrap();
+    store.scrub(10_000, 16, 4_096, 100).await.unwrap();
 
     let slices = store.window_slices_to(old_slice, i64::MAX).await.unwrap();
     let old = slices
@@ -1111,7 +1167,9 @@ async fn settle_bumps_the_front_rev_atomically() {
 /// wrote: one confirmed block with an Ark payout and a forfeit.
 #[tokio::test]
 async fn metrics_queries_read_back_settlement() {
-    let Some(store) = store().await else { return };
+    let Some((store, admin, database)) = isolated_store("spc_metrics_").await else {
+        return;
+    };
 
     let sp_id = id();
     let fingerprint = id();
@@ -1140,17 +1198,24 @@ async fn metrics_queries_read_back_settlement() {
         .await
         .unwrap();
 
-    let blocks = store.blocks_by_status().await.unwrap();
-    assert!(blocks.contains(&("confirmed".to_string(), 1)), "{blocks:?}");
-
-    let payouts = store.ark_payouts_by_status().await.unwrap();
-    assert!(
-        payouts.contains(&("scheduled".to_string(), 1)),
-        "{payouts:?}"
+    // Exact totals for an isolated fixture, not global assertions or deltas
+    // that another test could change concurrently.
+    assert_eq!(
+        store.blocks_by_status().await.unwrap(),
+        vec![("confirmed".to_string(), 1)]
     );
+    assert_eq!(
+        store.ark_payouts_by_status().await.unwrap(),
+        vec![("scheduled".to_string(), 1)]
+    );
+    assert_eq!(store.ark_due_sats().await.unwrap(), 250);
+    assert_eq!(store.forfeited_sats_total().await.unwrap(), 40);
 
-    assert!(store.ark_due_sats().await.unwrap() >= 250);
-    assert!(store.forfeited_sats_total().await.unwrap() >= 40);
+    store.pool().close().await;
+    sqlx::query(&format!("DROP DATABASE {database} WITH (FORCE)"))
+        .execute(&admin)
+        .await
+        .unwrap();
 }
 
 /// The 0004 migration must apply to a database last migrated at 0003, and a
@@ -1257,6 +1322,9 @@ async fn window_target_migration_applies_to_an_existing_database() {
             distribution_id: None,
             entries: serde_json::json!([]),
             high_water: serde_json::json!({"0": "1"}),
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            window_rule: WindowRule::ShareWorkLegacy,
             window_target: Some("340282366920938463463374607431768211455".into()),
         })
         .await

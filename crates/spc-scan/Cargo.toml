@@ -11,6 +11,7 @@ default = []
 rpc = ["dep:bitcoincore-rpc"]
 
 [dependencies]
+spc-accounting.workspace = true
 spc-crypto.workspace = true
 spc-share-ext.workspace = true
 anyhow.workspace = true

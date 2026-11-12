@@ -6,7 +6,11 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+postgres-integration = []
+
 [dependencies]
+bitcoin.workspace = true
 spc-accounting.workspace = true
 spc-crypto.workspace = true
 spc-ext.workspace = true
@@ -22,3 +26,5 @@ uuid = { version = "1", features = ["v4", "serde"] }
 
 [dev-dependencies]
 hex.workspace = true
+futures-util = "0.3"
+redis = { version = "0.27", features = ["tokio-comp", "streams"] }

@@ -1,0 +1,25 @@
+{
+  "name": "version_wrong_type",
+  "description": "version as a JSON string instead of an integer: serde usize rejects strings; shape fails",
+  "overrides": [
+    {
+      "op": "patch",
+      "method": "getnetworkinfo",
+      "field": "version",
+      "value": "310000"
+    }
+  ],
+  "expect": {
+    "verdict_status": "incompatible",
+    "reasons": [
+      "fail-encoding",
+      "fail-shape",
+      "funded-unproven"
+    ],
+    "funded_state": "unproven",
+    "checks": {
+      "getnetworkinfo.version-shape": "failed",
+      "getnetworkinfo.gate.server": "unknown"
+    }
+  }
+}

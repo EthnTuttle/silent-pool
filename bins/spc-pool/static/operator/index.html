@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- A data-URI icon keeps the browser from requesting /favicon.ico (a
+     fifth route this listener must not serve). -->
+<link rel="icon" href="data:,">
+<title>spc-pool operator</title>
+<link rel="stylesheet" href="operator.css">
+</head>
+<body>
+<header>
+  <h1>spc-pool operator</h1>
+  <p class="sub">Read-only observation. No controls on this page.</p>
+  <p id="stale-banner" class="banner" role="status" aria-live="polite" hidden></p>
+</header>
+
+<main>
+  <ol class="facts" aria-label="Pool facts">
+    <li class="fact" id="fact-network">
+      <h2>Network and work profile</h2>
+      <p class="value" id="v-network" data-testid="v-network">unknown</p>
+    </li>
+    <li class="fact" id="fact-latest-block">
+      <h2>Latest observed block</h2>
+      <p class="value" id="v-latest-block" data-testid="v-latest-block">unknown</p>
+      <p class="note" id="v-latest-block-note"></p>
+    </li>
+    <li class="fact" id="fact-liability">
+      <h2>Total pending liability</h2>
+      <p class="value money" id="v-liability" data-testid="v-liability">unknown</p>
+      <p class="note">Point-in-time snapshot, not a period total.</p>
+      <p class="note" id="v-liability-asof"></p>
+    </li>
+    <li class="fact" id="fact-ark-due">
+      <h2>Ark-due (scheduled)</h2>
+      <p class="value money" id="v-ark-due" data-testid="v-ark-due">unknown</p>
+      <p class="note">Of which the pending liability; never added to it.</p>
+    </li>
+    <li class="fact" id="fact-float">
+      <h2>Ark float</h2>
+      <p class="value" id="v-float" data-testid="v-float">unknown</p>
+    </li>
+  </ol>
+
+  <details id="details">
+    <summary>Details</summary>
+    <div class="details-body">
+      <section aria-labelledby="blocks-caption">
+        <h3 id="blocks-caption">Ten most recent blocks</h3>
+        <p class="note">Fixed bound of ten rows, height-descending. The latest
+        block fact above is derived from the first row; the block list is not
+        atomic with the funds snapshot.</p>
+        <div class="table-wrap">
+          <table>
+            <caption class="sr-only">Ten most recent blocks</caption>
+            <thead>
+              <tr>
+                <th scope="col">Height</th>
+                <th scope="col">Status</th>
+                <th scope="col">Settled at</th>
+                <th scope="col">Block hash</th>
+              </tr>
+            </thead>
+            <tbody id="blocks-body"></tbody>
+          </table>
+        </div>
+        <p class="note" id="blocks-note"></p>
+      </section>
+
+      <section aria-labelledby="payouts-caption">
+        <h3 id="payouts-caption">Ark payouts by status</h3>
+        <p class="note">Current schema statuses only: scheduled, sent,
+        failed_to_pending. No other status exists in this slice.</p>
+        <dl class="payouts" id="payouts"></dl>
+      </section>
+
+      <section aria-labelledby="work-caption">
+        <h3 id="work-caption">Work profile</h3>
+        <dl id="work-profile" class="profile"></dl>
+      </section>
+
+      <section aria-labelledby="fresh-caption">
+        <h3 id="fresh-caption">Freshness and errors</h3>
+        <dl id="freshness" class="profile"></dl>
+        <ul id="error-list" class="errors" aria-label="Observation errors"></ul>
+        <p class="note">A null field with a code means unknown, never zero.
+        <code>/healthz</code> is HTTP liveness only, never pool health.</p>
+      </section>
+    </div>
+  </details>
+</main>
+
+<footer>
+  <p class="note">All amounts are exact sats; decimal strings are formatted
+  with BigInt, never through Number. This page fetches only its own
+  same-origin operator routes.</p>
+</footer>
+
+<script src="operator.js"></script>
+</body>
+</html>

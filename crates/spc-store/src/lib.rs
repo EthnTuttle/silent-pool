@@ -3,8 +3,11 @@
 
 #![deny(unsafe_code)]
 
+pub mod aggregate_store;
+pub mod aggregation;
 pub mod bootstrap;
 pub mod codec;
+pub mod economic;
 pub mod models;
 pub mod postgres;
 pub mod redis;

@@ -164,8 +164,9 @@ dependencies = [
  "rand 0.9.5",
  "secp256k1 0.33.1",
  "serde",
+ "serde_json",
  "thiserror 2.0.21",
-]
+ ]
 
 [[package]]
 name = "arraydeque"
@@ -4014,10 +4015,19 @@ name = "spc-agent"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ark-lib",
+ "async-trait",
+ "axum",
+ "bark-server-rpc",
+ "bark-wallet",
  "bitcoin",
+ "chrono",
  "clap",
  "hex",
  "rand 0.8.8",
+ "reqwest",
+ "rusqlite",
+ "rustix",
  "serde",
  "serde_json",
  "spc-crypto",
@@ -4025,14 +4035,43 @@ dependencies = [
  "spc-pool",
  "spc-scan",
  "spc-share-ext",
+ "spc-store",
  "stratum-apps",
  "stratum-core",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "toml 0.8.23",
  "tracing",
  "tracing-subscriber",
-]
+ "url",
+ "zeroize",
+ ]
+
+[[package]]
+name = "spc-cpu-miner"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bitcoin",
+ "clap",
+ "hex",
+ "proptest",
+ "rand 0.8.8",
+ "secp256k1 0.28.2",
+ "serde",
+ "serde_json",
+ "spc-crypto",
+ "spc-scan",
+ "stratum-apps",
+ "stratum-core",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "toml 0.8.23",
+ "tracing",
+ "tracing-subscriber",
+ ]
 
 [[package]]
 name = "spc-crypto"
@@ -4040,6 +4079,7 @@ version = "0.1.0"
 dependencies = [
  "ark-lib",
  "bech32",
+ "bip39",
  "bitcoin",
  "hex",
  "rand 0.8.8",
@@ -4065,6 +4105,65 @@ dependencies = [
 ]
 
 [[package]]
+name = "spc-lab"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ark-lib",
+ "async-trait",
+ "bitcoin",
+ "bs58",
+ "hex",
+ "num-bigint",
+ "rand 0.8.8",
+ "redis",
+ "rustix",
+ "secp256k1 0.29.1",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "spc-crypto",
+ "spc-ext",
+ "spc-lab-txd",
+ "spc-pool",
+ "spc-scan",
+ "spc-store",
+ "thiserror 2.0.21",
+ "tokio",
+ "toml 0.8.23",
+ ]
+
+[[package]]
+name = "spc-lab-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde",
+ "serde_json",
+ "spc-lab",
+]
+
+[[package]]
+name = "spc-lab-txd"
+version = "0.1.0"
+dependencies = [
+ "bitcoin",
+ "hex",
+ "hmac",
+ "libc",
+ "rustix",
+ "secp256k1 0.29.1",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "spc-cpu-miner",
+ "tempfile",
+ "thiserror 2.0.21",
+ "zeroize",
+]
+
+[[package]]
 name = "spc-pool"
 version = "0.1.0"
 dependencies = [
@@ -4074,13 +4173,17 @@ dependencies = [
  "axum",
  "bark-server-rpc",
  "bark-wallet",
+ "bdk_bitcoind_rpc",
  "bitcoin",
  "bitcoincore-rpc",
+ "channels_sv2",
+ "chrono",
  "clap",
  "hex",
  "http-body-util",
  "proptest",
  "rand 0.8.8",
+ "rustix",
  "secp256k1 0.28.2",
  "secp256k1 0.29.1",
  "serde",
@@ -4091,6 +4194,7 @@ dependencies = [
  "spc-scan",
  "spc-share-ext",
  "spc-store",
+ "sqlx",
  "stratum-apps",
  "stratum-core",
  "thiserror 2.0.21",
@@ -4099,6 +4203,7 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -4113,6 +4218,7 @@ dependencies = [
  "rand 0.8.8",
  "serde",
  "serde_json",
+ "spc-accounting",
  "spc-crypto",
  "spc-share-ext",
  "stratum-apps",
@@ -4139,7 +4245,9 @@ name = "spc-store"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bitcoin",
  "chrono",
+ "futures-util",
  "hex",
  "redis",
  "serde",
@@ -4151,7 +4259,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "uuid",
-]
+ ]
 
 [[package]]
 name = "spc-testutil"

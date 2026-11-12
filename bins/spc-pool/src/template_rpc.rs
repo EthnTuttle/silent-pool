@@ -48,40 +48,21 @@ impl TemplateSource for RpcTemplateSource {
             )
             .map_err(|e| TemplateError::Unavailable(e.to_string()))?;
         let mut transactions = Vec::with_capacity(t.transactions.len());
-        let mut kept_fees = 0u64;
-        let mut total_fees = 0u64;
-        let mut dropped_witness = 0usize;
-        // A witness transaction needs a BIP 141 witness commitment output in
-        // the coinbase, which this pool does not build yet. Excluding it keeps
-        // the block consensus-valid: the template provider selects which
-        // transactions to include, so leaving one out only lowers the
-        // claimable fees.
+        let mut fees = 0u64;
+        // Keep every transaction that strictly decodes. The coinbase
+        // carries the BIP 141 witness commitment (decision
+        // 2026-11-08-pool-witness-commitment), so witness transactions are
+        // mined and their fees claimed, not excluded. A transaction that
+        // does not decode - or does not re-serialize byte-for-byte - has no
+        // unambiguous txid/wtxid, so the whole template is refused.
         for tx in &t.transactions {
-            total_fees = total_fees.saturating_add(tx.fee.to_sat());
-            match crate::template::tx_has_witness(&tx.raw_tx) {
-                Some(false) => {
-                    kept_fees = kept_fees.saturating_add(tx.fee.to_sat());
-                    transactions.push(tx.raw_tx.clone());
-                }
-                Some(true) => dropped_witness = dropped_witness.saturating_add(1),
-                None => {
-                    return Err(TemplateError::Unavailable(
-                        "template transaction does not decode".into(),
-                    ))
-                }
-            }
+            fees = fees.saturating_add(tx.fee.to_sat());
+            crate::template::decode_transaction_strict(&tx.raw_tx)?;
+            transactions.push(tx.raw_tx.clone());
         }
-        if dropped_witness > 0 {
-            tracing::warn!(
-                dropped = dropped_witness,
-                "template contained witness transactions; excluded until the coinbase carries a witness commitment"
-            );
-        }
-        // GBT reports `subsidy + fees` for the selected set; dropping a tx
-        // removes exactly its fee from what the coinbase may claim.
-        let subsidy = t.coinbase_value.to_sat().saturating_sub(total_fees);
-        let coinbase_value = subsidy.saturating_add(kept_fees);
-        let fees = kept_fees;
+        // GBT reports `subsidy + fees` for the selected set.
+        let subsidy = t.coinbase_value.to_sat().saturating_sub(fees);
+        let coinbase_value = subsidy.saturating_add(fees);
         let prev_hash: BlockHash = t.previous_block_hash;
         if t.bits.len() != 4 {
             return Err(TemplateError::Unavailable("bad bits length".into()));

@@ -1,0 +1,100 @@
+{
+ "packet": "rbitcoin-bark-v31 (AP-1b node compat profile candidate)",
+ "date": "2026-11-08",
+ "baseline": {
+  "name": "approved L2 lab-retarget-profile source snapshot",
+  "approval": "Fable APPROVE tied to snapshot d2f37b91 (docs/reviews/2026-11-05-lab-l2-fable-review.md second verdict; unrevoked per approval_allows_snapshot in testing/regtest-lab-v2-e2e.py lineage)",
+  "manifest": "/tmp/opencode/lab-l2-source-review-manifest.json",
+  "base_commit": "e8cf9c9d61f7c63ae59cc11ab1179cace50ca142",
+  "snapshot_sha256": "d2f37b9113e8855245866289ed393043aed6e6153e8101375072cbb23624d499",
+  "recipe": "sha256 of the canonical JSON of {'base': <base sha>, 'files': <this list>}: hashlib.sha256(json.dumps({'base': m['base'], 'files': m['files']}, sort_keys=True, separators=(',', ':')).encode()).hexdigest()",
+  "file_count": 18,
+  "l2_head_is_base": true,
+  "l2_all_18_files_match_manifest": true,
+  "aggregate_recomputed_matches": true
+ },
+ "candidate_source": {
+  "path": "/tmp/opencode/AP1b-bark-profile",
+  "derived_from": "rsync of the approved L2 tree excluding target/, .git (worktree gitfile), docs/reviews/, result (nix symlink), __pycache__",
+  "copy_time_verification": "immediately after rsync and BEFORE any edit, all 18 snapshot files were hash-identical in the copy (session receipt 2026-11-08, output 'candidate copy matches approved L2 snapshot for all 18 files: True')",
+  "red_phase_note": "the failing-first tests (Red) were then written into 2 of the 18 snapshot files (crates/rbitcoin-node/tests/cli.rs, crates/rbitcoin-rpc/tests/methods/mod.rs) plus 1 non-snapshot journey file, so a post-Red re-run of the copy check diverges on exactly those files",
+  "files_diverged_from_l2_at_this_receipt": [
+   "crates/rbitcoin-node/tests/cli.rs",
+   "crates/rbitcoin-rpc/tests/methods/mod.rs"
+  ],
+  "per_file": {
+   "COMPAT.md": {
+    "l2_matches_manifest": true,
+    "candidate_matches_l2_at_copy_time": true
+   },
+   "changelog.d/retarget-regtest.md": {
+    "l2_matches_manifest": true,
+    "candidate_matches_l2_at_copy_time": true
+   },
+   "crates/rbitcoin-consensus/src/header.rs": {
+    "l2_matches_manifest": true,
+    "candidate_matches_l2_at_copy_time": true
+   },
+   "crates/rbitcoin-consensus/src/params.rs": {
+    "l2_matches_manifest": true,
+    "candidate_matches_l2_at_copy_time": true
+   },
+   "crates/rbitcoin-consensus/tests/header/mod.rs": {
+    "l2_matches_manifest": true,
+    "candidate_matches_l2_at_copy_time": true
+   },
+   "crates/rbitcoin-consensus/tests/header/regtest_overlay_tests.rs": {
+    "l2_matches_manifest": true,
+    "candidate_matches_l2_at_copy_time": true
+   },
+   "crates/rbitcoin-consensus/tests/params.rs": {
+    "l2_matches_manifest": true,
+    "candidate_matches_l2_at_copy_time": true
+   },
+   "crates/rbitcoin-node/src/cli.rs": {
+    "l2_matches_manifest": true,
+    "candidate_matches_l2_at_copy_time": true
+   },
+   "crates/rbitcoin-node/src/config.rs": {
+    "l2_matches_manifest": true,
+    "candidate_matches_l2_at_copy_time": true
+   },
+   "crates/rbitcoin-node/tests/cli.rs": {
+    "l2_matches_manifest": true,
+    "candidate_matches_l2_at_copy_time": false
+   },
+   "crates/rbitcoin-rpc/src/methods/chain.rs": {
+    "l2_matches_manifest": true,
+    "candidate_matches_l2_at_copy_time": true
+   },
+   "crates/rbitcoin-rpc/src/methods/mod.rs": {
+    "l2_matches_manifest": true,
+    "candidate_matches_l2_at_copy_time": true
+   },
+   "crates/rbitcoin-rpc/tests/methods/mod.rs": {
+    "l2_matches_manifest": true,
+    "candidate_matches_l2_at_copy_time": false
+   },
+   "crates/rbitcoin-test/tests/scenarios.rs": {
+    "l2_matches_manifest": true,
+    "candidate_matches_l2_at_copy_time": true
+   },
+   "docs/README.md": {
+    "l2_matches_manifest": true,
+    "candidate_matches_l2_at_copy_time": true
+   },
+   "docs/operator/operations.md": {
+    "l2_matches_manifest": true,
+    "candidate_matches_l2_at_copy_time": true
+   },
+   "docs/rpc.md": {
+    "l2_matches_manifest": true,
+    "candidate_matches_l2_at_copy_time": true
+   },
+   "lint/hex-baseline.txt": {
+    "l2_matches_manifest": true,
+    "candidate_matches_l2_at_copy_time": true
+   }
+  }
+ }
+}

@@ -32,9 +32,12 @@ pub struct BootstrapRequest {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BootstrapResponse {
+    pub economic: Option<spc_accounting::economic::View>,
     pub rev: u64,
     pub pending_balance: Vec<PendingBalanceJson>,
     pub ark_delivery: Vec<ArkDeliveryJson>,
+    pub ark_identities: Vec<SpIdentityJson>,
+    pub ark_epoch_mailboxes: Vec<ArkEpochMailboxJson>,
     pub window_tail: Vec<SliceJson>,
     /// Base64-encoded share blobs for the type-32 service.
     pub type32_blobs: Vec<BlobJson>,
@@ -48,6 +51,21 @@ pub struct PendingBalanceJson {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SpIdentityJson {
+    pub sp_id: String,
+    pub b_scan: String,
+    pub b_spend: String,
+    pub network: i16,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ArkEpochMailboxJson {
+    pub sp_id: String,
+    pub height: u32,
+    pub mailbox_mi: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ArkDeliveryJson {
     pub sp_id: String,
     pub ark_id: String,
@@ -55,6 +73,7 @@ pub struct ArkDeliveryJson {
     pub mailbox_mode: String,
     pub mailbox_m: Option<String>,
     pub mailbox_d: Option<String>,
+    pub epoch_fallback: i16,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -65,6 +84,8 @@ pub struct SliceJson {
     pub ref_job_id: u64,
     pub ref_fees: u64,
     pub n_shares: u32,
+    pub work_unit_version: WorkUnitVersion,
+    pub work_unit_fingerprint: Option<String>,
     pub difficulty: String,
     pub root: String,
 }
@@ -118,6 +139,7 @@ fn hex(v: &[u8]) -> String {
 impl BootstrapResponse {
     pub fn from_snapshot(snap: BootstrapSnapshot, base64: impl Fn(&[u8]) -> String) -> Self {
         Self {
+            economic: snap.economic,
             rev: snap.rev,
             pending_balance: snap
                 .pending_balance
@@ -137,6 +159,26 @@ impl BootstrapResponse {
                     mailbox_mode: d.mailbox_mode.as_str().to_string(),
                     mailbox_m: d.mailbox_m.as_deref().map(hex),
                     mailbox_d: d.mailbox_d.as_deref().map(hex),
+                    epoch_fallback: d.epoch_fallback as i16,
+                })
+                .collect(),
+            ark_identities: snap
+                .ark_identities
+                .into_iter()
+                .map(|i| SpIdentityJson {
+                    sp_id: hex32(&i.sp_id),
+                    b_scan: hex(&i.b_scan),
+                    b_spend: hex(&i.b_spend),
+                    network: i.network,
+                })
+                .collect(),
+            ark_epoch_mailboxes: snap
+                .ark_epoch_mailboxes
+                .into_iter()
+                .map(|e| ArkEpochMailboxJson {
+                    sp_id: hex32(&e.sp_id),
+                    height: e.height,
+                    mailbox_mi: hex(&e.mailbox_mi),
                 })
                 .collect(),
             window_tail: snap
@@ -149,6 +191,8 @@ impl BootstrapResponse {
                     ref_job_id: s.ref_job_id,
                     ref_fees: s.ref_fees,
                     n_shares: s.n_shares,
+                    work_unit_version: s.work_unit_version,
+                    work_unit_fingerprint: s.work_unit_fingerprint.as_ref().map(hex32),
                     difficulty: s.difficulty,
                     root: hex32(&s.root),
                 })

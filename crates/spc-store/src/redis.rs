@@ -18,13 +18,20 @@ pub type Result<T> = std::result::Result<T, RedisError>;
 #[derive(Clone)]
 pub struct Streams {
     conn: MultiplexedConnection,
+    client: redis::Client,
 }
 
 impl Streams {
     pub async fn connect(url: &str) -> Result<Self> {
         let client = redis::Client::open(url)?;
         let conn = client.get_multiplexed_async_connection().await?;
-        Ok(Self { conn })
+        Ok(Self { conn, client })
+    }
+    pub async fn independent(&self) -> Result<Self> {
+        Ok(Self {
+            conn: self.client.get_multiplexed_async_connection().await?,
+            client: self.client.clone(),
+        })
     }
 
     pub async fn add(&self, stream: &str, payload: &[u8]) -> Result<String> {
@@ -93,6 +100,17 @@ impl Streams {
         consumer: &str,
         count: usize,
     ) -> Result<Vec<(String, Vec<u8>)>> {
+        self.read_pending_after(stream, group, consumer, count, "0")
+            .await
+    }
+    pub async fn read_pending_after(
+        &self,
+        stream: &str,
+        group: &str,
+        consumer: &str,
+        count: usize,
+        after: &str,
+    ) -> Result<Vec<(String, Vec<u8>)>> {
         let mut conn = self.conn.clone();
         let value: Value = redis::cmd("XREADGROUP")
             .arg("GROUP")
@@ -102,7 +120,7 @@ impl Streams {
             .arg(count)
             .arg("STREAMS")
             .arg(stream)
-            .arg("0")
+            .arg(after)
             .query_async(&mut conn)
             .await?;
         parse_xread(value)
@@ -128,6 +146,20 @@ impl Streams {
         let mut conn = self.conn.clone();
         let removed: i64 = conn.srem(key, member).await?;
         Ok(removed > 0)
+    }
+
+    /// Write one field of an SPc-side hash (used by `spc:arkreg:ack`).
+    pub async fn hset(&self, key: &str, field: &str, value: &str) -> Result<()> {
+        let mut conn = self.conn.clone();
+        let _: () = conn.hset(key, field, value).await?;
+        Ok(())
+    }
+
+    /// Read one field of an SPc-side hash. A missing key/field is a normal
+    /// cache miss and must be resolved from Postgres by the payout path.
+    pub async fn hget(&self, key: &str, field: &str) -> Result<Option<String>> {
+        let mut conn = self.conn.clone();
+        Ok(conn.hget(key, field).await?)
     }
 
     /// Refresh `key`'s TTL to `secs`; a missing key is a no-op.

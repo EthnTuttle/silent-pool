@@ -1,0 +1,33 @@
+[package]
+name = "spc-lab-txd"
+description = "Lab traffic wallet core: P2PKH traffic keys, legacy signer, and the durable reservation/provenance journal (traffic plan T1a core slice)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+spc-cpu-miner = { path = "../../bins/spc-cpu-miner" }
+bitcoin.workspace = true
+hex.workspace = true
+secp256k1.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+# Declared directly (not via workspace.dependencies) like spc-lab's
+# tempfile: keeps the merge-owned root manifest untouched. 0.12.1 is
+# already in the frozen lockfile.
+hmac = "0.12"
+rustix = { workspace = true, features = ["time"] }
+thiserror.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+# Real RLIMIT_FSIZE write-fault regression (R1) runs in a child process;
+# 0.2.191 is already in the frozen lockfile (via rustix).
+libc = "0.2"
+
+[[bin]]
+name = "spc-lab-txd"
+path = "src/bin/spc-lab-txd.rs"

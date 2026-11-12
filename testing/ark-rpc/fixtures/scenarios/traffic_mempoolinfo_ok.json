@@ -1,0 +1,27 @@
+{
+  "name": "traffic_mempoolinfo_ok",
+  "description": "traffic-slice getmempoolinfo parses fully (maxdatacarriersize patched to the integer Core emits): the traffic check passes both axes, but the verdict stays incompatible on the version gate -- a traffic pass satisfies no bark-verdict requirement, exactly as a traffic failure adds no reason",
+  "overrides": [
+    {
+      "op": "patch",
+      "method": "getmempoolinfo",
+      "field": "maxdatacarriersize",
+      "value": 165
+    }
+  ],
+  "expect": {
+    "verdict_status": "incompatible",
+    "reasons": [
+      "fail-version-gate",
+      "funded-unproven"
+    ],
+    "funded_state": "unproven",
+    "checks": {
+      "getmempoolinfo": {
+        "availability": "passed",
+        "behavior": "passed"
+      },
+      "getnetworkinfo.gate.server": "failed"
+    }
+  }
+}

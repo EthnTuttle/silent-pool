@@ -1,0 +1,21 @@
+{
+  "name": "auth_fail",
+  "description": "HTTP 401 for every call: auth is protocol-level, so nothing is method evidence and the verdict is unproven, not incompatible and not surface_compatible",
+  "overrides": [
+    {"op": "http_status", "status": 401}
+  ],
+  "expect": {
+    "verdict_status": "unproven",
+    "reasons": ["surface-unproven", "funded-unproven"],
+    "funded_state": "unproven",
+    "checks": {
+      "getnetworkinfo.version-shape": {"availability": "unknown", "behavior": "unknown"},
+      "getnetworkinfo.gate.server": {"availability": "unknown", "behavior": "unknown"},
+      "getmempoolentry.recognized": {"availability": "unknown", "behavior": "unknown"},
+      "protocol.id-echo": {"availability": "unknown", "behavior": "unknown"},
+      "testmempoolaccept.recognized": {"availability": "unknown", "behavior": "not_run"},
+      "submitpackage.recognized": {"availability": "unknown", "behavior": "not_run"},
+      "sendrawtransaction.recognized": {"availability": "unknown", "behavior": "not_run"}
+    }
+  }
+}

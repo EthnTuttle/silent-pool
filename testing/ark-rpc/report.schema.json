@@ -1,0 +1,233 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ap1a-ark-rpc-probe/report.schema.json",
+  "title": "AP-1a ark-rpc probe report (schema v2)",
+  "type": "object",
+  "required": [
+    "probe",
+    "probe_version",
+    "schema_version",
+    "generated_utc",
+    "run_token",
+    "target",
+    "profile",
+    "contract_hash",
+    "checks",
+    "observations",
+    "verdict"
+  ],
+  "properties": {
+    "probe": {
+      "type": "string"
+    },
+    "probe_version": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "integer"
+    },
+    "generated_utc": {
+      "type": "string"
+    },
+    "run_token": {
+      "type": "string"
+    },
+    "target": {
+      "type": "object",
+      "required": [
+        "label",
+        "kind"
+      ],
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "owned-fresh-regtest-node",
+            "remote-url"
+          ]
+        }
+      }
+    },
+    "profile": {
+      "type": "object",
+      "required": [
+        "name",
+        "server_min_rpc_version",
+        "wallet_min_rpc_version",
+        "expected_network",
+        "expected_genesis"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "server_min_rpc_version": {
+          "type": "integer"
+        },
+        "wallet_min_rpc_version": {
+          "type": "integer"
+        },
+        "expected_network": {
+          "type": "string"
+        },
+        "expected_genesis": {
+          "type": "string"
+        },
+        "fee_targets": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "fee_estimate_mode": {
+          "type": "string"
+        },
+        "source_citations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "contract_hash": {
+      "type": "string"
+    },
+    "traffic_consumer": {
+      "enum": ["spc-lab-tx-rpc-consumer/1"]
+    },
+    "consumer_model_failures": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "method",
+          "availability",
+          "behavior",
+          "detail"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "method": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "availability": {
+            "enum": [
+              "passed",
+              "failed",
+              "unknown"
+            ]
+          },
+          "behavior": {
+            "enum": [
+              "passed",
+              "failed",
+              "unknown",
+              "not_run"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          },
+          "fail_kind": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "observations": {
+      "type": "object"
+    },
+    "verdict": {
+      "type": "object",
+      "required": [
+        "status",
+        "reasons",
+        "summary",
+        "funded_state",
+        "full_acceptance"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "incompatible",
+            "surface_compatible",
+            "unproven"
+          ]
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "summary": {
+          "type": "string"
+        },
+        "funded_state": {
+          "enum": [
+            "unproven"
+          ]
+        },
+        "full_acceptance": {
+          "enum": [
+            false
+          ]
+        },
+        "unproven_checks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "node": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "binary": {
+          "type": "string"
+        },
+        "binary_sha256": {
+          "type": "string"
+        },
+        "source_name": {
+          "type": "string"
+        },
+        "argv": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "env": {
+          "type": "object"
+        },
+        "exit": {
+          "type": "object"
+        },
+        "rpc_url": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

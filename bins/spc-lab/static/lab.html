@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lab live hub - spc-lab</title>
+  <link rel="stylesheet" href="/lab.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">SILENT POOL / LOCAL REGTEST</p>
+      <h1>Lab live hub</h1>
+    </div>
+    <a class="primary-link" href="/">Open run monitor</a>
+  </header>
+  <section class="auth" aria-label="Session access">
+    <form id="auth-form">
+      <label for="auth-token">Operator or user run token</label>
+      <input id="auth-token" type="password" autocomplete="off" spellcheck="false" maxlength="64" required>
+      <button type="submit">Sign in</button>
+    </form>
+    <p id="auth-message" role="status">Checking access...</p>
+    <button id="logout" hidden>Clear token / sign out</button>
+  </section>
+  <main id="private-view" hidden>
+    <p id="view-banner" class="banner">Loading the actual run inventory...</p>
+    <section class="run-strip" aria-label="Run summary">
+      <div><span class="label">Run</span><strong id="run-id" class="mono">-</strong></div>
+      <div><span class="label">Lifecycle</span><strong id="lifecycle">-</strong></div>
+      <div><span class="label">Recorded live actors</span><strong id="actor-count">-</strong></div>
+      <div><span class="label">Latest retained evidence</span><strong id="evidence-age">-</strong></div>
+    </section>
+    <p class="explainer">A compact map of declared roles, real processes and already-collected observations. <strong>Recorded <code>running</code> is a supervisor state, not a current health claim.</strong> This read-only page refreshes every two seconds; it has no role-start, wallet or funding controls.</p>
+
+    <section>
+      <div class="section-heading">
+        <div><p class="eyebrow">ACTUAL EXPERIMENT</p><h2>Processes and co-located roles</h2></div>
+        <span id="topology" class="tag">-</span>
+      </div>
+      <div id="groups" class="groups"></div>
+    </section>
+
+    <section>
+      <div class="section-heading">
+        <div><p class="eyebrow">CAPABILITY GAP</p><h2>Not in this run / required next integrations</h2></div>
+      </div>
+      <p class="explainer">Current scenario facts are separated from the expanded lab profile. Planned Ark and wallet work is not marked running today.</p>
+      <div id="integrations" class="integration-list"></div>
+    </section>
+
+    <footer>
+      <a id="monitor-link" href="/">Advanced run monitor</a>
+      <span>Source-owner role guide: <code>docs/LAB-ROLES.md</code>. No role-native UI is implied by an API or internal transport.</span>
+    </footer>
+  </main>
+  <script src="/access.js"></script>
+  <script src="/lab.js"></script>
+</body>
+</html>

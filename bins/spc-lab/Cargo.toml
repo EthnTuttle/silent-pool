@@ -1,0 +1,18 @@
+[package]
+name = "spc-lab-cli"
+description = "Headless regtest lab runner: CLI, HTTP/SSE and thin browser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "spc-lab"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+spc-lab = { workspace = true }

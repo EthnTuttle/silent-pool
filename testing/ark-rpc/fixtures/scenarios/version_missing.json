@@ -1,0 +1,25 @@
+{
+  "name": "version_missing",
+  "description": "getnetworkinfo without a version field: bark require_version cannot parse; shape fails, gates unevaluatable",
+  "overrides": [
+    {
+      "op": "delete",
+      "method": "getnetworkinfo",
+      "field": "version"
+    }
+  ],
+  "expect": {
+    "verdict_status": "incompatible",
+    "reasons": [
+      "fail-encoding",
+      "fail-shape",
+      "funded-unproven"
+    ],
+    "funded_state": "unproven",
+    "checks": {
+      "getnetworkinfo.version-shape": "failed",
+      "getnetworkinfo.gate.server": "unknown",
+      "getnetworkinfo.gate.wallet": "unknown"
+    }
+  }
+}

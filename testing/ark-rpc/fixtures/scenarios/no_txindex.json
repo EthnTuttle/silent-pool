@@ -1,0 +1,16 @@
+{
+  "name": "no_txindex",
+  "description": "getindexinfo without txindex: bark require_txindex fails closed",
+  "overrides": [
+    {"op": "patch", "method": "getnetworkinfo", "field": "version", "value": 310000},
+    {"op": "delete", "method": "getindexinfo", "field": "txindex"}
+  ],
+  "expect": {
+    "verdict_status": "incompatible",
+    "reasons": ["fail-shape", "funded-unproven"],
+    "funded_state": "unproven",
+    "checks": {
+      "getindexinfo.txindex": "failed"
+    }
+  }
+}

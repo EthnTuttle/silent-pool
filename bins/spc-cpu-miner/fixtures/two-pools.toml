@@ -1,0 +1,28 @@
+config_version = 1
+miner_id = "miner-two-pools"
+event_queue_capacity = 4096
+
+[[connections]]
+source_audit = { mode = "unaudited" }
+id = "alice-pool-a"
+endpoint = "127.0.0.1:33445"
+identity = "tsp1q-alice-replaced-by-the-runner"
+authority_public_key = "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+min_extranonce_size = 4
+reconnect = { enabled = true, initial_backoff_ms = 100, max_backoff_ms = 5000, handshake_timeout_ms = 10000 }
+workers = [
+  { id = "alice-0", budget = { hashes_per_second = 100000, total_attempts = 1000000 }, ntime_policy = "hold", max_ntime_roll_seconds = 600, batch_size = 256 },
+  { id = "alice-1", budget = { hashes_per_second = 100000, total_attempts = 1000000 }, ntime_policy = "roll", max_ntime_roll_seconds = 600, batch_size = 256 },
+]
+
+[[connections]]
+source_audit = { mode = "unaudited" }
+id = "bob-pool-b"
+endpoint = "127.0.0.1:33446"
+identity = "tsp1q-bob-replaced-by-the-runner"
+authority_public_key = "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5"
+min_extranonce_size = 4
+reconnect = { enabled = true, initial_backoff_ms = 100, max_backoff_ms = 5000, handshake_timeout_ms = 10000 }
+workers = [
+  { id = "bob-0", budget = { hashes_per_second = 100000, total_attempts = 1000000 }, ntime_policy = "hold", max_ntime_roll_seconds = 600, batch_size = 256 },
+]

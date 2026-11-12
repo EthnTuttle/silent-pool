@@ -72,6 +72,12 @@ impl Sv1Server {
         let _ = self.jobs.send(job);
     }
 
+    /// Stop accepting work for the previous generation after a failed front
+    /// refresh. Existing sessions are checked by the front as defence in depth.
+    pub async fn clear_current(&self) {
+        *self.current.lock().await = None;
+    }
+
     /// Bind and serve until the listener is dropped. Returns the bound address.
     pub async fn bind(
         &self,
@@ -114,6 +120,16 @@ impl Sv1Server {
                 line = lines.next_line() => {
                     let Some(line) = line? else { break };
                     let (notifications, response) = session.handle_line(&line);
+                    if let (Ok(request),Some(response))=(serde_json::from_str::<serde_json::Value>(&line),response.as_ref()) {
+                        if request["method"]=="mining.submit" {
+                            if let Ok(reply)=serde_json::from_str::<serde_json::Value>(response) {
+                                if let Some(code)=reply["error"][0].as_i64() {
+                                    let job_id=request["params"][1].as_str().filter(|s|s.len()<=16 && s.bytes().all(|b|b.is_ascii_hexdigit()));
+                                    tracing::info!(event="downstream_submission_rejected",job_id,error_code=code,"actual downstream submission rejected before forwarding");
+                                }
+                            }
+                        }
+                    }
                     for n in notifications {
                         write.write_all(n.as_bytes()).await?;
                         write.write_all(b"\n").await?;
@@ -181,7 +197,9 @@ fn rand_channel_id() -> u32 {
     use rand::RngCore;
     let mut b = [0u8; 4];
     rand::thread_rng().fill_bytes(&mut b);
-    u32::from_le_bytes(b)
+    // Keep SV1 disjoint from the sequential low-half SV2 channel ids so an
+    // outcome can never resolve another ingress's submission.
+    u32::from_le_bytes(b) | 0x8000_0000
 }
 
 #[cfg(test)]
@@ -189,6 +207,14 @@ mod tests {
     use super::*;
     use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
     use tokio::io::AsyncBufReadExt;
+
+    #[test]
+    fn native_sv1_channel_ids_are_disjoint_from_sv2_ids() {
+        for _ in 0..64 {
+            assert_eq!(rand_channel_id() & 0x8000_0000, 0x8000_0000);
+            assert_ne!(rand_channel_id() & 0x7fff_ffff, 0);
+        }
+    }
 
     fn address() -> String {
         let secp = Secp256k1::new();
@@ -215,6 +241,7 @@ mod tests {
             coinb2: vec![0xff; 8],
             merkle_branches: vec![],
             clean_jobs: true,
+            work: crate::sv1::JobWork::legacy(1, 0x207f_ffff, 1),
         }
     }
 

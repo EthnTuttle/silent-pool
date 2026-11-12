@@ -1,0 +1,214 @@
+{
+  "artifact_policy": {
+    "directories": "0700",
+    "files": "0600",
+    "fresh_datadirs": true,
+    "owned_start_token_cleanup": true,
+    "run_prefix": "/tmp/opencode/LP-v09-live-"
+  },
+  "forbidden_measured_methods": [
+    "setmocktime",
+    "generate*"
+  ],
+  "lp_live": {
+    "baseline": "testing/lab-live/baseline.json",
+    "driver": "testing/regtest-lab-v2-e2e.py",
+    "oracle": "testing/lab-live/oracle.py",
+    "retarget": "testing/lab-live/retarget.json",
+    "scenario_baseline_pow_bits": "0x200fffff",
+    "scenario_retarget_pow_bits": "0x1e7fffff",
+    "snapshot_sha256": "aa3b37b67960071ec6bd4f09c7cd0ac83e1b526404231994c42dc331dc44ded2"
+  },
+  "namespace": {
+    "approval_status_at_contract_freeze": "provisional only; release-check requires a new exact-snapshot record",
+    "base_revision": "b0ab4ca34fda07c61a6335d05f598eaacc69678c",
+    "binary_hashes": {
+      "spc-cpu-miner": "443de4380b50b48626556bfff3596e621723d54eea82f96d656af39959ffa472",
+      "spc-lab": "6a3b61f51a8f60a89ff2a70078dd3109fad77a6a55d7caa9078f7e3712bf95d2",
+      "spc-pool": "aac1278f870fbdd504f9c5846b5d38ebf52335853dcbc471932afb8b9c6c481d",
+      "spc-scan": "f8000b43b3c7f12030be4d2eebb6fb5073cf0ae4b86830f595f24cad6bf14417"
+    },
+    "broker": "scripts/lab/lib/lab_backend.py",
+    "code_snapshot_sha256": "2d6c752d24d4f4cc9ea30f6d5ced8b507dfd860acb8721ded85c758992705098",
+    "full_snapshot_sha256": "553cd4e8bb40d34be514a4ebd55d466904e1357f174b2b184b5dcf8724aa5692",
+    "network_tools": "host-tool namespace evidence; pinned Nix network tools remain unrealizable and are not silently substituted",
+    "pow_bits": "0x207ffffe",
+    "scenario": "crates/spc-lab/scenarios/lab-network-runtime-two-pools.json"
+  },
+  "negative_profile_cases": [
+    {
+      "args": [
+        "--network",
+        "signet",
+        "--retarget-regtest"
+      ],
+      "diagnostic": "regtest only",
+      "id": "retarget-signet"
+    },
+    {
+      "args": [
+        "--network",
+        "signet",
+        "--regtest-pow-bits",
+        "0x200fffff"
+      ],
+      "diagnostic": "regtest only",
+      "id": "pow-overlay-signet"
+    },
+    {
+      "args": [
+        "--network",
+        "regtest",
+        "--retarget-regtest",
+        "--regtest-pow-bits",
+        "0x1f7fffff"
+      ],
+      "diagnostic": "easier than the retarget floor",
+      "id": "retarget-easier-than-floor"
+    },
+    {
+      "args": [
+        "--network",
+        "regtest",
+        "--regtest-pow-bits",
+        "0x2100ffff"
+      ],
+      "diagnostic": "regtest_pow_bits",
+      "id": "pow-overlay-overflow"
+    },
+    {
+      "args": [
+        "--network",
+        "regtest",
+        "--regtest-pow-bits",
+        "0x01800001"
+      ],
+      "diagnostic": "regtest_pow_bits",
+      "id": "pow-overlay-negative"
+    },
+    {
+      "args": [
+        "--network",
+        "regtest",
+        "--regtest-pow-bits",
+        "0x00000000"
+      ],
+      "diagnostic": "regtest_pow_bits",
+      "id": "pow-overlay-zero"
+    },
+    {
+      "args": [
+        "--network",
+        "regtest",
+        "--regtest-pow-bits",
+        "nothex"
+      ],
+      "diagnostic": "regtest_pow_bits",
+      "id": "pow-overlay-malformed"
+    }
+  ],
+  "non_claims": [
+    "pre-ladder accounting only; no ladder or tier-conformance claim",
+    "historical LP-live block fees were zero; no live fee-term validation unless a new run observes otherwise",
+    "no Ark settlement, mailbox or privacy-boundary validation",
+    "no witness-commitment coverage claim",
+    "no causal hash-budget/block-pace or benchmark claim",
+    "no SV1, type-32, general SV2 interoperability or production deployment approval",
+    "schema 26 is a source-only stock observation; fresh datadirs are used and old-datadir compatibility is untested",
+    "namespace evidence is a scoped host-tool observation, not full canonical/header/payout/settlement proof"
+  ],
+  "profiles": {
+    "default_regtest": {
+      "activation_heights": {
+        "bip34": 1,
+        "bip65": 1,
+        "bip66": 1,
+        "csv": 1,
+        "segwit": 0,
+        "taproot": 0
+      },
+      "allow_min_difficulty_blocks": true,
+      "coinbase_maturity": 100,
+      "difficulty_adjustment_interval": 2016,
+      "enforce_bip94": false,
+      "genesis_hash": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+      "network": "regtest",
+      "no_pow_retargeting": true,
+      "pow_limit_bits": "207fffff",
+      "pow_limit_target": "7fffff0000000000000000000000000000000000000000000000000000000000",
+      "pow_target_spacing": 600,
+      "pow_target_timespan": 1209600,
+      "regtest_pow_bits_overlay": "200fffff",
+      "retarget_floor_bits": "207fffff",
+      "retarget_floor_target": "7fffff0000000000000000000000000000000000000000000000000000000000",
+      "subsidy_halving_interval": 150
+    },
+    "retarget_regtest": {
+      "activation_heights": {
+        "bip34": 1,
+        "bip65": 1,
+        "bip66": 1,
+        "csv": 1,
+        "segwit": 0,
+        "taproot": 0
+      },
+      "allow_min_difficulty_blocks": false,
+      "coinbase_maturity": 100,
+      "difficulty_adjustment_interval": 24,
+      "enforce_bip94": false,
+      "genesis_hash": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+      "network": "regtest",
+      "no_pow_retargeting": false,
+      "pow_limit_bits": "207fffff",
+      "pow_limit_target": "7fffff0000000000000000000000000000000000000000000000000000000000",
+      "pow_target_spacing": 10,
+      "pow_target_timespan": 240,
+      "regtest_pow_bits_overlay": "1e7fffff",
+      "retarget_floor_bits": "1e7fffff",
+      "retarget_floor_target": "00007fffff000000000000000000000000000000000000000000000000000000",
+      "subsidy_halving_interval": 150
+    }
+  },
+  "release": {
+    "approval_inheritance": "none: old L2 approval is an arithmetic/semantics reference only and never approves this candidate",
+    "base_revision": "b0ab4ca34fda07c61a6335d05f598eaacc69678c",
+    "id": "rbitcoin-v0.9.0-plus-approved-old-l2-lab-port",
+    "official_commit": "9614b27ecd832a04070a5226da26c8844284f2c4",
+    "old_l2_snapshot": "d2f37b9113e8855245866289ed393043aed6e6153e8101375072cbb23624d499",
+    "required_version_text": "0.9.0"
+  },
+  "schema": "spc.lab.v09_release_contract.v1",
+  "stage_order": [
+    "profile",
+    "baseline",
+    "retarget",
+    "namespace"
+  ],
+  "static_reference": {
+    "compare_sha256": "6c95847db7f9d02a2754a49565c61867278409c7509f05d93b56980998570e24",
+    "l2_patch_sha256": "413662c2623f0a09773cc11f5faf5c6595023eee19f7ac2a96df346e1d41252b",
+    "stock_files": {
+      "CHANGELOG.md": "a814a0ee37dcad466347261d85f624288301960a26ee17516de497d5f40d72b9",
+      "COMPAT.md": "847021cda69228f83737fd7afd0da092871b6cacad3daac13268c3c8bb7fb3a3",
+      "Cargo.lock": "b68bd71a829a05f4165c58cb184fa3a12b02c1ab8d3080c1e77046be2ab5a1ec",
+      "Cargo.toml": "53cd8d68e24306ebc4760b7e265a90dc413a667b53a1adb2f2c78755b7426fc6",
+      "crates/rbitcoin-consensus/src/header.rs": "81326064701983c1558a9370cf74356f0335e1d8edffeb40ffbc51f3629906a4",
+      "crates/rbitcoin-consensus/src/params.rs": "3e7a34e9e0c6d9583ad98e432da6cdfbe4954f832edc57b8bca6b28bfa77e782",
+      "crates/rbitcoin-consensus/tests/header/mod.rs": "c5951eb89941ccde896c975c9f139ae0dda7aeffd18b6728dd633a863fea4575",
+      "crates/rbitcoin-consensus/tests/params.rs": "ffd86e5e35cba04c4d4b6fd3aa5209690c81a0d564481b748442c6543ef1c8c3",
+      "crates/rbitcoin-node/src/cli.rs": "02d2800437d62062f8963842c997a6ee6c0765f640e2ef7eab66a911d01cd220",
+      "crates/rbitcoin-node/src/config.rs": "9ede25daeed99c8edf4d1dd4725dbe51d219102c81757f3623e4cbedf3b9af4f",
+      "crates/rbitcoin-node/tests/cli.rs": "b78d800e13eeaed750c97a47595ec69203336629eb2bc52251df23ef23c7bd9a",
+      "crates/rbitcoin-rpc/src/methods/chain.rs": "cbd4ee55b2047cd16b1dfe0016c595b592bf5d29def8c43cd34c880c04734c3a",
+      "crates/rbitcoin-rpc/src/methods/mod.rs": "04fb1ef33719089c45336a63a50880c3c35647b067d74e40412d55bdbf17a4ac",
+      "crates/rbitcoin-rpc/tests/methods/mod.rs": "875c539756e413838360047da5eb642bebfd6b14e967c2c451a104e85b709111",
+      "crates/rbitcoin-test/tests/scenarios.rs": "526803e8a1f9b4b628b6781bb8ec2c566766ba348b956f9185965f457d40e18e",
+      "docs/README.md": "1d6abe6eaf7ada8bd2b96b51b0626506c92298c2175c7dca5805003dc3225843",
+      "docs/operator/operations.md": "357d1d0971e7092ca758df58f26aaaf69e75c9f5dea838798087a8487eeb6059",
+      "docs/rpc.md": "661852eae691b6cb08e66ec9211bc9d1e4beff494e8516557e33ffaf9a603545",
+      "flake.lock": "87a00d7ea2f7d200660c7d162a34c82dc1c504f70c20ff316ce50afe7517ade0",
+      "lint/hex-baseline.txt": "3174215f6511ee0336fdc7a0864b236f18d8554fa7532d3683e85427ffce5a86",
+      "prim-lib.rs": "f8e60477ff81a693c94478a73f3aa23d8fb57a2fe646002fb886a25457a90956"
+    }
+  }
+}

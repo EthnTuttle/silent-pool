@@ -1,0 +1,38 @@
+[package]
+name = "spc-cpu-miner"
+description = "native SV2 extended-channel CPU miner for the regtest lab"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "spc_cpu_miner"
+path = "src/lib.rs"
+
+[[bin]]
+name = "spc-cpu-miner"
+path = "src/main.rs"
+
+[dependencies]
+spc-scan.workspace = true
+anyhow.workspace = true
+bitcoin.workspace = true
+clap.workspace = true
+hex.workspace = true
+rand.workspace = true
+secp256k1_legacy = { package = "secp256k1", version = "0.28" }
+serde.workspace = true
+serde_json.workspace = true
+stratum-core = { version = "0.6.0" }
+stratum-apps = { version = "0.8", default-features = false, features = ["network", "core"] }
+thiserror.workspace = true
+tokio.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+spc-crypto.workspace = true
+tempfile = "3"
+proptest.workspace = true

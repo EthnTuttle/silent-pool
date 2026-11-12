@@ -1,0 +1,128 @@
+{
+  "manifest_version": 2,
+  "generated_utc": "2026-11-08T09:08:16Z",
+  "run_token": "AP1a-1fd3d1813c33",
+  "probe": "ap1a-ark-rpc-probe",
+  "probe_version": "1.0.0",
+  "report_schema_version": 2,
+  "contract_hash": "f4fc3e043f420870675095ab24144ba14e0afba6cb9ad69d818d99b1bccb2f62",
+  "base_commit": "b0ab4ca34fda07c61a6335d05f598eaacc69678c",
+  "base_commit_note": "worktree HEAD at probe time; the probe files themselves are uncommitted changes in this packet, hashed below",
+  "freeze_recipe": {
+    "description": "sha256 of every source file under testing/ark-rpc at probe time (reports/, devcheck/, __pycache__ and caches excluded). To reproduce: re-run the probe from a tree whose file hashes match this map and the same pinned node binary.",
+    "files": {
+      ".gitignore": "862263fa1f46c20f0d1e4dac5ffcc75abd55c08211b2c3864c5f8764b9d87793",
+      "README.md": "cd6c1b3fd05257edc624ba4772d67eeb2704dbf27ff08f0c9cc308d4e1f9012b",
+      "arkrpc/__init__.py": "f1eb4050ffa8b21124df93d2b6cf2839b7f1118eb3c216a43285ddeb24587cce",
+      "arkrpc/cli.py": "8a0b0e2e8af9defd2d4d5b119397be63fa468284d886159e83c0aa71402162b6",
+      "arkrpc/client.py": "a65baf661e4d8f553d6947028ddd68184e05a47d605fa7f1aef3634c506e5fb4",
+      "arkrpc/contracts.py": "70455051f33f15402e5de6eebf50da02354f61f3d2122ee653f22927c7c70e20",
+      "arkrpc/nodeproc.py": "604c0451277fdbcfb799a91ac9eb24c3f231bc63c8686a3af0eb9a2b322c6df8",
+      "arkrpc/probe.py": "b34ad2695ffb41fa7d69a99290ce31540ea25fee237082db7fad705b8f9227d8",
+      "arkrpc/reporting.py": "8af92989bfc060b997cd1ec85dedb8c525a7691c7b7b4839368228ed7ed2245f",
+      "arkrpc/schemadef.py": "87e31400ff56f0b0abb8b02382ea4c4a434d201d9d0686033519ae811fca17c9",
+      "arkrpc/selftest.py": "bce0baf83f5ec86244a8de22a633b1f12400dff72e548afd83fa11ec0c65da28",
+      "fixtures/base_responses.json": "2a65f66e4794eaed1c54019e0dd7a9af14258108a17439e7676e3217483307f7",
+      "fixtures/scenarios/anchor_verbose_tx.json": "acb15e0419018e86640f1731ab0e92c480a2e204667d2a6dec93630ccd37775f",
+      "fixtures/scenarios/auth_fail.json": "8bbc96c425cc65c6d39bdcf8c042373d56f4fef423390a96bbf2a0226f424b7a",
+      "fixtures/scenarios/baseline_190000.json": "6169f46563c2de9bfe19c61062c83d0f1446f6b81d7016dacb4e1dc6469298a2",
+      "fixtures/scenarios/gettxout_anchor_rejected.json": "6c98c65d278cfa9b357c2f1843d531c8ff50251fbed033fec4ad5fcbf76b65fd",
+      "fixtures/scenarios/id_echo_bool.json": "3f441682b22f275709c01bed1a60febc846679c76abfe64762eaa4310b338ad0",
+      "fixtures/scenarios/id_echo_missing.json": "16fa4eadad8d4f4be0731e4ef8b2fc0694b4713968ac054d7ea8ca18687bfa16",
+      "fixtures/scenarios/id_echo_null.json": "58fc10bb8ca2a5932d0a9ad33d6f21385a2d61a3bcb6ac59b829a613ae5d7f5f",
+      "fixtures/scenarios/id_echo_wrong_int.json": "b688a7fb5c9f0f5dbb5ddfda60f3bfa64d379aac4e4cc624071c1a33c79c4675",
+      "fixtures/scenarios/id_string_echo.json": "46160522c9c6f4933aecb4bdfcc11ac0d9bb99e9f188e6bb5c0d6584212e2e9c",
+      "fixtures/scenarios/id_string_echo_errorpath.json": "9799a311bb7541b1fa83f1302713aebc06bdc6030881d4a97816bdf6ef0d766f",
+      "fixtures/scenarios/method_not_found.json": "1c4758c65f84012039520ea14e0349c6912be233fd8f39903fea2524d67c0687",
+      "fixtures/scenarios/no_txindex.json": "8d3dc58cf600b5730731be658deb4fdb5d935c233767076feec41fb47894a788",
+      "fixtures/scenarios/protocol_error_parse.json": "f44250c6c189fe8b12812699a734c3fdc2b9f6d653db884b38727319a90543e7",
+      "fixtures/scenarios/shape_mismatch.json": "0cb405a22cbcd2d97b3bdd4e5a915156cd5a510044ecfb4d766da97cdbd80e37",
+      "fixtures/scenarios/traffic_mempoolinfo_ok.json": "a8ece75acfc5aba22a5260852a365a90af8e872cbc94282f3bf3eb99382a26df",
+      "fixtures/scenarios/version_310000_only.json": "9afdcf4b0393191ce6c5755813b3c48f291b2c532f8fbda3b0137f35a5b4d5a1",
+      "fixtures/scenarios/version_missing.json": "a76615a0958fe07a16d31f60a8494ceaf9ca84ed8ec9b7bfeb36c9cb1c241a29",
+      "fixtures/scenarios/version_wrong_type.json": "2be8944bc3c03ea292dcfb3cb4b0b3331d91b1a59e271d5239cdbad887bf35a9",
+      "fixtures/scenarios/wrong_genesis.json": "fd6532c69fadbded42e77881e6844d902d0ef3243b13b7ebdd0df70b294297a3",
+      "fixtures/scenarios/wrong_network.json": "49bc58b7faec1689885d18d68e581815791dcbe2c990b6554885d637d9ba3c3b",
+      "probe.py": "833288d7b4a9491ff9cfa4d7186328f38f04e7fe7e5ef1c135496b5f9a62754a",
+      "report.schema.json": "f21aab661c77714dc5765feda8f570eb408e42dffb8820e06deb0cd669df110e",
+      "run_two_nodes.sh": "84c42f893c806f7e85f32f359bb4dd8e4252bbac8b4e767c8e67a969b21464cb",
+      "tests/test_contracts.py": "83c82c12785927da45a28fe3cd0010590bc6af4958a86e3e39a330f0d11b2673",
+      "tests/test_reporting.py": "a3ad1636879ecb962dbc1cbff6e20705bfa068ceac33c4e4b8d5224983ee2688",
+      "tests/test_selftest.py": "d8c821dc48f9b3971b3e5945e679380a9f102100cf067a1c789ef75294aef403"
+    }
+  },
+  "node": {
+    "description": {
+      "label": "rbitcoin-lab-retarget-profile-r2",
+      "source_name": "rbitcoin-lab-retarget-profile",
+      "binary": "/tmp/opencode/rbitcoin-lab-retarget-profile/target/debug/rbitcoin-node",
+      "binary_sha256": "eb257af7c10cdf0ded584adfadf2ae8124466304b13d26c17f855e76f9320f7c",
+      "argv": [
+        "/tmp/opencode/rbitcoin-lab-retarget-profile/target/debug/rbitcoin-node",
+        "--network",
+        "regtest",
+        "--datadir",
+        "/tmp/opencode/AP1a-1fd3d1813c33/rbitcoin-lab-retarget-profile-r2/datadir",
+        "--rpc",
+        "--rpc-listen",
+        "127.0.0.1:58677",
+        "--rpc-cookie-file",
+        "/tmp/opencode/AP1a-1fd3d1813c33/rbitcoin-lab-retarget-profile-r2/rpc.cookie",
+        "--no-listen",
+        "--no-seeds",
+        "--no-discover",
+        "--max-run-secs",
+        "240"
+      ],
+      "env": {
+        "RBITCOIN_RPC_PACKAGE_DIALECT": "1"
+      },
+      "rpc_url": "http://127.0.0.1:58677",
+      "cookie_file": "rpc.cookie",
+      "cookie_note": "written by the launcher before start (user:pass, mode 0600, no trailing newline); private at rest for the node's lifetime; contents never recorded; removed with the scratch dir unless --keep-scratch",
+      "network": "regtest",
+      "isolation": [
+        "--no-listen",
+        "--no-seeds",
+        "--no-discover",
+        "loopback rpc only"
+      ],
+      "max_run_secs": 240,
+      "dialect_env": {
+        "RBITCOIN_RPC_PACKAGE_DIALECT": "1"
+      }
+    },
+    "exit": {
+      "returncode": 0,
+      "signal": null,
+      "uptime_s": 0.798
+    }
+  },
+  "dialect_provenance": {
+    "RBITCOIN_RPC_PACKAGE_DIALECT": "1",
+    "note": "set in the node environment by the probe launcher. The package-topology dialect is an RPC-surface knob in the rbitcoin source (mempool submitpackage gates on Core IsChildWithParents topology only when this is set), not a consensus parameter. Source-inspected at crates/rbitcoin-rpc/src/methods/mempool.rs (PACKAGE_TOPOLOGY_DISALLOWED)."
+  },
+  "upstream_source_pins": [
+    {
+      "name": "bark (pinned)",
+      "commit": "c419159",
+      "role": "RPC contract source of truth (see UPSTREAM_DEPS.md)"
+    },
+    {
+      "name": "rbitcoin-lab-retarget-profile",
+      "binary_sha256": "eb257af7c10cdf0ded584adfadf2ae8124466304b13d26c17f855e76f9320f7c",
+      "role": "probed node binary (pin name given via --source-name; distinct from the run label)"
+    }
+  ],
+  "dev_verification": {
+    "description": "devcheck/ golden-vector gate run immediately before this probe (run_two_nodes.sh). devcheck/ is excluded from freeze_recipe BY DESIGN (dev-only crate, own lockfile); this key binds its exact sources and the gate's exit receipt to this run.",
+    "sources": {
+      "devcheck/Cargo.toml": "78a02600d4cca6920ed98fe0d709449a003807ec71dfe0d5d1aaed663b63a881",
+      "devcheck/Cargo.lock": "95e2061d963beb4f0a95287f7ca3c5baa8714fe0cec1615d2ee1d70a7e95fa14",
+      "devcheck/src/main.rs": "3087acf1f0e497d443fcfd1b4fc817410c865a54633671910a7729d5bbbb943f"
+    },
+    "exit_code": 0,
+    "vectors": 12,
+    "receipt": "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.34s\n     Running `target/debug/arkrpc-devcheck`\narkrpc-devcheck: 12 golden vectors vs pinned crate types\n[PASS] amount_over_supply_accepted\n[PASS] amount_u64_overflow_rejected\n[PASS] empty_hex_serde_hex\n[PASS] scriptsig_empty_hex\n[PASS] bark_enum_accepts_anchor\n[PASS] core_019_enum_rejects_anchor\n[PASS] txinwitness_empty_items\n[PASS] null_reject_vin\n[PASS] null_reject_versionhex\n[PASS] null_reject_addresses\n[PASS] blockchaininfo_shapes\n[PASS] getmempoolinfo_shapes\nall 12 vectors match the Python #devcheck twins\n"
+  }
+}

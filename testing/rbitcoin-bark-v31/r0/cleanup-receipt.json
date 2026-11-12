@@ -1,0 +1,31 @@
+{
+ "packet": "rbitcoin-bark-v31 (AP-1b node compat profile candidate)",
+ "date": "2026-11-08",
+ "what": "probe scratch cleanup after the two AP1a frozen-probe runs against the AP1b candidate binary",
+ "probe_runs": [
+  {
+   "label": "ap1b-default",
+   "scratch_root": "/tmp/opencode/AP1a-81b4e36962a3",
+   "keep_scratch": false,
+   "probe_reported": "node scratch removed (cookie credential cleaned up)",
+   "residue_found_after_run": "empty parent directory only (no files, no cookie)",
+   "action": "rmdir of the empty parent; verified no AP1a-* scratch roots remain"
+  },
+  {
+   "label": "ap1b-bark-v31",
+   "scratch_root": "/tmp/opencode/AP1a-d433ace8fce6",
+   "keep_scratch": true,
+   "reason": "retained to extract node.log (startup banner evidence) before cleanup",
+   "extracted": {
+    "file": "ap1b-bark-v31/node.log",
+    "copied_to": "testing/rbitcoin-bark-v31/probe-profile-on/node.log",
+    "sha256": "75437119df542d7d6641881bcafc8d2ea9f346b3bf7de8d57699bec989d06554",
+    "banner_line": "2026-11-08T10:21:02.772Z INFO rpc_compat_profile=bark-v31 claimed_version=310000 software=rbitcoin software_version=0.8.99"
+   },
+   "action": "rm -rf of the whole scratch root (rpc.cookie 0600 credential, rpc.token, datadir store) after extraction",
+   "verified": "no AP1a-* scratch roots remain under /tmp/opencode"
+  }
+ ],
+ "cookies": "both runs used probe-generated single-run cookie credentials (user ap1a, random hex pass, mode 0600, never in argv or reports); both are destroyed",
+ "final_state": "no probe scratch, cookie, or token from either AP1b probe run survives"
+}

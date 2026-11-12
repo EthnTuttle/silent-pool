@@ -1,0 +1,46 @@
+{
+ "packet": "rbitcoin-bark-v31 (AP-1b node compat profile candidate)",
+ "date": "2026-11-08",
+ "candidate_binary": {
+  "path": "/tmp/opencode/AP1b-bark-profile/target/dev/debug/rbitcoin-node",
+  "sha256": "cc81e310c7d8fd975db26291108f5ee1547d35077e8a53db37d90ea6901a8e9e",
+  "size_bytes": 55506584,
+  "bound_by_probe_manifests": [
+   "testing/rbitcoin-bark-v31/probe-default/manifest.json",
+   "testing/rbitcoin-bark-v31/probe-profile-on/manifest.json"
+  ],
+  "source_name_recorded": "AP1b-bark-profile"
+ },
+ "build": {
+  "toolchain": "nix-shell pinned rustc 1.95.0 (59807616e 2026-04-14, flake.lock)",
+  "command": "nix-shell --run 'CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 cargo build -p rbitcoin-node'",
+  "target_dir": "/tmp/opencode/AP1b-bark-profile/target/dev (candidate-scoped, unique to AP1b)",
+  "exit": 0,
+  "log_tail": "test-receipts/green-build.log"
+ },
+ "disk_budget": {
+  "free_before_any_build": "34G (2026-11-08, /tmp/opencode/AP1b-green-df-before.txt)",
+  "free_before_binary_build": "29G",
+  "free_after_all_builds": "26G",
+  "exhausted": false,
+  "note": "jobs capped at 2 throughout; only -p rbitcoin-rpc / -p rbitcoin-node targets built; no whole-workspace build"
+ },
+ "approved_l2_binary_untouched": {
+  "path": "/tmp/opencode/rbitcoin-lab-retarget-profile/target/debug/rbitcoin-node",
+  "sha256": "eb257af7c10cdf0ded584adfadf2ae8124466304b13d26c17f855e76f9320f7c",
+  "verified_after_all_work": true
+ },
+ "artifacts": {
+  "patch": {
+   "file": "testing/rbitcoin-bark-v31/node-candidate.patch",
+   "sha256": "93894700a1db7851367ec197bc38268b454ed5528cae87ad01e76f8c5ac1c0e2",
+   "lines": 863,
+   "applies_cleanly_to_l2_dry_run": true
+  },
+  "candidate_manifest": {
+   "file": "testing/rbitcoin-bark-v31/candidate-manifest.json",
+   "aggregate_sha256": "b3c64ae56655b39e0ff10a145db1e2a1437d20b718de52a96644b309c3ed8fca",
+   "file_records": 24
+  }
+ }
+}

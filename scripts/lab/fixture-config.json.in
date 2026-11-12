@@ -1,0 +1,63 @@
+{
+  "nodes": {
+    "fixture-node": {
+      "program": "@FIXTURE_BIN@",
+      "args": ["node", "--port", "{rpc_port}", "--height-file", "{height_file}"],
+      "capabilities": ["fixture.scripted"],
+      "fixture": true,
+      "effective_profile": {
+        "implementation": "fixture-node",
+        "network": "regtest",
+        "consensus_profile_id": "fixture.regtest.retarget",
+        "pow_limit_bits": "207fffff",
+        "retarget_floor_bits": "1e7fffff",
+        "initial_target_bits": "1e7fffff",
+        "regtest_pow_bits_overlay": "1e7fffff",
+        "target_spacing_secs": 10,
+        "target_timespan_secs": 240,
+        "retarget_interval_blocks": 24,
+        "no_pow_retargeting": false,
+        "allow_min_difficulty_blocks": false,
+        "subsidy_initial_sats": "5000000000",
+        "subsidy_halving_interval_blocks": 150,
+        "coinbase_maturity_blocks": 100,
+        "witness_commitment_supported": true,
+        "tdp_session_cap": 8
+      },
+      "env": {}
+    }
+  },
+  "pools": {
+    "fixture-pool": {
+      "program": "@FIXTURE_BIN@",
+      "args": ["hold", "--port", "{sv2_port}", "--ready-file", "{run_dir}/ready-front-{entity}"],
+      "capabilities": ["fixture.scripted", "spc.pool.work_unit_v2", "spc.pool.network_block_work"],
+      "fixture": true,
+      "env": {}
+    }
+  },
+  "miners": {
+    "fixture-miner": {
+      "program": "@FIXTURE_BIN@",
+      "args": ["miner-jsonl", "--miner-id", "{entity}", "--events", "{run_dir}/miner-{entity}.events.jsonl"],
+      "capabilities": ["fixture.scripted"],
+      "fixture": true,
+      "env": {}
+    }
+  },
+  "redis": {
+    "program": "@FIXTURE_BIN@",
+    "args": ["hold", "--port", "{port}", "--ready-file", "{run_dir}/ready-{role}-{entity}"],
+    "capabilities": ["fixture.scripted"],
+    "fixture": true,
+    "env": {}
+  },
+  "postgres": {
+    "program": "@FIXTURE_BIN@",
+    "args": ["hold", "--port", "{port}", "--ready-file", "{run_dir}/ready-{role}-{entity}"],
+    "capabilities": ["fixture.scripted"],
+    "fixture": true,
+    "env": {}
+  },
+  "link_backend": "fixture"
+}

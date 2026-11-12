@@ -1,0 +1,34 @@
+{
+  "name": "version_310000_only",
+  "description": "version gates pass with 310000 and every gating check passes: the verdict is surface_compatible, NEVER full acceptance (funded paths unproven); the traffic-slice getmempoolinfo check still fails (null maxdatacarriersize) and does not block surface_compatible -- traffic never gates in either direction",
+  "overrides": [
+    {
+      "op": "patch",
+      "method": "getnetworkinfo",
+      "field": "version",
+      "value": 310000
+    }
+  ],
+  "expect": {
+    "verdict_status": "surface_compatible",
+    "reasons": [
+      "funded-unproven"
+    ],
+    "funded_state": "unproven",
+    "checks": {
+      "getnetworkinfo.gate.server": "passed",
+      "getnetworkinfo.gate.wallet": "passed",
+      "protocol.envelope20.getnetworkinfo": "passed",
+      "estimatesmartfee.fee-data": "unknown",
+      "submitpackage.recognized": {
+        "availability": "passed",
+        "behavior": "not_run"
+      },
+      "getmempoolentry.shape.server": "unknown",
+      "getmempoolinfo": {
+        "availability": "passed",
+        "behavior": "failed"
+      }
+    }
+  }
+}

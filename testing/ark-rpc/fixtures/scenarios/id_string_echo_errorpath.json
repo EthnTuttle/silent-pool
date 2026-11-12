@@ -1,0 +1,21 @@
+{
+  "name": "id_string_echo_errorpath",
+  "description": "Fable r1 counterexample, as a regression: 200 successes echo the numeric request id exactly, but HTTP 500 error bodies echo it as a JSON string. The error path must enforce the id echo exactly like the 200 path (C1): protocol.id-echo fails, no error code behind the broken echo is interpreted, and every *.recognized / error-path row is availability unknown (never method evidence)",
+  "overrides": [
+    {"op": "id_echo", "mode": "string-errorpath"},
+    {"op": "error_http_status", "status": 500}
+  ],
+  "expect": {
+    "verdict_status": "incompatible",
+    "reasons": ["fail-version-gate", "fail-protocol", "funded-unproven"],
+    "funded_state": "unproven",
+    "checks": {
+      "protocol.id-echo": "failed",
+      "getmempoolentry.recognized": {"availability": "unknown", "behavior": "unknown"},
+      "getrawtransaction.verbosity1": {"availability": "unknown", "behavior": "unknown"},
+      "sendrawtransaction.recognized": {"availability": "unknown", "behavior": "not_run"},
+      "testmempoolaccept.recognized": {"availability": "unknown", "behavior": "not_run"},
+      "submitpackage.recognized": {"availability": "unknown", "behavior": "not_run"}
+    }
+  }
+}

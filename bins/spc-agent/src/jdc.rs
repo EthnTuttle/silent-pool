@@ -741,8 +741,6 @@ impl Jdc {
         own_keys: &OwnKeys,
         policy: Policy,
     ) -> Result<(), JdcError> {
-        let own = verify::derive_own(height, a_send_x, &own_keys.b_scan, &own_keys.b_spend)
-            .map_err(|_| JdcError::OwnDerivation)?;
         let views: Vec<verify::OutputView<'_>> = outputs
             .iter()
             .map(|(script, value)| verify::OutputView {
@@ -750,8 +748,19 @@ impl Jdc {
                 value: *value,
             })
             .collect();
-        let found = verify::find_own(&views, &own).is_some();
-        verify::check_policy(policy, found).map_err(|_| JdcError::OwnAbsent)
+        let found = spc_scan::scan_outputs(
+            height,
+            a_send_x,
+            &views,
+            &own_keys.b_scan,
+            &own_keys.b_spend,
+        )
+        .map_err(|_| JdcError::OwnDerivation)?;
+        // JD is exact k0. A denomination fanout here violates O20 separation.
+        if found.len() > 1 {
+            return Err(JdcError::OwnDerivation);
+        }
+        verify::check_policy(policy, !found.is_empty()).map_err(|_| JdcError::OwnAbsent)
     }
 
     /// Recover `A_send` from the distribution's SPc `OP_RETURN` carrier
@@ -1779,10 +1788,11 @@ mod tests {
         )
         .unwrap();
         AgentConfig {
+            loaded_from: None,
+            source_audit: None,
             upstream: Upstream {
                 address: "127.0.0.1:34254".into(),
-                authority_public_key:
-                    "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                authority_public_key: "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72".into(),
                 sp_address,
                 require_own_payout: "warn".into(),
                 request_share_accounting: true,

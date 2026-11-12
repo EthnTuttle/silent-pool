@@ -1,0 +1,120 @@
+{
+ "packet": "rbitcoin-bark-v31 (AP-1b node compat profile candidate)",
+ "base": "e8cf9c9d61f7c63ae59cc11ab1179cace50ca142",
+ "l2_snapshot_files": 18,
+ "excluded_by_copy_construction": [],
+ "diverged_from_l2": [
+  "crates/rbitcoin-node/src/cli.rs",
+  "crates/rbitcoin-node/src/config.rs",
+  "crates/rbitcoin-node/src/run.rs",
+  "crates/rbitcoin-node/tests/cli.rs",
+  "crates/rbitcoin-node/tests/health/metrics.rs",
+  "crates/rbitcoin-rpc/src/methods/mod.rs",
+  "crates/rbitcoin-rpc/src/methods/net.rs",
+  "crates/rbitcoin-rpc/src/server.rs",
+  "crates/rbitcoin-rpc/tests/methods/mod.rs",
+  "crates/rbitcoin-rpc/tests/regtest_chain_ops_journey.rs",
+  "crates/rbitcoin-rpc/tests/server.rs"
+ ],
+ "diverged_count": 11,
+ "files": [
+  {
+   "path": "COMPAT.md",
+   "sha256": "c911d022e855f2b6f47e09c1ee8b80b481852be78021a2e99b01221590def2e2"
+  },
+  {
+   "path": "changelog.d/retarget-regtest.md",
+   "sha256": "eb4b6ae5c124e001659adbad1d1f51175d9ed052de5dc831c983fe29fd16e94f"
+  },
+  {
+   "path": "crates/rbitcoin-consensus/src/header.rs",
+   "sha256": "1708bd4729504e32dca31e766aea4933f170c8faeeac52f414ed0cb5aa380da1"
+  },
+  {
+   "path": "crates/rbitcoin-consensus/src/params.rs",
+   "sha256": "503ec0e9abe8bfd313422f141167ee1a71c710c507a3d15a2a49ebd65ebf62cc"
+  },
+  {
+   "path": "crates/rbitcoin-consensus/tests/header/mod.rs",
+   "sha256": "0d5f8d071c60f7bad52979adb4d56fcaa4629f1b6b65005647fca481e84fffd6"
+  },
+  {
+   "path": "crates/rbitcoin-consensus/tests/header/regtest_overlay_tests.rs",
+   "sha256": "271ff53cfd96b51eb84f4cae3416095da1dc55063999d4cf5531cf31a59760a0"
+  },
+  {
+   "path": "crates/rbitcoin-consensus/tests/params.rs",
+   "sha256": "5596a45c262bb9b3375095378364b9fa218accdd10c589dac8bb727d4363a1e8"
+  },
+  {
+   "path": "crates/rbitcoin-node/src/cli.rs",
+   "sha256": "62108424484020e53322dacb22472c544735cf7bd1757a97e5fd9a330cadb66a"
+  },
+  {
+   "path": "crates/rbitcoin-node/src/config.rs",
+   "sha256": "f5c53c39b445d9ee24de09dbb7f63eb24085f0df85d87c2ddf2989ea90a1ac6e"
+  },
+  {
+   "path": "crates/rbitcoin-node/src/run.rs",
+   "sha256": "1bfadcababc958360c7dd445e19a0d591e5fdad7a39c032d145a6ec99d129b8c"
+  },
+  {
+   "path": "crates/rbitcoin-node/tests/cli.rs",
+   "sha256": "a7637dc0676e03fe64f600a64ab23d3d9b222f04a56243e0d57e2e6c098b2e84"
+  },
+  {
+   "path": "crates/rbitcoin-node/tests/health/metrics.rs",
+   "sha256": "e37f567a2091c38c72fff7edf033c7d13f7c3495fa75099326a8e3d31abcea2e"
+  },
+  {
+   "path": "crates/rbitcoin-rpc/src/methods/chain.rs",
+   "sha256": "7d5594827ec189459c4782371031fba2a5e85012cc1e9a656823cf89e40d7752"
+  },
+  {
+   "path": "crates/rbitcoin-rpc/src/methods/mod.rs",
+   "sha256": "aa86fde9262c486c1fb0d2f0c73beaee5cf2cd2fb13cdcf0b128f93b602dccbf"
+  },
+  {
+   "path": "crates/rbitcoin-rpc/src/methods/net.rs",
+   "sha256": "fb96eb29059b9dd8c6653f732baf84d448dcdb2fdb2e74fc7a59497c55942a68"
+  },
+  {
+   "path": "crates/rbitcoin-rpc/src/server.rs",
+   "sha256": "36b6198a609b34884e030872fac5f0330af02a18a3f0450b1a8f5a492192efe3"
+  },
+  {
+   "path": "crates/rbitcoin-rpc/tests/methods/mod.rs",
+   "sha256": "ddfadf0ad8d6243c3a44519c93d3e0b0c8689d88cadccf2a45d2aecfeeddea8c"
+  },
+  {
+   "path": "crates/rbitcoin-rpc/tests/regtest_chain_ops_journey.rs",
+   "sha256": "b480aa8d3989003604993495fbeaeccede95247685fd5a02867fb3fa3fd9b530"
+  },
+  {
+   "path": "crates/rbitcoin-rpc/tests/server.rs",
+   "sha256": "acd48b712e5a426440ded533cca4bd6c92e737032838d1c06ec7729c59c79c4b"
+  },
+  {
+   "path": "crates/rbitcoin-test/tests/scenarios.rs",
+   "sha256": "aec111311c8468839fa4d7c651f69822d37b7c7abf0a215e396de59cb817977f"
+  },
+  {
+   "path": "docs/README.md",
+   "sha256": "ff53f47c458a2c3bdb637ec93cb9c88c7c980fce2e7b29ad8b8a7fcbca845d0f"
+  },
+  {
+   "path": "docs/operator/operations.md",
+   "sha256": "57510756869640bd5ffbcf10ecff78b54d60457056ebece7d58f6b77525cab4f"
+  },
+  {
+   "path": "docs/rpc.md",
+   "sha256": "fb0f74926a961fedbcbf88ce99d137a81c2bc20bce443560ca4776f0f46b4a37"
+  },
+  {
+   "path": "lint/hex-baseline.txt",
+   "sha256": "6dba2356c2407f118df3d79afeae02093bd47b5fb85b6537f0c60cc1fd4367cb"
+  }
+ ],
+ "aggregate_recipe": "sha256 of canonical JSON (sort_keys, separators (',',':')) of {'base': <base sha>, 'files': <files list above>}",
+ "aggregate_sha256": "b3c64ae56655b39e0ff10a145db1e2a1437d20b718de52a96644b309c3ed8fca"
+}

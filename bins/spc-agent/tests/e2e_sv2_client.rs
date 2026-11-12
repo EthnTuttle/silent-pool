@@ -6,7 +6,7 @@ use std::time::Duration;
 use spc_agent::sv2_client::{share_hash, PoolShare, Sv2Client};
 use spc_crypto::Network;
 use spc_pool::front::{Front, FrontConfig};
-use spc_pool::sv2_server::Sv2Server;
+use spc_pool::sv2_server::{ShareOutcome, Sv2Server};
 use spc_pool::template::{MockTemplateSource, Template, TemplateSource};
 use tokio::sync::mpsc;
 
@@ -94,6 +94,7 @@ async fn agent_client_gets_a_job_and_submits_a_block() {
         &addr.into(),
         &spc_pool::net::Egress::DIRECT,
         &address,
+        server.authority_public_key(),
         Network::Regtest,
     )
     .await
@@ -135,7 +136,7 @@ async fn agent_client_gets_a_job_and_submits_a_block() {
             nonce,
             ntime: job.ntime,
             version: job.version,
-            extranonce,
+            extranonce: extranonce.clone(),
             sequence_number: 0,
         })
         .await
@@ -146,6 +147,127 @@ async fn agent_client_gets_a_job_and_submits_a_block() {
         .unwrap()
         .unwrap();
     let block = front.on_share(share).unwrap().expect("block");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), client.next_result())
+            .await
+            .is_err(),
+        "queue insertion alone must not produce a success acknowledgement"
+    );
+    server.resolve_share(1, 0, ShareOutcome::Accepted { credited_work: 1 });
+    assert_eq!(
+        client.next_result().await.unwrap(),
+        spc_agent::sv2_client::ShareResult::Accepted {
+            sequence_number: 0,
+            credited_work: 1,
+        }
+    );
+    client
+        .submit(PoolShare {
+            job_id: job.job_id,
+            nonce,
+            ntime: job.ntime,
+            version: job.version,
+            extranonce,
+            sequence_number: 1,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        client.next_result().await.unwrap(),
+        spc_agent::sv2_client::ShareResult::Rejected {
+            sequence_number: 1,
+            error_code: "duplicate-share".into(),
+        }
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), rx.recv())
+            .await
+            .is_err(),
+        "a replay must not put duplicate work into the front queue"
+    );
     source.submit_block(&block.block).await.unwrap();
     assert_eq!(source.submitted().len(), 1);
+}
+
+#[tokio::test]
+async fn noise_authority_pin_survives_restart_and_rejects_a_different_key() {
+    let secret: stratum_apps::key_utils::Secp256k1SecretKey =
+        "mkDLTBBRxdBv998612qipDYoTK3YUrqLe8uWw7gu3iXbSrn2n"
+            .parse()
+            .unwrap();
+    let (tx, _rx) = mpsc::channel(8);
+    let make_server = || {
+        Sv2Server::new(
+            Network::Regtest,
+            tx.clone(),
+            Arc::new(std::sync::Mutex::new(
+                spc_pool::type32::Type32Store::default(),
+            )),
+            8,
+        )
+        .with_authority_secret_key(secret)
+    };
+    let server = make_server();
+    let pin = server.authority_public_key();
+    let (addr, _handle) = server.bind("127.0.0.1:0").await.unwrap();
+    let secp = bitcoin::secp256k1::Secp256k1::new();
+    let scan = bitcoin::secp256k1::PublicKey::from_secret_key(
+        &secp,
+        &bitcoin::secp256k1::SecretKey::from_slice(&[0x11; 32]).unwrap(),
+    );
+    let spend = bitcoin::secp256k1::PublicKey::from_secret_key(
+        &secp,
+        &bitcoin::secp256k1::SecretKey::from_slice(&[0x12; 32]).unwrap(),
+    );
+    let address = spc_crypto::address::encode_sp_address(Network::Regtest, &scan, &spend).unwrap();
+
+    let client = Sv2Client::connect(
+        &addr.into(),
+        &spc_pool::net::Egress::DIRECT,
+        &address,
+        pin,
+        Network::Regtest,
+    )
+    .await
+    .unwrap();
+    drop(client);
+
+    let (wrong_tx, _wrong_rx) = mpsc::channel(1);
+    let wrong = Sv2Server::new(
+        Network::Regtest,
+        wrong_tx,
+        Arc::new(std::sync::Mutex::new(
+            spc_pool::type32::Type32Store::default(),
+        )),
+        8,
+    )
+    .authority_public_key();
+    assert!(
+        Sv2Client::connect(
+            &addr.into(),
+            &spc_pool::net::Egress::DIRECT,
+            &address,
+            wrong,
+            Network::Regtest,
+        )
+        .await
+        .is_err(),
+        "a wrong authority pin must fail the Noise handshake"
+    );
+
+    let restarted = make_server();
+    assert_eq!(
+        restarted.authority_public_key().into_bytes(),
+        pin.into_bytes()
+    );
+    let (restarted_addr, _restarted_handle) = restarted.bind("127.0.0.1:0").await.unwrap();
+    Sv2Client::connect(
+        &restarted_addr.into(),
+        &spc_pool::net::Egress::DIRECT,
+        &address,
+        pin,
+        Network::Regtest,
+    )
+    .await
+    .unwrap();
 }

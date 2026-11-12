@@ -2,7 +2,8 @@
 
 [upstream]
 address = "127.0.0.1:34254"
-authority_public_key = "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+# Base58check SV2 key-utils authority; must match the pool's provisioned key.
+authority_public_key = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72"
 # Throwaway regtest address (scan key 0x07..07, spend 0x08..08): replace it.
 sp_address = "tsp1qq2vfczmkedtrju0aexl0x8kqds6kpueyn4hwnewc83tky4vkup0k7qlej8u5f50pj498lj9eha3wp4u0q905cpmk94g9ug8xc3fxpgmxrvw7g7cm"
 require_own_payout = "warn"          # "warn" | "refuse"
@@ -44,3 +45,41 @@ stream_isolation = true
 # signer = "local"
 # refresh_on_receive_above_sats = 0
 # offboard_on_exit = ""
+# The wallet role (SPEC 11.5) - paths and ids only; key material lives in
+# the referenced 0600 files, never inline here. The scan and ark branch
+# account files must be exactly m/352'/0'/0'/1' and m/352'/0'/0'/2'
+# (siblings of one m/352'/0'/0' tree) and the child seed file is the
+# 64-byte BIP 85 APP-39 seed (SPEC 11.5 key derivation).
+# scan_xprv = "/run/secrets/spc/scan.xprv"   # m/352'/0'/0'/1' account xprv (0600)
+# ark_xprv = "/run/secrets/spc/ark.xprv"     # m/352'/0'/0'/2' account xprv (0600)
+# datadir = "/var/lib/spc-agent/wallet"      # state.sqlite + bark/ (created 0700, files 0600)
+# status_listen = "127.0.0.1:34256"          # loopback-only status JSON (enforced at bind)
+# network = "regtest"                        # when the sp_address HRP cannot tell (tsp covers testnet/signet/regtest)
+# ark_id = "a1b2c3d4"                        # target Ark server id, 8 hex chars
+# Live wallet opening also requires public pins from actual ArkInfo:
+# server_address = "http://127.0.0.1:3535"
+# server_pubkey = "<actual compressed server pubkey>"
+# mailbox_pubkey = "<actual compressed mailbox pubkey>"
+# chain_rpc_url = "http://127.0.0.1:18443"
+# chain_cookie = "/run/spc-agent/node.cookie" # private cookie path, never inline credentials
+# [ark.aggregate_api]
+# origin = "https://pool.example.org/"       # SPc owner API, separate from Ark RPC
+# order_pubkey = "<pool BIP340 order/authorization public key, 64 hex chars>"
+# Every private read obtains a fresh B_scan challenge. Use the declared pool
+# API listener/origin and its order-signing key; never infer either from ArkId
+# or the SV2 authority. Only regtest permits explicit loopback HTTP origins.
+
+# Optional native CPU source-audit service in this existing wallet process.
+# The lab renderer supplies these from wallet_agents[].native_audit plus its
+# declared run/front/pool/identity mapping. Source keys are public trace/collector
+# authorities, separate from ark.aggregate_api.order_pubkey and Ark server keys.
+# [ark.native_audit]
+# run_id = "actual-run-id"
+# identity_id = "alice"
+# pool_id = "pool-a"
+# front_id = "front-a1"
+# collector_socket = "/actual/run/private/collector.sock"
+# pool_pubkey = "<actual source trace public key, 64 lowercase hex chars>"
+# collector_pubkey = "<independent collector public key, 64 lowercase hex chars>"
+# Native socket/instance/peers filenames are fixed under ark.datadir. Absence
+# of this profile supplies no native capability or unsigned activation allowance.

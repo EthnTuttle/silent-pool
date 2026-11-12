@@ -1,0 +1,4 @@
+config_version = 1
+miner_id = "miner-fixture"
+event_queue_capacity = 4096
+connections = []

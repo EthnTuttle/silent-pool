@@ -1,0 +1,225 @@
+{
+  "scenario_version": 1,
+  "run": {
+    "id": "lab-network-runtime-two-pools",
+    "seed": 20261106,
+    "time_policy": {
+      "chain_time": "node_header",
+      "miner_ntime": "hold",
+      "mock_node_time": null
+    },
+    "warmup": {
+      "blocks": 0,
+      "window_fills": 1,
+      "exclude_from_statistics": true
+    }
+  },
+  "network": {
+    "id": "net-regtest",
+    "consensus_profile": {
+      "required_capability": "spc.node.regtest.pow_baseline",
+      "profile_fingerprint": null,
+      "requirements": {
+        "pow_limit_bits": "207fffff"
+      }
+    }
+  },
+  "nodes": [
+    {
+      "id": "node-a",
+      "network_id": "net-regtest",
+      "implementation": "rbitcoin-node",
+      "p2p": {"listen": "127.0.0.1:0"},
+      "rpc": {"listen": "127.0.0.1:0"},
+      "tdp": {"listen": "127.0.0.1:0", "session_cap": 8}
+    },
+    {
+      "id": "node-b",
+      "network_id": "net-regtest",
+      "implementation": "rbitcoin-node",
+      "p2p": {"listen": "127.0.0.1:0"},
+      "rpc": {"listen": "127.0.0.1:0"},
+      "tdp": {"listen": "127.0.0.1:0", "session_cap": 8}
+    }
+  ],
+  "pools": [
+    {
+      "id": "pool-a",
+      "network_id": "net-regtest",
+      "implementation": "spc-pool",
+      "node_ids": ["node-a"],
+      "storage": {"redis_instance_id": "redis-pool-a", "postgres_database_id": "pg-pool-a"},
+      "work_profile": {
+        "work_unit_version": 2,
+        "reference_target": "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "share_work_multiplier": 2,
+        "max_work_multiplier": 4294967296,
+        "max_window_target_units": "18446744073709551616",
+        "window_rule": "network_block_work",
+        "window_n": 8,
+        "max_slice_shares": 4
+      }
+    },
+    {
+      "id": "pool-b",
+      "network_id": "net-regtest",
+      "implementation": "spc-pool",
+      "node_ids": ["node-b"],
+      "storage": {"redis_instance_id": "redis-pool-b", "postgres_database_id": "pg-pool-b"},
+      "work_profile": {
+        "work_unit_version": 2,
+        "reference_target": "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "share_work_multiplier": 2,
+        "max_work_multiplier": 4294967296,
+        "max_window_target_units": "18446744073709551616",
+        "window_rule": "network_block_work",
+        "window_n": 8,
+        "max_slice_shares": 4
+      }
+    }
+  ],
+  "fronts": [
+    {
+      "id": "front-a1",
+      "pool_id": "pool-a",
+      "roles": ["front", "payout", "api"],
+      "listen": {"sv2": "127.0.0.1:0", "sv1": null, "jd": "127.0.0.1:0", "api": "127.0.0.1:0"}
+    },
+    {
+      "id": "front-b1",
+      "pool_id": "pool-b",
+      "roles": ["front", "payout", "api"],
+      "listen": {"sv2": "127.0.0.1:0", "sv1": null, "jd": "127.0.0.1:0", "api": "127.0.0.1:0"}
+    }
+  ],
+  "identities": [
+    {"id": "id-alice", "address_source": {"fixture": "lab-network-runtime-alice"}},
+    {"id": "id-bob", "address_source": {"fixture": "lab-network-runtime-bob"}}
+  ],
+  "miners": [
+    {
+      "id": "miner-a",
+      "implementation": "spc-cpu-miner",
+      "connections": [{"id": "conn-a", "front_id": "front-a1", "identity_id": "id-alice"}],
+      "workers": [
+        {
+          "id": "worker-a",
+          "identity_id": "id-alice",
+          "connection_id": "conn-a",
+          "budget": {"hashes_per_second": "20"},
+          "nonce_start": 0,
+          "nonce_len": 4294967296
+        }
+      ]
+    },
+    {
+      "id": "miner-b",
+      "implementation": "spc-cpu-miner",
+      "connections": [{"id": "conn-b", "front_id": "front-b1", "identity_id": "id-bob"}],
+      "workers": [
+        {
+          "id": "worker-b",
+          "identity_id": "id-bob",
+          "connection_id": "conn-b",
+          "budget": {"hashes_per_second": "20"},
+          "nonce_start": 0,
+          "nonce_len": 4294967296
+        }
+      ]
+    }
+  ],
+  "resources": {
+    "redis_instances": [
+      {"id": "redis-pool-a", "owner_pool_id": "pool-a", "port": 0, "dir": "redis/pool-a"},
+      {"id": "redis-pool-b", "owner_pool_id": "pool-b", "port": 0, "dir": "redis/pool-b"}
+    ],
+    "postgres_databases": [
+      {"id": "pg-pool-a", "owner_pool_id": "pool-a", "database": "spc_lab_network_a", "role": "spc_lab_network_a", "port": 0},
+      {"id": "pg-pool-b", "owner_pool_id": "pool-b", "database": "spc_lab_network_b", "role": "spc_lab_network_b", "port": 0}
+    ]
+  },
+  "links": [
+    {"id": "link-alice", "from": {"kind": "miner", "id": "miner-a"}, "to": {"kind": "front", "id": "front-a1"}, "policy": "normal"},
+    {"id": "link-bob", "from": {"kind": "miner", "id": "miner-b"}, "to": {"kind": "front", "id": "front-b1"}, "policy": "normal"},
+    {"id": "link-pool-a-node", "from": {"kind": "pool", "id": "pool-a"}, "to": {"kind": "node", "id": "node-a"}, "policy": "normal"},
+    {"id": "link-pool-b-node", "from": {"kind": "pool", "id": "pool-b"}, "to": {"kind": "node", "id": "node-b"}, "policy": "normal"},
+    {"id": "link-p2p-nodes", "from": {"kind": "node", "id": "node-a"}, "to": {"kind": "node", "id": "node-b"}, "policy": "normal"}
+  ],
+  "phases": [
+    {
+      "id": "baseline-real-work",
+      "commands": [
+        {"kind": {"type": "wait_height", "node_id": "node-a", "height": 2, "timeout_secs": 90}},
+        {"kind": {"type": "wait_height", "node_id": "node-b", "height": 2, "timeout_secs": 90}}
+      ]
+    },
+    {
+      "id": "quiesce-before-partition",
+      "commands": [
+        {"kind": {"type": "pause_workers", "miner_id": "miner-a", "workers": ["worker-a"]}},
+        {"kind": {"type": "pause_workers", "miner_id": "miner-b", "workers": ["worker-b"]}}
+      ]
+    },
+    {"id": "partition-p2p", "commands": [{"kind": {"type": "partition_link", "link_id": "link-p2p-nodes"}}]},
+    {
+      "id": "partition-real-work",
+      "commands": [
+        {"kind": {"type": "resume_workers", "miner_id": "miner-a", "workers": ["worker-a"]}},
+        {"kind": {"type": "resume_workers", "miner_id": "miner-b", "workers": ["worker-b"]}},
+        {"kind": {"type": "wait_height", "node_id": "node-a", "height": 6, "timeout_secs": 90}},
+        {"kind": {"type": "wait_height", "node_id": "node-b", "height": 6, "timeout_secs": 90}}
+      ]
+    },
+    {
+      "id": "quiesce-before-heal",
+      "commands": [
+        {"kind": {"type": "pause_workers", "miner_id": "miner-a", "workers": ["worker-a"]}},
+        {"kind": {"type": "pause_workers", "miner_id": "miner-b", "workers": ["worker-b"]}}
+      ]
+    },
+    {"id": "heal-p2p", "commands": [{"kind": {"type": "heal_link", "link_id": "link-p2p-nodes"}}]},
+    {
+      "id": "work-after-heal",
+      "commands": [
+        {"kind": {"type": "resume_workers", "miner_id": "miner-a", "workers": ["worker-a"]}},
+        {"kind": {"type": "resume_workers", "miner_id": "miner-b", "workers": ["worker-b"]}},
+        {"kind": {"type": "wait_height", "node_id": "node-a", "height": 40, "timeout_secs": 90}},
+        {"kind": {"type": "wait_height", "node_id": "node-b", "height": 40, "timeout_secs": 90}}
+      ]
+    },
+    {
+      "id": "quiesce-after-heal",
+      "commands": [
+        {"kind": {"type": "pause_workers", "miner_id": "miner-a", "workers": ["worker-a"]}},
+        {"kind": {"type": "pause_workers", "miner_id": "miner-b", "workers": ["worker-b"]}}
+      ]
+    },
+    {
+      "id": "assert",
+      "commands": [
+        {"kind": {"type": "assert", "assertion_id": "assert-jobs"}},
+        {"kind": {"type": "assert", "assertion_id": "assert-pool-evidence"}},
+        {"kind": {"type": "assert", "assertion_id": "assert-front-a1-accounted"}},
+        {"kind": {"type": "assert", "assertion_id": "assert-front-b1-accounted"}}
+      ]
+    },
+    {
+      "id": "converge-after-heal",
+      "commands": [],
+      "convergence": {
+        "version": 1,
+        "timeout_secs": 90,
+        "max_observations": 90,
+        "allow_resume": true,
+        "max_resume_attempts": 1
+      }
+    }
+  ],
+  "assertions": [
+    {"id": "assert-jobs", "kind": "evidence", "predicate": "exists(job_issued)", "deadline_secs": 180},
+    {"id": "assert-pool-evidence", "kind": "evidence", "predicate": "exists(spc_evidence && canonical_at)", "deadline_secs": 180},
+    {"id": "assert-front-a1-accounted", "kind": "evidence", "predicate": "accounted_work(front=front-a1,min=1)", "deadline_secs": 180},
+    {"id": "assert-front-b1-accounted", "kind": "evidence", "predicate": "accounted_work(front=front-b1,min=1)", "deadline_secs": 180}
+  ],
+  "statistics": []
+}

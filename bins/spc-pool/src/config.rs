@@ -5,9 +5,14 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use spc_crypto::Network;
+use stratum_apps::key_utils::{Secp256k1PublicKey, Secp256k1SecretKey};
 use thiserror::Error;
 
 use crate::net::host_is_onion;
+use crate::sv1::SharePolicy;
+use spc_accounting::work_unit::{
+    decode_compact_target, HARD_CAP_MAX_WINDOW_TARGET_UNITS, HARD_CAP_MAX_WORK_MULTIPLIER,
+};
 
 pub const MAX_FRONT_ID: u8 = 127;
 
@@ -56,6 +61,8 @@ pub struct Config {
     pub ark: Option<Ark>,
     #[serde(default)]
     pub api: Api,
+    #[serde(default)]
+    pub operator: Operator,
 }
 
 /// `[reach]` (SPEC §3.8): how the pool is found. The Tor daemon owns onion
@@ -86,6 +93,36 @@ pub struct Onion {
     pub api: String,
 }
 
+#[derive(Clone, Default, Deserialize)]
+#[serde(transparent)]
+pub struct RedactedSecret(String);
+
+impl RedactedSecret {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<&str> for RedactedSecret {
+    fn from(value: &str) -> Self {
+        Self(value.into())
+    }
+}
+
+impl std::fmt::Debug for RedactedSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("[redacted]")
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Pool {
@@ -94,6 +131,10 @@ pub struct Pool {
     pub roles: Vec<String>,
     pub listen: String,
     pub authority_public_key: String,
+    /// Base58check key-utils secret for the miner-facing SV2 Noise authority.
+    /// Required when the front role is selected; matched against the public pin.
+    #[serde(default)]
+    pub authority_secret_key: RedactedSecret,
     pub pool_payout_descriptor: String,
     #[serde(default = "default_fee_bps")]
     pub fee_bps: u16,
@@ -155,8 +196,28 @@ pub struct Accounting {
     /// Every ingress validates shares against this difficulty's target (never
     /// harder than the network target) and the front credits
     /// `min(share_difficulty, max(1, round(network_difficulty)))`.
-    #[serde(default = "default_share_difficulty")]
-    pub share_difficulty: u64,
+    #[serde(default)]
+    pub share_difficulty: Option<u64>,
+    /// 1 = frozen integer difficulty; 2 = opt-in exact reference multiplier.
+    #[serde(default = "default_work_unit_version")]
+    pub work_unit_version: u8,
+    /// Required for v2, forbidden for v1. 32-byte big-endian target as 64 hex.
+    #[serde(default)]
+    pub work_reference_target: Option<String>,
+    /// Required for v2, forbidden as a legacy-difficulty alias.
+    #[serde(default)]
+    pub share_work_multiplier: Option<u64>,
+    #[serde(default = "default_max_work_multiplier")]
+    pub max_work_multiplier: u64,
+    /// Decimal u128 string (2^64 by default, avoids TOML's signed-64 limit).
+    #[serde(default = "default_max_window_target_units")]
+    pub max_window_target_units: String,
+    /// Effective node pow limit. v2 is explicitly regtest-only in this packet.
+    #[serde(default = "default_pow_limit_bits")]
+    pub pow_limit_bits: u32,
+    /// Optional explicit discriminator; the correct rule is required when set.
+    #[serde(default)]
+    pub window_rule: Option<String>,
     #[serde(default)]
     pub slice_fee_delta_sats: u64,
     #[serde(default = "default_max_slice_shares")]
@@ -244,6 +305,19 @@ pub struct Api {
     pub listen: String,
 }
 
+/// `[operator]` (EXP-OP, contract §4): the optional, off-by-default
+/// loopback-only listener that serves the read-only operator page and its
+/// observation DTO inside the same API process. Absent section = listener
+/// off; a non-loopback `listen` value is a configuration validation
+/// error; the listener never mounts on the public `[api]` router.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Operator {
+    /// Loopback listen address, e.g. `"127.0.0.1:8081"`. `None` (section
+    /// absent or key absent) keeps the operator listener off.
+    pub listen: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Ark {
@@ -253,6 +327,12 @@ pub struct Ark {
     pub server: String,
     #[serde(default)]
     pub ark_id: String,
+    /// Hex compressed ArkInfo server public key (front-only public metadata).
+    #[serde(default)]
+    pub server_pubkey: String,
+    /// Hex compressed ArkInfo mailbox public key (front-only public metadata).
+    #[serde(default)]
+    pub mailbox_pubkey: String,
     #[serde(default)]
     pub float_target_sats: u64,
     #[serde(default)]
@@ -335,8 +415,17 @@ fn default_extranonce2_bytes() -> usize {
 fn default_window_n() -> u32 {
     8
 }
-fn default_share_difficulty() -> u64 {
+fn default_work_unit_version() -> u8 {
     1
+}
+fn default_max_work_multiplier() -> u64 {
+    HARD_CAP_MAX_WORK_MULTIPLIER
+}
+fn default_max_window_target_units() -> String {
+    HARD_CAP_MAX_WINDOW_TARGET_UNITS.to_string()
+}
+fn default_pow_limit_bits() -> u32 {
+    0x207f_ffff
 }
 fn default_max_slice_shares() -> usize {
     65_000
@@ -345,7 +434,7 @@ fn default_dust() -> u64 {
     330
 }
 fn default_max_slots() -> usize {
-    256
+    1024
 }
 fn default_retain() -> u32 {
     16
@@ -360,7 +449,7 @@ fn default_budget_floor() -> u32 {
     50_000
 }
 fn default_budget_ceiling() -> u32 {
-    400_000
+    1_000_000
 }
 fn default_up_threshold() -> f64 {
     0.85
@@ -457,7 +546,14 @@ impl Default for Accounting {
     fn default() -> Self {
         Self {
             window_n: default_window_n(),
-            share_difficulty: default_share_difficulty(),
+            share_difficulty: None,
+            work_unit_version: default_work_unit_version(),
+            work_reference_target: None,
+            share_work_multiplier: None,
+            max_work_multiplier: default_max_work_multiplier(),
+            max_window_target_units: default_max_window_target_units(),
+            pow_limit_bits: default_pow_limit_bits(),
+            window_rule: None,
             slice_fee_delta_sats: 0,
             max_slice_shares: default_max_slice_shares(),
             dust_limit_sats: default_dust(),
@@ -525,6 +621,8 @@ impl Default for Ark {
             enabled: false,
             server: String::new(),
             ark_id: String::new(),
+            server_pubkey: String::new(),
+            mailbox_pubkey: String::new(),
             float_target_sats: 0,
             max_order_sats: 0,
             max_daily_sats: 0,
@@ -558,7 +656,7 @@ pub enum ConfigError {
     WindowN,
     #[error("share_difficulty must be > 0")]
     ShareDifficulty,
-    #[error("max_payout_slots must be > 0")]
+    #[error("max_payout_slots must be in 1..=2048")]
     Slots,
     #[error("coinbase_threshold_sats must be >= dust_limit_sats")]
     Threshold,
@@ -570,6 +668,10 @@ pub enum ConfigError {
     Grace,
     #[error("invalid pool_payout_descriptor: {0}")]
     Descriptor(String),
+    #[error("invalid miner-facing Noise authority: {0}")]
+    Authority(String),
+    #[error("invalid work-unit profile: {0}")]
+    WorkUnit(String),
     #[error("SV1 extranonce does not fit the scriptSig budget")]
     Sv1Budget,
     #[error("invalid listen address: {0}")]
@@ -588,6 +690,182 @@ pub enum ConfigError {
     ArkTransport(String),
     #[error("ark must not be self-hosted on mainnet")]
     ArkSelfMainnet,
+    #[error("invalid [operator] listen address: {0}")]
+    OperatorListen(String),
+    #[error("[operator] listen = {0} is not a loopback address; the operator page is loopback-only (EXP-OP)")]
+    OperatorNotLoopback(String),
+    #[error("[operator] listen requires the api role; the operator listener runs inside the pool API process")]
+    OperatorRequiresApiRole,
+}
+
+impl Pool {
+    pub fn authority_secret(&self) -> Result<Secp256k1SecretKey, ConfigError> {
+        if self.authority_secret_key.is_empty() {
+            return Err(ConfigError::Authority(
+                "pool.authority_secret_key is required for the front role".into(),
+            ));
+        }
+        self.authority_secret_key
+            .as_str()
+            .parse()
+            .map_err(|_| ConfigError::Authority("invalid authority_secret_key encoding".into()))
+    }
+
+    pub fn authority_public(&self) -> Result<Secp256k1PublicKey, ConfigError> {
+        self.authority_public_key
+            .parse()
+            .map_err(|_| ConfigError::Authority("invalid authority_public_key encoding".into()))
+    }
+}
+
+impl Accounting {
+    pub fn legacy_share_difficulty(&self) -> u64 {
+        self.share_difficulty.unwrap_or(1)
+    }
+
+    pub fn profile_json(&self) -> serde_json::Value {
+        let (rule, fingerprint) = match self.work_unit_version {
+            2 => (
+                self.window_rule.as_deref().unwrap_or("network_block_work"),
+                self.work_reference_target.as_deref().and_then(|reference| {
+                    let bytes = hex::decode(reference).ok()?.try_into().ok()?;
+                    Some(hex::encode(
+                        spc_accounting::work_unit::work_unit_fingerprint(&bytes),
+                    ))
+                }),
+            ),
+            _ => (
+                self.window_rule.as_deref().unwrap_or("share_work_legacy"),
+                None,
+            ),
+        };
+        serde_json::json!({
+            "work_unit_version": self.work_unit_version,
+            "work_reference_target": self.work_reference_target,
+            "share_work_multiplier": self.share_work_multiplier,
+            "share_difficulty": self.share_difficulty,
+            "work_unit_fingerprint": fingerprint,
+            "max_work_multiplier": self.max_work_multiplier.to_string(),
+            "max_window_target_units": self.max_window_target_units,
+            "window_n": self.window_n,
+            "window_rule": rule,
+            // This is a v2-only regtest authority. Never attribute the
+            // regtest default to a legacy pool on another network.
+            "pow_limit_bits": (self.work_unit_version == 2).then_some(self.pow_limit_bits),
+            "max_slice_shares": self.max_slice_shares,
+        })
+    }
+
+    pub fn share_policy(&self, network: Network) -> Result<SharePolicy, ConfigError> {
+        match self.work_unit_version {
+            1 => {
+                if self.work_reference_target.is_some() || self.share_work_multiplier.is_some() {
+                    return Err(ConfigError::WorkUnit(
+                        "v2 reference/multiplier fields are forbidden with work_unit_version = 1"
+                            .into(),
+                    ));
+                }
+                if self
+                    .window_rule
+                    .as_deref()
+                    .is_some_and(|rule| rule != "share_work_legacy")
+                {
+                    return Err(ConfigError::WorkUnit(
+                        "work_unit_version = 1 requires window_rule = share_work_legacy".into(),
+                    ));
+                }
+                if self.legacy_share_difficulty() == 0 {
+                    return Err(ConfigError::ShareDifficulty);
+                }
+                Ok(SharePolicy::v1(self.legacy_share_difficulty()))
+            }
+            2 => {
+                if network != Network::Regtest {
+                    return Err(ConfigError::WorkUnit(
+                        "v2 is supported only with pool.network = regtest".into(),
+                    ));
+                }
+                if self.share_difficulty.is_some() {
+                    return Err(ConfigError::WorkUnit(
+                        "share_difficulty is a legacy v1 field and cannot be combined with v2"
+                            .into(),
+                    ));
+                }
+                if self.max_slice_shares > 65_000 {
+                    return Err(ConfigError::WorkUnit(
+                        "v2 requires max_slice_shares <= 65000".into(),
+                    ));
+                }
+                if self.max_work_multiplier > HARD_CAP_MAX_WORK_MULTIPLIER {
+                    return Err(ConfigError::WorkUnit(
+                        "max_work_multiplier_above_hard_cap".into(),
+                    ));
+                }
+                let max_window_target_units =
+                    self.max_window_target_units.parse::<u128>().map_err(|_| {
+                        ConfigError::WorkUnit(
+                            "max_window_target_units is not a u128 decimal string".into(),
+                        )
+                    })?;
+                if max_window_target_units > HARD_CAP_MAX_WINDOW_TARGET_UNITS {
+                    return Err(ConfigError::WorkUnit(
+                        "max_window_target_units_above_hard_cap".into(),
+                    ));
+                }
+                if self
+                    .window_rule
+                    .as_deref()
+                    .is_some_and(|rule| rule != "network_block_work")
+                {
+                    return Err(ConfigError::WorkUnit(
+                        "work_unit_version = 2 requires window_rule = network_block_work".into(),
+                    ));
+                }
+                if self.pow_limit_bits != 0x207f_ffff {
+                    // Regtest's consensus powLimit is exactly 0x207fffff. An
+                    // operator override must not turn the reference-family
+                    // check into a fictitious alternate network authority.
+                    return Err(ConfigError::WorkUnit(format!(
+                        "pow_limit_bits must equal regtest consensus 0x207fffff, got 0x{:08x}",
+                        self.pow_limit_bits
+                    )));
+                }
+                let reference = self.work_reference_target.as_deref().ok_or_else(|| {
+                    ConfigError::WorkUnit("work_reference_target is required with v2".into())
+                })?;
+                let reference = hex::decode(reference).map_err(|_| {
+                    ConfigError::WorkUnit("work_reference_target must be 32-byte hex".into())
+                })?;
+                let reference: [u8; 32] = reference.try_into().map_err(|_| {
+                    ConfigError::WorkUnit("work_reference_target must be 32-byte hex".into())
+                })?;
+                let profile = spc_accounting::WorkUnitProfile::from_reference(
+                    reference,
+                    self.max_work_multiplier,
+                )
+                .map_err(|e| ConfigError::WorkUnit(e.to_string()))?;
+                let multiplier = self.share_work_multiplier.ok_or_else(|| {
+                    ConfigError::WorkUnit("share_work_multiplier is required with v2".into())
+                })?;
+                let j_cfg = profile
+                    .validate_multiplier(multiplier)
+                    .map_err(|e| ConfigError::WorkUnit(e.to_string()))?;
+                let _ = decode_compact_target(self.pow_limit_bits)
+                    .map_err(|e| ConfigError::WorkUnit(e.to_string()))?;
+                profile
+                    .validate_pow_limit(self.pow_limit_bits)
+                    .map_err(|e| ConfigError::WorkUnit(e.to_string()))?;
+                Ok(SharePolicy::V2 {
+                    profile,
+                    j_cfg,
+                    max_window_target_units,
+                })
+            }
+            other => Err(ConfigError::WorkUnit(format!(
+                "unknown work_unit_version {other}"
+            ))),
+        }
+    }
 }
 
 impl Config {
@@ -617,8 +895,17 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
-        let _ = self.network()?;
-        let _ = self.roles()?;
+        let network = self.network()?;
+        let roles = self.roles()?;
+        if roles.contains(&Role::Front) {
+            let secret = self.pool.authority_secret()?;
+            let configured_public = self.pool.authority_public()?;
+            if Secp256k1PublicKey::from(secret).into_bytes() != configured_public.into_bytes() {
+                return Err(ConfigError::Authority(
+                    "authority_public_key does not match authority_secret_key".into(),
+                ));
+            }
+        }
         if self.pool.front_id > MAX_FRONT_ID {
             return Err(ConfigError::FrontId);
         }
@@ -628,10 +915,21 @@ impl Config {
         if self.accounting.window_n == 0 {
             return Err(ConfigError::WindowN);
         }
-        if self.accounting.share_difficulty == 0 {
-            return Err(ConfigError::ShareDifficulty);
+        let _ = self.accounting.share_policy(network)?;
+        if self.accounting.work_unit_version == 2 && self.sv1.enabled {
+            return Err(ConfigError::WorkUnit(
+                "v2 requires native SV2: set sv1.enabled = false".into(),
+            ));
         }
-        if self.accounting.max_payout_slots == 0 {
+        if self.accounting.work_unit_version == 2 && self.extensions.share_accounting {
+            return Err(ConfigError::WorkUnit(
+                "v2 type-32 auditing is unsupported: set extensions.share_accounting = false"
+                    .into(),
+            ));
+        }
+        if self.accounting.max_payout_slots == 0
+            || self.accounting.max_payout_slots > spc_accounting::ladder::MAX_LADDER_OUTPUTS
+        {
             return Err(ConfigError::Slots);
         }
         if self.accounting.coinbase_threshold_sats < self.accounting.dust_limit_sats {
@@ -674,6 +972,22 @@ impl Config {
         }
         parse_listen(&self.api.listen)?;
         parse_listen(&self.jd.listen)?;
+
+        // EXP-OP (contract §4): the operator listener is optional,
+        // off-by-default and loopback-only. A non-loopback value is a
+        // configuration error, not a silent public bind; it also requires
+        // the api role because it runs inside the same API process.
+        if let Some(listen) = &self.operator.listen {
+            let addr = listen
+                .parse::<SocketAddr>()
+                .map_err(|_| ConfigError::OperatorListen(listen.clone()))?;
+            if !addr.ip().is_loopback() {
+                return Err(ConfigError::OperatorNotLoopback(listen.clone()));
+            }
+            if !roles.contains(&Role::Api) {
+                return Err(ConfigError::OperatorRequiresApiRole);
+            }
+        }
 
         // SPEC §3.8: the egress proxy must do remote name resolution
         // (validated here so a bad scheme is a startup error, not a first-use
@@ -724,6 +1038,14 @@ impl Config {
                 }
                 if ark.retry_blocks == 0 {
                     return Err(ConfigError::ArkMissing("retry_blocks"));
+                }
+                if roles.contains(&Role::Front) {
+                    if ark.server_pubkey.is_empty() {
+                        return Err(ConfigError::ArkMissing("server_pubkey"));
+                    }
+                    if ark.mailbox_pubkey.is_empty() {
+                        return Err(ConfigError::ArkMissing("mailbox_pubkey"));
+                    }
                 }
                 // Transport selection (SPEC §11.10): "bark" is the
                 // production stock-wallet transport; "command" is
@@ -852,7 +1174,8 @@ mod tests {
 network = "regtest"
 roles = ["front", "payout", "api"]
 listen = "127.0.0.1:34254"
-authority_public_key = "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+authority_public_key = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72"
+authority_secret_key = "mkDLTBBRxdBv998612qipDYoTK3YUrqLe8uWw7gu3iXbSrn2n"
 pool_payout_descriptor = "tr(tpubD6NzVbkrYhZ4YTest/0/*)"
 front_id = 0
 
@@ -885,6 +1208,125 @@ listen = "127.0.0.1:8080"
     }
 
     #[test]
+    fn front_authority_is_provisioned_and_matches_its_pin() {
+        let cfg = sample();
+        let debug = format!("{:?}", cfg.pool);
+        assert!(debug.contains("[redacted]"));
+        assert!(!debug.contains("mkDLTBBRxdBv998612qipDYoTK3YUrqLe8uWw7gu3iXbSrn2n"));
+
+        let mut missing = sample();
+        missing.pool.authority_secret_key.clear();
+        assert!(matches!(missing.validate(), Err(ConfigError::Authority(_))));
+
+        let mut mismatched = sample();
+        mismatched.pool.authority_secret_key =
+            "mkDLTBBRxdBv998612qipDYoTK3YUrqLe8uWw7gu3iXbSrn2p".into();
+        assert!(matches!(
+            mismatched.validate(),
+            Err(ConfigError::Authority(_))
+        ));
+
+        let mut payout_only = sample();
+        payout_only.pool.roles = vec!["payout".into()];
+        payout_only.pool.authority_secret_key.clear();
+        payout_only.pool.authority_public_key.clear();
+        payout_only.validate().unwrap();
+    }
+
+    fn with_v2() -> Config {
+        let mut cfg = sample();
+        cfg.accounting.work_unit_version = 2;
+        cfg.accounting.work_reference_target = Some(format!("7f{}", "ff".repeat(31)));
+        cfg.accounting.share_work_multiplier = Some(2);
+        cfg.sv1.enabled = false;
+        cfg.extensions.share_accounting = false;
+        cfg
+    }
+
+    #[test]
+    fn v2_profile_uses_exact_generation_targets_and_network_work_window() {
+        let cfg = with_v2();
+        cfg.validate().unwrap();
+        let policy = cfg.accounting.share_policy(Network::Regtest).unwrap();
+        assert_eq!(policy.window_target(0x200f_ffff, 8).unwrap(), 65);
+        let initial = policy.job_work(0x200f_ffff, 1).unwrap();
+        assert_eq!(initial.m_issue, 2);
+        let mut target = [0u8; 32];
+        target[0] = 0x3f;
+        target[1..].fill(0xff);
+        assert_eq!(initial.share_target.to_be_bytes(), target);
+
+        let easier = policy.job_work(0x207f_ffff, 2).unwrap();
+        assert_eq!(easier.m_issue, 1);
+        assert!(easier.stepped_down);
+        assert_eq!(initial.m_issue, 2, "old generation is immutable");
+        let stepped_up = policy.job_work(0x200f_ffff, 3).unwrap();
+        assert_eq!(stepped_up.m_issue, 2);
+        assert!(!stepped_up.stepped_down);
+    }
+
+    #[test]
+    fn v2_rejects_conflicting_unsupported_and_out_of_family_config() {
+        let mut legacy_alias = with_v2();
+        legacy_alias.accounting.share_difficulty = Some(1);
+        assert!(matches!(
+            legacy_alias.validate(),
+            Err(ConfigError::WorkUnit(_))
+        ));
+
+        let mut network = with_v2();
+        network.pool.network = "testnet4".into();
+        assert!(matches!(network.validate(), Err(ConfigError::WorkUnit(_))));
+
+        let mut multiplier = with_v2();
+        multiplier.accounting.share_work_multiplier = Some(3);
+        assert!(matches!(
+            multiplier.validate(),
+            Err(ConfigError::WorkUnit(_))
+        ));
+
+        let mut rule = with_v2();
+        rule.accounting.window_rule = Some("share_work_legacy".into());
+        assert!(matches!(rule.validate(), Err(ConfigError::WorkUnit(_))));
+
+        let mut cap = with_v2();
+        cap.accounting.max_work_multiplier = (1u64 << 32) + 1;
+        assert!(matches!(cap.validate(), Err(ConfigError::WorkUnit(_))));
+
+        let mut sv1 = with_v2();
+        sv1.sv1.enabled = true;
+        assert!(matches!(sv1.validate(), Err(ConfigError::WorkUnit(_))));
+        let mut type32 = with_v2();
+        type32.extensions.share_accounting = true;
+        assert!(matches!(type32.validate(), Err(ConfigError::WorkUnit(_))));
+
+        let mut bad_reference = with_v2();
+        bad_reference.accounting.work_reference_target = Some("3f".repeat(32));
+        assert!(matches!(
+            bad_reference.validate(),
+            Err(ConfigError::WorkUnit(_))
+        ));
+
+        // R = 2^254 - 1 is valid family but below actual regtest pow limit.
+        // A mainnet-style 0x1d00ffff override must not make it look valid.
+        let mut wrong_authority = with_v2();
+        wrong_authority.accounting.work_reference_target = Some(format!("003f{}", "ff".repeat(30)));
+        wrong_authority.accounting.pow_limit_bits = 0x1d00ffff;
+        assert!(matches!(
+            wrong_authority.validate(),
+            Err(ConfigError::WorkUnit(message))
+                if message.contains("regtest consensus 0x207fffff")
+        ));
+    }
+
+    #[test]
+    fn v1_profile_does_not_claim_the_regtest_pow_limit() {
+        let mut cfg = sample();
+        cfg.pool.network = "testnet4".into();
+        assert!(cfg.accounting.profile_json()["pow_limit_bits"].is_null());
+    }
+
+    #[test]
     fn rejects_mainnet() {
         let mut cfg = sample();
         cfg.pool.network = "mainnet".into();
@@ -908,12 +1350,12 @@ listen = "127.0.0.1:8080"
     #[test]
     fn share_difficulty_defaults_to_one_and_must_be_positive() {
         let cfg = sample();
-        assert_eq!(cfg.accounting.share_difficulty, 1);
+        assert_eq!(cfg.accounting.legacy_share_difficulty(), 1);
         let mut cfg = sample();
-        cfg.accounting.share_difficulty = 0;
+        cfg.accounting.share_difficulty = Some(0);
         assert_eq!(cfg.validate(), Err(ConfigError::ShareDifficulty));
         let mut cfg = sample();
-        cfg.accounting.share_difficulty = 16_384;
+        cfg.accounting.share_difficulty = Some(16_384);
         cfg.validate().unwrap();
     }
 
@@ -1068,6 +1510,8 @@ listen = "127.0.0.1:34264"
             enabled: true,
             server: "https://ark.example.tech".into(),
             ark_id: "00000000".into(),
+            server_pubkey: "02".repeat(33),
+            mailbox_pubkey: "03".repeat(33),
             float_target_sats: 1_000_000,
             max_order_sats: 330,
             max_daily_sats: 0,

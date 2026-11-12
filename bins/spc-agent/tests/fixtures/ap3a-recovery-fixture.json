@@ -1,0 +1,36 @@
+{
+  "ark_xprv": "tprv8itNpuWu7Tcrk4PgnMXQYz6mhu94WvzMDNxVGjL7N4pZsoVASZ2AfiFwY9UrSRB1UcZUNFaVy5cwuUV2rsxKkJuqrnXtssVjjzmiLiWSLay",
+  "b_ark_pubkey": "03605b4833d3376bd747e484d98c82d6644c00df9ebef400c025e241b6452526df",
+  "blocks": [
+    {
+      "a_send": "034f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa",
+      "amount_sats": 21000000,
+      "expiry_height": 800432,
+      "expiry_provenance": "synthetic constant FIXTURE_EXPIRY_IN_WINDOW (800432); inside the tip+96 window, unrelated to the finding height",
+      "height": 800000,
+      "u_pubkey": "03946baf21fdb0d52812ea90d8fc920fa04df5b896e19d366b3c64108bd93b5001",
+      "vtxo_id_hex": "8952fb13d19178a34bddd1129da2ee44151d8595e614b51787fbdc57d9e13210"
+    },
+    {
+      "a_send": "02466d7fcae563e5cb09a0d1870bb580344804617879a14949cf22285f1bae3f27",
+      "amount_sats": 26000000,
+      "expiry_height": 900000,
+      "expiry_provenance": "synthetic constant FIXTURE_EXPIRY_OUT_OF_WINDOW (900000); far outside the tip+96 window, unrelated to the finding height",
+      "height": 800001,
+      "u_pubkey": "032f648c43fe175128263ee0867c4ae1c9c62a78a2d6540bce3e39c9d079a3e625",
+      "vtxo_id_hex": "769b26a7d8079557140cea773899dbce739bde538fbe9a07f47152bab9918c44"
+    }
+  ],
+  "child_seed_hex": "44f24e0b0591fd23f46a15d1c546cdbcbf7946bc6994e957c7d2e315f029a5a8568cc4d9695d9088cd100faa3beedf3b4f9642ea2097aa36f6d38143f5b40f71",
+  "mailbox_pubkey": "02195fa2015441faff4af69080b7d9ba03904f3d41b897df95431910c65b3c6529",
+  "master_seed_hex": "d0e1dc7b5a753579a9791d5c0e33f857399d456361afd76cd2d5e1f13d79bba01b13b100163cb1a00de6fba86e09e43280941afefc6337f1be07c1502e34a8ee",
+  "network": "regtest",
+  "normal_vtxo_pubkey": "03690ae3906a0dba739267e3bfc9474056556d26a1f0ec1819bf1610c6f08bece8",
+  "provenance": "SYNTHETIC: deterministic key derivations and ledger replay; the blocks are not real VTXOs, the expiries are explicit scenario constants (see each block's expiry_provenance), and the scenario is not live ancestry parsing, mailbox recovery, or stock bark VTXO recovery (those are AP-3b). VtxoState values are caller-asserted claims, faithfully persisted.",
+  "scan_xprv": "tprv8itNpuWu7TcrhKPxafy1MvUBAHG1UctQnmm9msghApApDvEgcsKt7B6FzowoUUJRKcGtGPt9u2UQbR6Q2W5fWMAHBuFF7S1pBzvZczAyGk7",
+  "seed_source": "frozen-fixture (deterministic master, spc-ap3a-recovery-fixture-*-v1)",
+  "sp_address": "tsp1qqdqg6xfk27pkkahgprpvuljdsu3lv5tegp50c6yrm3v5l7qck7xzjq7awupsvln8awn05sx8l8d529g36rak9t4cdlzc0ntv2j52mm6fyup4fts8",
+  "sp_id_hex": "2be8acc49f302e046841a690672f59189c147b0260b08e8e38606c9b1645d460",
+  "tip_height": 800400,
+  "wallet_fingerprint_hex": "be44f10e"
+}

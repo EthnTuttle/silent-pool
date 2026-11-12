@@ -5,7 +5,10 @@
 network = "regtest"                 # mainnet is refused by v0.1
 roles = ["front", "payout", "api"]
 listen = "127.0.0.1:34254"          # SV2 (Noise)
-authority_public_key = "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+# Throwaway base58check SV2 key-utils pair: replace both values together.
+# The front refuses to start with an ephemeral or mismatched authority.
+authority_public_key = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72"
+authority_secret_key = "mkDLTBBRxdBv998612qipDYoTK3YUrqLe8uWw7gu3iXbSrn2n"
 # Watch-only, structurally valid testnet tpub (throwaway): the pool output
 # for height H is derived from it at H (SPEC §11.3).
 pool_payout_descriptor = "tr(tpubD6NzVbkrYhZ4WUjXBVxZPvGhWxTRE5veAscTgokX65xcfCoDF5nyNdtaS4xGoJ7xnZuDTxCAEAnGpxJbWo6wtTAJsESmeJWpZzybZ6dvCia/0/*)"
@@ -61,7 +64,7 @@ slice_fee_delta_sats = 0
 max_slice_shares = 65000
 dust_limit_sats = 330
 coinbase_threshold_sats = 330
-max_payout_slots = 256
+max_payout_slots = 1024             # 2048 is fee-spike headroom; never trim
 retain_windows = 16
 scrub_after_blocks = 100
 confirmation_depth = 6
@@ -71,8 +74,8 @@ confirmation_depth = 6
 # allow_unchecked_chain = false
 
 [budget]
-floor_wu = 50000
-ceiling_wu = 400000
+floor_wu = 200000                  # covers the 990-output regtest reward
+ceiling_wu = 1000000               # actual coinbase <= 25% of block weight
 up_threshold = 0.85
 down_threshold = 0.50
 step_factor = 1.15
@@ -99,10 +102,22 @@ front_cursor_ttl_secs = 120
 [api]
 listen = "127.0.0.1:8080"
 
+# [operator]
+# listen = "127.0.0.1:8081"   # EXP-OP: read-only operator page. Optional
+#                              # and off unless set; loopback addresses only
+#                              # (non-loopback is a config error); runs in
+#                              # the same process as the api role, which the
+#                              # roles list must therefore include. Serves
+#                              # exactly /, /operator.css, /operator.js and
+#                              # /api/pool/observation on its own listener,
+#                              # separate from the public [api] router.
+
 # [ark]
 # enabled = true
 # server = "https://ark.example.tech"      # MUST NOT be a server the pool runs
-# ark_id = "00000000"
+# ark_id = "00000000"                       # first 4 bytes SHA256(server_pubkey); cross-checked on startup
+# server_pubkey = "<66 hex chars>"         # ArkInfo server pubkey REQUIRED for front; public metadata only
+# mailbox_pubkey = "<66 hex chars>"        # ArkInfo mailbox pubkey REQUIRED for front; public metadata only
 # float_target_sats = 1000000
 # max_order_sats = 330
 # order_pubkey = "<64 hex chars>"

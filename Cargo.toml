@@ -8,8 +8,12 @@ members = [
   "crates/spc-share-ext",
   "crates/spc-store",
   "crates/spc-testutil",
+  "crates/spc-lab",
+  "crates/spc-lab-txd",
   "bins/spc-pool",
   "bins/spc-agent",
+  "bins/spc-cpu-miner",
+  "bins/spc-lab",
 ]
 
 [workspace.package]
@@ -27,14 +31,20 @@ spc-ext = { path = "crates/spc-ext" }
 spc-share-ext = { path = "crates/spc-share-ext" }
 spc-store = { path = "crates/spc-store" }
 spc-testutil = { path = "crates/spc-testutil" }
+spc-lab = { path = "crates/spc-lab" }
+spc-pool = { path = "bins/spc-pool" }
 
 anyhow = "1"
 bech32 = "0.11"
+bip39 = "2.2"
 bitcoin = { version = "0.32", features = ["rand", "serde"] }
+bs58 = { version = "0.4", features = ["check"] }
 clap = { version = "4", features = ["derive", "env"] }
 hex = "0.4"
+num-bigint = "0.4"
 proptest = "1"
 rand = "0.8"
+rustix = { version = "1.1", features = ["process", "fs"] }
 secp256k1 = { version = "0.29", features = ["rand", "global-context"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

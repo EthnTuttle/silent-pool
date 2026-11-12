@@ -1,0 +1,18 @@
+{
+  "name": "method_not_found",
+  "description": "getmempoolentry answers -32601: a required method is absent from the RPC surface",
+  "overrides": [
+    {"op": "patch", "method": "getnetworkinfo", "field": "version", "value": 310000},
+    {"op": "remove_method", "method": "getmempoolentry"}
+  ],
+  "expect": {
+    "verdict_status": "incompatible",
+    "reasons": ["fail-method-surface", "funded-unproven"],
+    "funded_state": "unproven",
+    "checks": {
+      "getmempoolentry.recognized": {"availability": "failed", "behavior": "not_run"},
+      "getmempoolentry.shape.server": {"availability": "failed", "behavior": "unknown"},
+      "getmempoolentry.shape.wallet": {"availability": "failed", "behavior": "unknown"}
+    }
+  }
+}

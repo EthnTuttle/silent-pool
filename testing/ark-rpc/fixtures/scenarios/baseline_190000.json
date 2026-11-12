@@ -1,0 +1,55 @@
+{
+  "name": "baseline_190000",
+  "description": "honest node baseline: real rbitcoin version 190000, all shapes parse, no funded data -- the version gate must fail honestly; the traffic-slice getmempoolinfo check fails honestly (maxdatacarriersize null) and adds no verdict reason",
+  "overrides": [],
+  "expect": {
+    "verdict_status": "incompatible",
+    "reasons": [
+      "fail-version-gate",
+      "funded-unproven"
+    ],
+    "funded_state": "unproven",
+    "checks": {
+      "getnetworkinfo.version-shape": "passed",
+      "getnetworkinfo.gate.server": "failed",
+      "getnetworkinfo.gate.wallet": "failed",
+      "protocol.envelope20.getnetworkinfo": "passed",
+      "getblockchaininfo.network": "passed",
+      "getblockchaininfo.shape.async": "passed",
+      "getblockchaininfo.shape.sync": "passed",
+      "getindexinfo.txindex": "passed",
+      "getblockhash.genesis": "passed",
+      "getblock.verbosity1": "passed",
+      "getblock.singleparam": "passed",
+      "getblockheader.encoding.sync20": "passed",
+      "getblockheader.nonverbose": "passed",
+      "getblock.verbosity0.rehash": "passed",
+      "getrawmempool": "passed",
+      "getrawmempool.bool-form": "passed",
+      "getmempoolentry.recognized": {
+        "availability": "passed",
+        "behavior": "unknown"
+      },
+      "getmempoolentry.shape.server": "unknown",
+      "getmempoolentry.shape.wallet": "unknown",
+      "estimatesmartfee.fee-data": "unknown",
+      "protocol.id-echo": "passed",
+      "testmempoolaccept.recognized": {
+        "availability": "passed",
+        "behavior": "not_run"
+      },
+      "submitpackage.recognized": {
+        "availability": "passed",
+        "behavior": "not_run"
+      },
+      "sendrawtransaction.recognized": {
+        "availability": "passed",
+        "behavior": "not_run"
+      },
+      "getmempoolinfo": {
+        "availability": "passed",
+        "behavior": "failed"
+      }
+    }
+  }
+}

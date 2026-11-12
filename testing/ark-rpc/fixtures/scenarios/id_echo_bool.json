@@ -1,0 +1,17 @@
+{
+  "name": "id_echo_bool",
+  "description": "responses echo the id as JSON true (a bool is not the numeric request id): a protocol failure on every exchange, never method evidence",
+  "overrides": [
+    {"op": "id_echo", "mode": "bool"}
+  ],
+  "expect": {
+    "verdict_status": "incompatible",
+    "reasons": ["fail-protocol", "funded-unproven"],
+    "funded_state": "unproven",
+    "checks": {
+      "protocol.id-echo": "failed",
+      "getmempoolentry.recognized": {"availability": "unknown", "behavior": "unknown"},
+      "testmempoolaccept.recognized": {"availability": "unknown", "behavior": "not_run"}
+    }
+  }
+}

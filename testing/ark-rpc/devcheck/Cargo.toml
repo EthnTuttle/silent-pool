@@ -1,0 +1,51 @@
+[package]
+name = "arkrpc-devcheck"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Dev-only checker: validates the arkrpc Python contract golden vectors against the real pinned Rust crate types"
+
+# Standalone crate: deliberately NOT a member of the repo-root cargo
+# workspace (the probe packet owns only testing/ark-rpc/**).
+[workspace]
+
+# Dev-only tool. NOT part of the probe runtime, NOT part of the packet
+# manifest hash (excluded in arkrpc/reporting.py _hash_tree), and never
+# required to run the probe or the self-test. See devcheck/README.md.
+#
+# All registry dependencies are pinned to the EXACT versions bark
+# c419159 locks in its Cargo.lock (the pinned bark checkout this crate
+# links against), so the types under test are byte-identical to the
+# ones bark deserializes with.
+
+[dependencies]
+# bitcoincore-rpc-json 0.19.0: the sync-client result types
+# (bark's BitcoinRpcClient via bdk-bitcoind-rpc; GetTxOutResult,
+# GetBlockHeaderResult, ScriptPubkeyType WITHOUT Anchor).
+bitcoincore-rpc-json = "=0.19.0"
+
+# corepc-types 0.13.0: the async-client getblockchaininfo shape (v29
+# module; requires bits/target/time).
+corepc-types = "=0.13.0"
+
+# bitcoin 0.32.9 / bitcoin-units 0.1.3: the Amount type and its
+# as_btc serde (u64 satoshi range, NOT the 21M policy cap). Both are
+# bark's Cargo.lock pins; pinning both keeps the Amount type unified.
+bitcoin = { version = "=0.32.9", features = ["serde", "rand"] }
+bitcoin-units = { version = "=0.1.3", features = ["serde"] }
+
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.149"
+
+# bark's vendored RPC result types: ScriptPubkeyType WITH Anchor, the
+# getrawtransaction-verbose consumer (bitcoin-ext/src/rpc/mod.rs; the
+# crate's package name is bark-bitcoin-ext, its lib name is bitcoin_ext).
+# Path deps resolve the workspace by walking UP from the target
+# directory, so this must be the checkout's REAL path (a symlink inside
+# devcheck/ would make cargo find devcheck's own empty [workspace]
+# instead of bark's root and fail to inherit workspace deps).
+# run.sh verifies this checkout is at commit c419159 before building.
+# If your bark checkout lives elsewhere, update this path (and the
+# comment in devcheck/README.md).
+# Only the "rpc" feature is needed; the heavy bdk/wasm features are off.
+bark-bitcoin-ext = { path = "/tmp/opencode/bark-c419159/bitcoin-ext", default-features = false, features = ["rpc"] }

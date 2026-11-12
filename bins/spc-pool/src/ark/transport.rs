@@ -19,14 +19,72 @@ use tokio::process::Command;
 /// delivered VTXOs (decision record, clause 2).
 #[async_trait::async_trait]
 pub trait ArkTransport: Send + Sync + 'static {
+    /// Read-only readiness under the already-held wallet permit, before the
+    /// caller constructs any authorization nonce/request.
+    async fn check_send_readiness(
+        &self,
+        _address: &str,
+        _sats: u64,
+        _permit: Option<&super::send_fence::WalletOperationPermit>,
+    ) -> Result<(), super::send_fence::CapacityError> {
+        Err(super::send_fence::CapacityError::Unsupported)
+    }
+    async fn reserve_send_capacity(
+        &self,
+    ) -> Result<Option<super::send_fence::WalletOperationPermit>, super::send_fence::CapacityError>
+    {
+        Err(super::send_fence::CapacityError::Unsupported)
+    }
+    async fn send_authorized(
+        &self,
+        _address: &str,
+        _sats: u64,
+        _authorization: &super::send_fence::SendAuthorization,
+        _permit: Option<&super::send_fence::WalletOperationPermit>,
+    ) -> Result<Vec<Vec<u8>>, String> {
+        Err("transport does not implement the post-lock grant fence".into())
+    }
     async fn send(&self, address: &str, sats: u64) -> Result<(Vec<u8>, u32), String>;
+    /// Production authorized sends require complete stock-protocol proof, not
+    /// an opaque first VTXO ID. Unsupported transports perform no send here.
+    async fn send_proven(&self, _address: &str, _sats: u64) -> Result<Vec<Vec<u8>>, String> {
+        Err("transport cannot return complete delivery proof".into())
+    }
 }
 
 /// Blanket implementation for Box<dyn ArkTransport>
 #[async_trait::async_trait]
 impl ArkTransport for Box<dyn ArkTransport> {
+    async fn check_send_readiness(
+        &self,
+        address: &str,
+        sats: u64,
+        permit: Option<&super::send_fence::WalletOperationPermit>,
+    ) -> Result<(), super::send_fence::CapacityError> {
+        (**self).check_send_readiness(address, sats, permit).await
+    }
+    async fn reserve_send_capacity(
+        &self,
+    ) -> Result<Option<super::send_fence::WalletOperationPermit>, super::send_fence::CapacityError>
+    {
+        (**self).reserve_send_capacity().await
+    }
+    async fn send_authorized(
+        &self,
+        address: &str,
+        sats: u64,
+        authorization: &super::send_fence::SendAuthorization,
+        permit: Option<&super::send_fence::WalletOperationPermit>,
+    ) -> Result<Vec<Vec<u8>>, String> {
+        (**self)
+            .send_authorized(address, sats, authorization, permit)
+            .await
+    }
     async fn send(&self, address: &str, sats: u64) -> Result<(Vec<u8>, u32), String> {
         (**self).send(address, sats).await
+    }
+    async fn send_proven(&self, address: &str, sats: u64) -> Result<Vec<Vec<u8>>, String> {
+        (**self).send_proven(address, sats).await
     }
 }
 

@@ -1,0 +1,118 @@
+{
+  "name": "anchor_verbose_tx",
+  "description": "verbose getrawtransaction serving an anchor output, an empty scriptSig hex and a 30M BTC vout: the bark bitcoin-ext contract (ScriptPubkeyType WITH Anchor, serde_hex empty string, Amount u64 range) accepts all three",
+  "overrides": [
+    {
+      "op": "patch",
+      "method": "getnetworkinfo",
+      "field": "version",
+      "value": 310000
+    },
+    {
+      "op": "set_response",
+      "method": "getrawtransaction",
+      "params": [
+        "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
+        1
+      ],
+      "response": {
+        "result": {
+          "hex": "01000000010000000000000000000000000000000000000000000000000000000000000000000000000000ffffffff00ffffffff0200f2052a0100000023210251024c5300000000",
+          "txid": "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
+          "hash": "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
+          "size": 100,
+          "vsize": 100,
+          "version": 1,
+          "locktime": 0,
+          "vin": [
+            {
+              "sequence": 4294967295,
+              "txid": "0000000000000000000000000000000000000000000000000000000000000000",
+              "vout": 0,
+              "scriptSig": {
+                "asm": "",
+                "hex": ""
+              }
+            }
+          ],
+          "vout": [
+            {
+              "value": 30000000.0,
+              "n": 0,
+              "scriptPubKey": {
+                "asm": "",
+                "hex": "51024c53",
+                "type": "anchor"
+              }
+            }
+          ],
+          "blockhash": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+          "confirmations": 1,
+          "time": 1231006505,
+          "blocktime": 1231006505
+        }
+      }
+    },
+    {
+      "op": "set_response",
+      "method": "getrawtransaction",
+      "params": [
+        "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
+        true
+      ],
+      "response": {
+        "result": {
+          "hex": "01000000010000000000000000000000000000000000000000000000000000000000000000000000000000ffffffff00ffffffff0200f2052a0100000023210251024c5300000000",
+          "txid": "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
+          "hash": "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
+          "size": 100,
+          "vsize": 100,
+          "version": 1,
+          "locktime": 0,
+          "vin": [
+            {
+              "sequence": 4294967295,
+              "txid": "0000000000000000000000000000000000000000000000000000000000000000",
+              "vout": 0,
+              "scriptSig": {
+                "asm": "",
+                "hex": ""
+              }
+            }
+          ],
+          "vout": [
+            {
+              "value": 30000000.0,
+              "n": 0,
+              "scriptPubKey": {
+                "asm": "",
+                "hex": "51024c53",
+                "type": "anchor"
+              }
+            }
+          ],
+          "blockhash": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+          "confirmations": 1,
+          "time": 1231006505,
+          "blocktime": 1231006505
+        }
+      }
+    }
+  ],
+  "expect": {
+    "verdict_status": "surface_compatible",
+    "reasons": [
+      "funded-unproven"
+    ],
+    "funded_state": "unproven",
+    "checks": {
+      "getrawtransaction.verbosity1": "passed",
+      "getrawtransaction.bool-verbose": "passed",
+      "getrawtransaction.bool-verbose.async": "passed",
+      "getrawtransaction.verbosity0": {
+        "availability": "passed",
+        "behavior": "unknown"
+      }
+    }
+  }
+}

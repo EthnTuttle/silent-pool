@@ -30,12 +30,46 @@ pub enum VerifyError {
     Absent,
     #[error("derivation failed")]
     Derivation,
+    #[error("own output set or denomination entitlement mismatch")]
+    Entitlement,
 }
 
 /// A minimal output view: `script_pubkey` and `value`.
-pub struct OutputView<'a> {
-    pub script_pubkey: &'a [u8],
-    pub value: u64,
+pub use spc_scan::{OutputView, PayoutFormat};
+
+/// Runtime adapter for a source-bound proof from the private/operator or
+/// ownership-authenticated collector. The trust roots are independently
+/// captured collector/chain-history results; never take them from the bundle.
+/// Actual issued SV2 job bytes must be supplied by the live job reader.
+pub fn verify_source_entitlement(
+    bundle: &[u8],
+    trusted: &spc_scan::source_audit::TrustedSource,
+    issued: &spc_scan::source_audit::JobProof,
+    b_scan: &SecretKey,
+    b_spend: &PublicKey,
+) -> Result<(Vec<spc_scan::Found>, u64), VerifyError> {
+    let verified = spc_scan::source_audit::verify_owned(bundle, trusted, issued, b_scan, b_spend)
+        .map_err(|_| VerifyError::Entitlement)?;
+    Ok((verified.outputs, verified.remainder))
+}
+
+/// Full own-payout verification from an independently audited frozen window.
+/// Returns every owned output/tweak and the exact Ark/error-held remainder.
+/// Absence warnings never turn an invalid amount/composition into success.
+pub fn verify_entitlement(
+    height: u32,
+    a_x: &[u8; 32],
+    outputs: &[OutputView<'_>],
+    b_scan: &SecretKey,
+    b_spend: &PublicKey,
+    owed: u64,
+    format: PayoutFormat,
+) -> Result<(Vec<spc_scan::Found>, u64), VerifyError> {
+    let found = spc_scan::scan_outputs(height, a_x, outputs, b_scan, b_spend)
+        .map_err(|_| VerifyError::Entitlement)?;
+    let remainder =
+        spc_scan::audit_outputs(&found, owed, format).map_err(|_| VerifyError::Entitlement)?;
+    Ok((found, remainder))
 }
 
 /// Derive the miner's `P` for `(height, A_x)`.

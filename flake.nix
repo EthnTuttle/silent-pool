@@ -18,7 +18,19 @@
         rust = (pkgs.rust-bin.stable."1.93.0".default.override {
           extensions = [ "rust-src" "rustfmt" "clippy" ];
         });
-        src = pkgs.lib.cleanSource ./.;
+        # Local LP-3 worktree has new untracked crates; cleanSource (git)
+        # excludes them. Keep the source filter explicit so the merge session
+        # can restore cleanSource after the crates are tracked.
+        src = pkgs.lib.cleanSourceWith {
+          src = ./.;
+          filter = path: type:
+            let
+              base = baseNameOf (toString path);
+              relative = pkgs.lib.removePrefix (toString ./. + "/") (toString path);
+            in !(builtins.elem base [ "target" ".git" ".direnv" ".cache" "__pycache__" "node_modules" ]
+              || builtins.elem relative [ "spc_ark_client/test" "spc_ark_e2e/test" ]
+              || pkgs.lib.hasPrefix "result" base);
+        };
         common = {
           inherit src;
           rustc = rust;
@@ -34,7 +46,12 @@
           # source and covers registry and git sources alike.
           cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
             inherit src;
-            hash = "sha256-JDPDVUwJZzViAxnhLDIuPxmZz60V3jJMZm1ooc6Rfr0=";
+            # 2026-11-11: refreshed after the wallet-service integration
+            # added bdk_bitcoind_rpc + rustix to Cargo.lock (the previous
+            # pin sha256-P3Gf1XW2CWkAO2IT6M3y37sssZsoh9Hu4osyLWd0K+E=
+            # predates that lock delta and fails the Cargo.lock
+            # consistency check).
+            hash = "sha256-y/pymSKJfdDGBLdzUwMbVu5+zqGIKt03IZxVZ4L61hA=";
           };
           doCheck = false;
         };
@@ -55,11 +72,59 @@
           RUST_BACKTRACE = "1";
           SPC_TEST_MODE = "1";
         };
+        arkPackages = import ./nix/lab/ark.nix { inherit pkgs rust; };
       in {
-        packages = {
+        packages = rec {
+          rbitcoin-node-ark-lab = import ./nix/lab/ark-node.nix { inherit pkgs; };
+          spc-lab-self-hosted-ark = import ./nix/lab/ark-runtime.nix {
+            inherit pkgs src;
+            lab = spc-lab-ark-tools;
+            node = rbitcoin-node-ark-lab;
+            pool = spc-lab-ark-tools;
+            miner = spc-lab-ark-tools;
+            scanner = spc-lab-ark-tools;
+            agent = spc-lab-ark-tools;
+            txd = spc-lab-ark-tools;
+            probe = import ./nix/lab/ark-probe.nix { inherit pkgs; };
+            inherit (arkPackages) captaind;
+          };
+          # One compilation for the local infrastructure launch closure, rather
+          # than four independent copies of the same dependency build tree.
+          spc-lab-ark-tools = pkgs.rustPlatform.buildRustPackage (common // {
+            pname = "spc-lab-ark-tools";
+            version = "0.1.0";
+            postInstall = ''
+              test -x "$out/bin/pool-wallet-executor"
+            '';
+            cargoBuildFlags = [ "-p" "spc-lab-cli" "-p" "spc-pool"
+              "-p" "spc-cpu-miner" "-p" "spc-scan" "-p" "spc-agent"
+              "-p" "spc-lab-txd"
+              "--features" "spc-pool/rpc,spc-pool/ark,spc-agent/ark" ];
+            doCheck = true;
+            checkPhase = ''
+              runHook preCheck
+              cargo test --release --offline -p spc-lab \
+                --test ark_infrastructure --test lifecycle_stop \
+                --test two_runs_isolation --test supervisor_adoption \
+                --test operator_ui_inventory
+              runHook postCheck
+            '';
+            meta.mainProgram = "spc-lab";
+          });
+          inherit (arkPackages) captaind bark;
+          spc-pool-ark = mkBinary "spc-pool" "rpc,ark";
+          spc-agent-ark = mkBinary "spc-agent" "ark";
           spc-pool = mkBinary "spc-pool" "rpc";
           spc-agent = mkBinary "spc-agent" "";
+          spc-cpu-miner = mkBinary "spc-cpu-miner" "";
+          spc-lab-txd = mkBinary "spc-lab-txd" "";
           spc-scan = mkBinary "spc-scan" "";
+          spc-lab = pkgs.rustPlatform.buildRustPackage (common // {
+            pname = "spc-lab";
+            version = "0.1.0";
+            cargoBuildFlags = [ "-p" "spc-lab-cli" "--bin" "spc-lab" ];
+            meta.mainProgram = "spc-lab";
+          });
           default = mkBinary "spc-pool" "rpc";
         };
 
@@ -83,6 +148,12 @@
             '';
           });
 
+          ui-node = pkgs.runCommand "spc-lab-ui-tests" { nativeBuildInputs = [ pkgs.nodejs ]; } ''
+            cp -r ${src} source
+            cd source
+            node --test bins/spc-lab/tests/*.test.cjs > $out
+          '';
+
           test-ark = pkgs.rustPlatform.buildRustPackage (common // {
             pname = "spc-ark-feature-tests";
             version = "0.1.0";
@@ -91,6 +162,7 @@
               runHook preCheck
               cargo test -p spc-crypto --features ark --offline
               cargo test -p spc-pool --features rpc,ark --offline
+              cargo test -p spc-agent --features ark --offline
               runHook postCheck
             '';
           });
@@ -113,6 +185,7 @@
             pkgs.curl
             pkgs.sqlx-cli
             pkgs.git
+            pkgs.nodejs
           ];
           shellHook = ''
             echo "silent-pool devshell"

@@ -40,6 +40,58 @@ use bark::vtxo::{VtxoLockHolder, WalletVtxo};
 use bitcoin::{Amount, Network};
 
 use super::bark_transport::{ArkPayment, BarkClient, TrackedVtxo};
+use super::send_fence::CapacityError;
+
+/// The actual stock-wallet rows and supported fee quote, never a balance
+/// target/config scalar. Kept shared with guarded send so preflight and send
+/// apply the same state/expiry/exit-depth/fee eligibility and largest-first rule.
+pub(crate) fn select_ready_inputs(
+    mut candidates: Vec<WalletVtxo>,
+    tip: u32,
+    max_exit_depth: u16,
+    sats: u64,
+    quote: &bark::FeeEstimate,
+) -> Result<Vec<WalletVtxo>, CapacityError> {
+    let amount = Amount::from_sat(sats);
+    if sats == 0
+        || quote.net_amount != amount
+        || amount.checked_add(quote.fee) != Some(quote.gross_amount)
+    {
+        return Err(CapacityError::ReadinessUnavailable);
+    }
+    candidates.retain(|v| {
+        v.state.kind() == bark::vtxo::VtxoStateKind::Spendable
+            && v.vtxo.expiry_height().to_u32() > tip
+            && v.exit_depth < max_exit_depth
+    });
+    candidates.sort_by_key(|v| std::cmp::Reverse(v.vtxo.amount().to_sat()));
+    let mut selected = Vec::new();
+    let mut total = 0u64;
+    let required = quote.gross_amount.to_sat();
+    let mut ids = std::collections::BTreeSet::new();
+    for v in candidates {
+        if total >= required {
+            break;
+        }
+        if !ids.insert(v.id()) {
+            return Err(CapacityError::ReadinessUnavailable);
+        }
+        total = total
+            .checked_add(v.vtxo.amount().to_sat())
+            .ok_or(CapacityError::ReadinessUnavailable)?;
+        selected.push(v);
+    }
+    if total < required {
+        return Err(CapacityError::InsufficientFloat);
+    }
+    // The pinned stock estimate explicitly reports zero arkoor fee. This thin
+    // package builder has no fee-output primitive: never guess or silently
+    // waive a newly nonzero quote, even if the gross amount could be funded.
+    if quote.fee != Amount::ZERO {
+        return Err(CapacityError::UnsupportedFeePolicy);
+    }
+    Ok(selected)
+}
 
 /// The SPc-side secret-store root (order key, Noise keys, database
 /// credentials). The ark seed must not be resolvable under it.
@@ -144,24 +196,7 @@ pub struct BarkWalletOptions {
 /// bark's own ark-testing builders: sqlite persister, BDK on-chain
 /// wallet over the same seed, `create_if_not_exists`.
 pub async fn open_bark_wallet(opts: BarkWalletOptions) -> Result<BarkWalletClient, String> {
-    // The datadir holds wallet state: owner-only from the start.
-    if !opts.datadir.exists() {
-        std::fs::create_dir_all(&opts.datadir)
-            .map_err(|e| format!("ark datadir {}: {e}", opts.datadir.display()))?;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(&opts.datadir)
-            .map_err(|e| format!("ark datadir {}: {e}", opts.datadir.display()))?
-            .permissions()
-            .mode()
-            & 0o777;
-        if is_loose(mode) {
-            std::fs::set_permissions(&opts.datadir, std::fs::Permissions::from_mode(0o700))
-                .map_err(|e| format!("ark datadir {}: {e}", opts.datadir.display()))?;
-        }
-    }
+    super::wallet_control::prepare_wallet_database(&opts.datadir).map_err(|e| e.to_string())?;
 
     let seed = bark::WalletSeed::new_from_seed(opts.network, &opts.seed);
     let db: Arc<dyn bark::persist::BarkPersister> = Arc::new(
@@ -210,6 +245,7 @@ pub async fn open_bark_wallet(opts: BarkWalletOptions) -> Result<BarkWalletClien
         server_address: opts.server_address,
         fallback_fee_sat_vb: opts.fallback_fee_sat_vb,
         board_keypair: std::sync::Arc::new(tokio::sync::Mutex::new(None)),
+        operation_lock: Arc::new(tokio::sync::Mutex::new(())),
     })
 }
 
@@ -218,11 +254,12 @@ pub async fn open_bark_wallet(opts: BarkWalletOptions) -> Result<BarkWalletClien
 /// each hold one clone of the same client).
 #[derive(Clone)]
 pub struct BarkWalletClient {
+    operation_lock: Arc<tokio::sync::Mutex<()>>,
     wallet: bark::Wallet,
     /// The wallet's persister: the thin send stores its change key index
     /// the same way stock bark's action does.
-    db: Arc<dyn bark::persist::BarkPersister>,
-    onchain: Arc<tokio::sync::RwLock<dyn bark::onchain::OnchainWalletTrait>>,
+    pub(super) db: Arc<dyn bark::persist::BarkPersister>,
+    pub(super) onchain: Arc<tokio::sync::RwLock<bark::onchain::OnchainWallet>>,
     network: Network,
     /// The ark server address from `[ark]` (a fresh [`server_rpc`]
     /// connection per send; the wallet's own RPCs reuse its config).
@@ -237,9 +274,139 @@ pub struct BarkWalletClient {
     /// expected board funding address"). Consumed on a successful board;
     /// kept on failure so a retry reuses the same funding address.
     board_keypair: std::sync::Arc<tokio::sync::Mutex<Option<secp256k1::Keypair>>>,
+    /// Held across an entire automatic tick, manual command, or float send.
+    pub operation_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl BarkWalletClient {
+    async fn bounded_plan_send(
+        &self,
+        payment: &ArkPayment,
+    ) -> Result<Vec<WalletVtxo>, CapacityError> {
+        tokio::time::timeout(std::time::Duration::from_secs(30), self.plan_send(payment))
+            .await
+            .map_err(|_| CapacityError::ReadinessDeadline)?
+    }
+    async fn plan_send(&self, payment: &ArkPayment) -> Result<Vec<WalletVtxo>, CapacityError> {
+        self.wallet
+            .validate_arkoor_address(&payment.address)
+            .await
+            .map_err(|_| CapacityError::ReadinessUnavailable)?;
+        let info = self
+            .wallet
+            .ark_info()
+            .await
+            .map_err(|_| CapacityError::ReadinessUnavailable)?
+            .ok_or(CapacityError::ReadinessUnavailable)?;
+        if info.fees.validate().is_err()
+            || info
+                .max_vtxo_amount
+                .is_some_and(|max| payment.sats > max.to_sat())
+        {
+            return Err(CapacityError::ReadinessUnavailable);
+        }
+        let quote = self
+            .wallet
+            .estimate_arkoor_payment_fee(Amount::from_sat(payment.sats))
+            .await
+            .map_err(|_| CapacityError::ReadinessUnavailable)?;
+        let tip = self
+            .wallet
+            .chain()
+            .tip()
+            .await
+            .map_err(|_| CapacityError::ReadinessUnavailable)?
+            .to_u32();
+        let candidates = self
+            .wallet
+            .spendable_vtxos()
+            .await
+            .map_err(|_| CapacityError::ReadinessUnavailable)?;
+        let selected = select_ready_inputs(
+            candidates,
+            tip,
+            info.max_vtxo_exit_depth,
+            payment.sats,
+            &quote,
+        )?;
+        let full = self
+            .wallet
+            .get_full_vtxos(selected.iter())
+            .await
+            .map_err(|_| CapacityError::ReadinessUnavailable)?;
+        if full.len() != selected.len() {
+            return Err(CapacityError::ReadinessUnavailable);
+        }
+        let mut anchors = std::collections::BTreeMap::new();
+        let mut seen = std::collections::BTreeSet::new();
+        for vtxo in &full {
+            let row = selected
+                .iter()
+                .find(|row| row.id() == vtxo.id())
+                .ok_or(CapacityError::ReadinessUnavailable)?;
+            if !seen.insert(vtxo.id())
+                || vtxo.to_bare() != row.vtxo
+                || vtxo.exit_depth() != row.exit_depth
+                || vtxo.server_pubkey() != info.server_pubkey
+            {
+                return Err(CapacityError::ReadinessUnavailable);
+            }
+            let id = vtxo.chain_anchor().txid;
+            if let std::collections::btree_map::Entry::Vacant(entry) = anchors.entry(id) {
+                let tx = self
+                    .wallet
+                    .chain()
+                    .get_tx(&id)
+                    .await
+                    .map_err(|_| CapacityError::ReadinessUnavailable)?
+                    .ok_or(CapacityError::ReadinessUnavailable)?;
+                entry.insert(tx);
+            }
+            vtxo.validate(&anchors[&id])
+                .map_err(|_| CapacityError::ReadinessUnavailable)?;
+            let mut key = self
+                .wallet
+                .get_vtxo_key(vtxo)
+                .await
+                .map_err(|_| CapacityError::ReadinessUnavailable)?;
+            let owned = key.public_key() == vtxo.user_pubkey();
+            key.non_secure_erase();
+            if !owned {
+                return Err(CapacityError::ReadinessUnavailable);
+            }
+        }
+        let (mut change, _) = self
+            .wallet
+            .peek_next_keypair()
+            .await
+            .map_err(|_| CapacityError::ReadinessUnavailable)?;
+        let change_public = change.public_key();
+        change.non_secure_erase();
+        if payment.address.policy().user_pubkey() == change_public {
+            return Err(CapacityError::ReadinessUnavailable);
+        }
+        // Pure package construction validates the pinned stock policy/input and
+        // change shape. No input registration, lock, nonce or cosign occurs.
+        let _preview = ArkoorPackageBuilder::new_single_output_with_checkpoints(
+            full,
+            ArkoorDestination {
+                total_amount: Amount::from_sat(payment.sats),
+                policy: payment.address.policy().clone(),
+            },
+            VtxoPolicy::new_pubkey(change_public),
+        )
+        .map_err(|_| CapacityError::ReadinessUnavailable)?;
+        Ok(selected)
+    }
+    /// Shared with wallet-control startup/manual/automatic/recovery operations.
+    pub fn operation_lock(&self) -> Arc<tokio::sync::Mutex<()>> {
+        self.operation_lock.clone()
+    }
+    pub async fn acquire_send_capacity(
+        &self,
+    ) -> Result<super::send_fence::WalletOperationPermit, super::send_fence::CapacityError> {
+        super::send_fence::WalletOperationPermit::acquire_for_send(self.operation_lock()).await
+    }
     /// The wallet (for startup introspection such as the network
     /// cross-check).
     pub fn wallet(&self) -> &bark::Wallet {
@@ -277,6 +444,7 @@ impl BarkWalletClient {
         inputs: &[WalletVtxo],
         input_ids: &[ark::VtxoId],
         change_keypair: &secp256k1::Keypair,
+        authorization: Option<&super::send_fence::SendAuthorization>,
     ) -> Result<Vec<TrackedVtxo>, SendFailure> {
         let wallet = &self.wallet;
         let amount = Amount::from_sat(payment.sats);
@@ -290,6 +458,10 @@ impl BarkWalletClient {
             .get_full_vtxos(inputs.iter())
             .await
             .map_err(|e| SendFailure::BeforeCosign(format!("hydrating the send inputs: {e}")))?;
+        if let Some(auth) = authorization {
+            auth.validate(&payment.address.to_string(), payment.sats)
+                .map_err(SendFailure::BeforeCosign)?;
+        }
         wallet
             .register_vtxo_transactions_with_server(&inputs_full)
             .await
@@ -333,6 +505,10 @@ impl BarkWalletClient {
 
         // The point of no return: once the server accepts this request,
         // the inputs are spent server-side.
+        if let Some(auth) = authorization {
+            auth.enter_cosign(&payment.address.to_string(), payment.sats)
+                .map_err(SendFailure::BeforeCosign)?;
+        }
         let response = srv
             .client
             .request_arkoor_cosign(cosign_request)
@@ -414,6 +590,7 @@ impl BarkWalletClient {
         Ok(dest_vtxos
             .iter()
             .map(|v| TrackedVtxo {
+                proof: v.serialize(),
                 id: v.id().to_bytes(),
                 sats: v.amount().to_sat(),
                 expiry_height: v.expiry_height().to_u32(),
@@ -437,6 +614,38 @@ enum SendFailure {
 
 #[async_trait::async_trait]
 impl BarkClient for BarkWalletClient {
+    async fn board_capacity_available(&self) -> Result<bool, String> {
+        if !self
+            .db
+            .get_pending_round_state_ids()
+            .await
+            .map_err(|e| e.to_string())?
+            .is_empty()
+        {
+            return Ok(false);
+        }
+        self.wallet
+            .pending_boards()
+            .await
+            .map(|b| b.is_empty())
+            .map_err(|e| e.to_string())
+    }
+    async fn check_send_readiness(
+        &self,
+        payment: &ArkPayment,
+        permit: &super::send_fence::WalletOperationPermit,
+    ) -> Result<(), CapacityError> {
+        permit
+            .require_wallet(&self.operation_lock)
+            .map_err(|_| CapacityError::ForeignPermit)?;
+        self.bounded_plan_send(payment).await?;
+        Ok(())
+    }
+    async fn acquire_send_capacity(
+        &self,
+    ) -> Result<super::send_fence::WalletOperationPermit, super::send_fence::CapacityError> {
+        BarkWalletClient::acquire_send_capacity(self).await
+    }
     async fn list_vtxos(&self) -> Result<Vec<TrackedVtxo>, String> {
         let wallet_vtxos = self
             .wallet
@@ -446,6 +655,7 @@ impl BarkClient for BarkWalletClient {
         Ok(wallet_vtxos
             .into_iter()
             .map(|w| TrackedVtxo {
+                proof: vec![], // float enumeration is not a delivered VTXO proof
                 id: w.vtxo.id().to_bytes(),
                 sats: w.vtxo.amount().to_sat(),
                 expiry_height: w.vtxo.expiry_height().to_u32(),
@@ -456,15 +666,41 @@ impl BarkClient for BarkWalletClient {
     }
 
     async fn send_arkoor_payment(&self, payment: &ArkPayment) -> Result<Vec<TrackedVtxo>, String> {
-        let wallet = &self.wallet;
-
-        // The same entry check stock bark applies: network, server
-        // binding, policy the server will cosign, usable delivery. This
-        // is the wallet-boundary re-check of SPEC §11.3 step (4).
-        wallet
-            .validate_arkoor_address(&payment.address)
+        let permit = self
+            .acquire_send_capacity()
             .await
-            .map_err(|e| format!("arkoor address rejected: {e}"))?;
+            .map_err(|error| error.to_string())?;
+        self.send_arkoor_guarded(payment, &permit, None).await
+    }
+    async fn send_arkoor_authorized(
+        &self,
+        payment: &ArkPayment,
+        authorization: &super::send_fence::SendAuthorization,
+    ) -> Result<Vec<TrackedVtxo>, String> {
+        let permit = self
+            .acquire_send_capacity()
+            .await
+            .map_err(|error| error.to_string())?;
+        self.send_arkoor_guarded(payment, &permit, Some(authorization))
+            .await
+    }
+    async fn send_arkoor_guarded(
+        &self,
+        payment: &ArkPayment,
+        permit: &super::send_fence::WalletOperationPermit,
+        authorization: Option<&super::send_fence::SendAuthorization>,
+    ) -> Result<Vec<TrackedVtxo>, String> {
+        permit.require_wallet(&self.operation_lock)?;
+        if let Some(auth) = authorization {
+            auth.validate(&payment.address.to_string(), payment.sats)?;
+        }
+        let wallet = &self.wallet;
+        // Same actual planning rules as pre-request readiness. A later failure
+        // here is AFTER a possible grant and stays on the unknown/pinned path.
+        let selected = self
+            .bounded_plan_send(payment)
+            .await
+            .map_err(|error| error.to_string())?;
 
         // The change key: peeked and stored so a retry that reuses it
         // keeps the implied spending txid stable (the server's cosign
@@ -484,40 +720,12 @@ impl BarkClient for BarkWalletClient {
             .await
             .map_err(|e| format!("storing the arkoor change keypair: {e}"))?;
 
-        // Select the float inputs. The server refuses expired VTXOs as
-        // arkoor inputs (they must refresh first), so they are filtered
-        // against the chain tip. Largest-first: a covering VTXO settles
-        // the order alone; otherwise the fewest VTXOs chain to cover it.
-        let tip = wallet
-            .chain()
-            .tip()
-            .await
-            .map_err(|e| format!("reading the chain tip: {e}"))?;
-        let mut candidates = wallet
-            .spendable_vtxos()
-            .await
-            .map_err(|e| format!("listing the float VTXOs: {e}"))?;
-        candidates.retain(|v| v.vtxo.expiry_height() > tip);
-        candidates.sort_by_key(|v| std::cmp::Reverse(v.vtxo.amount().to_sat()));
-        let mut selected: Vec<WalletVtxo> = Vec::new();
-        let mut selected_sats = 0u64;
-        for v in candidates {
-            if selected_sats >= payment.sats {
-                break;
-            }
-            selected_sats += v.vtxo.amount().to_sat();
-            selected.push(v);
-        }
-        if selected_sats < payment.sats {
-            return Err(format!(
-                "the float cannot cover the order: {selected_sats} sats of unexpired spendable VTXOs, order is {} sats",
-                payment.sats
-            ));
-        }
-
         // A unique holder for the input locks, mirroring bark's action
         // ids: `release_action_locks` targets exactly this send.
-        let action_id = format!("spc-{}", hex::encode(rand::random::<[u8; 16]>()));
+        let action_id = authorization.map_or_else(
+            || format!("spc-{}", hex::encode(rand::random::<[u8; 16]>())),
+            |auth| auth.action_id(),
+        );
         wallet
             .lock_vtxos(
                 selected.iter(),
@@ -530,7 +738,13 @@ impl BarkClient for BarkWalletClient {
         let input_ids: Vec<ark::VtxoId> = selected.iter().map(|v| v.id()).collect();
 
         match self
-            .cosign_register_deliver(payment, &selected, &input_ids, &change_keypair)
+            .cosign_register_deliver(
+                payment,
+                &selected,
+                &input_ids,
+                &change_keypair,
+                authorization,
+            )
             .await
         {
             Ok(delivered) => Ok(delivered),
@@ -587,6 +801,7 @@ impl BarkClient for BarkWalletClient {
     }
 
     async fn onchain_address(&self) -> Result<bitcoin::Address, String> {
+        use bark::onchain::OnchainWalletTrait as _;
         let mut onchain = self.onchain.write().await;
         onchain
             .address()
@@ -623,6 +838,48 @@ impl BarkClient for BarkWalletClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn readiness_covers_actual_fee_and_never_waives_an_unsupported_quote() {
+        let full = &ark::test_util::VTXO_VECTORS.board_vtxo;
+        full.validate(&ark::test_util::VTXO_VECTORS.anchor_tx)
+            .unwrap();
+        let row = WalletVtxo {
+            vtxo: full.to_bare(),
+            state: bark::vtxo::VtxoState::Spendable,
+            exit_depth: full.exit_depth(),
+            exit_tx_weight: bitcoin::Weight::from_wu(0),
+            registered: true,
+        };
+        let value = full.amount().to_sat();
+        assert!(value > 1);
+        let quote = bark::FeeEstimate::new(full.amount(), Amount::ZERO, full.amount(), vec![]);
+        assert_eq!(
+            select_ready_inputs(vec![row.clone()], 0, u16::MAX, value, &quote)
+                .unwrap()
+                .len(),
+            1
+        );
+        let short = bark::FeeEstimate::new(
+            Amount::from_sat(value + 1),
+            Amount::from_sat(1),
+            full.amount(),
+            vec![],
+        );
+        assert_eq!(
+            select_ready_inputs(vec![row.clone()], 0, u16::MAX, value, &short).unwrap_err(),
+            CapacityError::InsufficientFloat
+        );
+        let unsupported = bark::FeeEstimate::new(
+            full.amount(),
+            Amount::from_sat(1),
+            Amount::from_sat(value - 1),
+            vec![],
+        );
+        assert_eq!(
+            select_ready_inputs(vec![row], 0, u16::MAX, value - 1, &unsupported).unwrap_err(),
+            CapacityError::UnsupportedFeePolicy
+        );
+    }
 
     fn tempdir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir()

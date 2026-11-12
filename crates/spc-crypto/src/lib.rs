@@ -20,6 +20,7 @@
 
 pub mod address;
 pub mod carriers;
+pub mod hd;
 pub mod identity;
 pub mod kdf;
 pub mod mailbox;
@@ -32,6 +33,12 @@ pub use address::{parse_sp_address, Network, SpAddress};
 pub use carriers::{
     emit_op_return, emit_script_sig, height_push_bytes, parse_carrier, parse_op_return,
     parse_script_sig, script_sig_budget,
+};
+pub use hd::{
+    bark_mailbox_keypair, bark_vtxo_keypair, provision, spc_branch_secret, spc_branch_xprv,
+    spc_child_wallet_seed, ChildWalletMaterial, ProvisionedKeys, BARK_MAILBOX_INDEX, BARK_PURPOSE,
+    BARK_VTXO_INDEX, BIP85_APP_BIP39, BIP85_CHILD_INDEX, BIP85_CHILD_WORDS, BIP85_LANG_ENGLISH,
+    BIP85_PURPOSE, SPC_BRANCH_ARK, SPC_BRANCH_SCAN, SPC_BRANCH_SPEND, SPC_PURPOSE,
 };
 pub use identity::{sp_id, strip_worker};
 pub use kdf::{
@@ -63,6 +70,9 @@ pub enum Error {
     /// Carrier parsing/building failed.
     #[error("carrier error: {0}")]
     Carrier(String),
+    /// HD / BIP 85 derivation failed (fail closed, never fall back).
+    #[error("HD derivation error: {0}")]
+    Hd(String),
     /// Key generation failed (OS CSPRNG or normalization).
     #[error("key generation failed: {0}")]
     KeyGen(String),

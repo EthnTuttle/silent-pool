@@ -1,0 +1,65 @@
+{
+  "schema": "spc.lab.v09_release_inputs.v1",
+  "handoff_id": null,
+  "node": {
+    "binary": null,
+    "binary_sha256": null,
+    "source_dir": null,
+    "source_manifest": null,
+    "snapshot_sha256": null,
+    "approval_record": null,
+    "build_provenance": null
+  },
+  "stock_node": {
+    "binary": null,
+    "binary_sha256": null
+  },
+  "l2_reference": {
+    "source_dir": "/tmp/opencode/rbitcoin-lab-retarget-profile",
+    "source_manifest": "/tmp/opencode/lab-l2-source-review-manifest.json",
+    "snapshot_sha256": "d2f37b9113e8855245866289ed393043aed6e6153e8101375072cbb23624d499",
+    "approval_record": "/home/ethan/code/silent-pool/docs/reviews/2026-11-05-lab-l2-fable-review.md"
+  },
+  "lp_live": {
+    "source_dir": "/home/ethan/.local/share/opencode/worktree/ad8886/lab-live-e2e",
+    "source_manifest": "/tmp/opencode/lab-live-review-manifest.json",
+    "snapshot_sha256": "aa3b37b67960071ec6bd4f09c7cd0ac83e1b526404231994c42dc331dc44ded2",
+    "approval_record": "/home/ethan/code/silent-pool/docs/reviews/2026-11-06-lab-live-fable-review.md"
+  },
+  "pool": {
+    "binary": "/home/ethan/.local/share/opencode/worktree/ad8886/lab-share-integration/target/debug/spc-pool",
+    "binary_sha256": "f3b359157e0e019d0f5742dbdc44a558502c94209f50ea4fa96ec703fc41b6a9",
+    "source_dir": "/home/ethan/.local/share/opencode/worktree/ad8886/lab-share-integration",
+    "source_manifest": "/tmp/opencode/lab-lp1-review-manifest.json",
+    "snapshot_sha256": "c16032a78902e88b0157efed6780bc8b424e942b1c3bf46893d8fb09ae4708ee",
+    "approval_record": "/home/ethan/code/silent-pool/docs/reviews/2026-11-05-lab-lp1-fable-review.md"
+  },
+  "miner": {
+    "binary": "/home/ethan/.local/share/opencode/worktree/ad8886/lab-cpu-miner/target/debug/spc-cpu-miner",
+    "binary_sha256": "7e02b0fdf7434edd081aa60ee421c7eef999418f56345a2f302a756cbab07169",
+    "source_dir": "/home/ethan/.local/share/opencode/worktree/ad8886/lab-cpu-miner",
+    "source_manifest": "/tmp/opencode/lab-lp2-review-manifest.json",
+    "snapshot_sha256": "5e27e9180e765e8049cbcccbcadc38b24c85d402505108f8f20c320f73961250",
+    "approval_record": "/home/ethan/code/silent-pool/docs/reviews/2026-11-05-lab-lp2-fable-review.md"
+  },
+  "scanner": {
+    "binary": "/home/ethan/.local/share/opencode/worktree/ad8886/lab-share-integration/target/debug/spc-scan",
+    "binary_sha256": "462877fd82b7d7f82f27858fdee78f44e9e1a5f8c2b57c03d7011c98a755aa9c",
+    "source_dir": "/home/ethan/.local/share/opencode/worktree/ad8886/lab-share-integration",
+    "source_manifest": "/tmp/opencode/lab-lp1-review-manifest.json",
+    "snapshot_sha256": "c16032a78902e88b0157efed6780bc8b424e942b1c3bf46893d8fb09ae4708ee",
+    "approval_record": null
+  },
+  "runtime": {
+    "source_dir": "/tmp/opencode/LP-network-runtime-final-src",
+    "source_manifest": "/tmp/opencode/LP-network-runtime-manifest.json",
+    "approval_record": null,
+    "nix_binary_provenance": "/tmp/opencode/LP-network-kimi-nix-binary-provenance.json"
+  },
+  "storage": {
+    "postgres_bin_dir": "/nix/store/vync24csmxy5saql5ah77vkn59yg2x5h-postgresql-17.11/bin",
+    "redis_server": "/nix/store/nql1lir6650xigvf43n11zz4hh0lbw9z-redis-8.10.3/bin/redis-server",
+    "redis_cli": "/nix/store/nql1lir6650xigvf43n11zz4hh0lbw9z-redis-8.10.3/bin/redis-cli",
+    "nix_develop": true
+  }
+}

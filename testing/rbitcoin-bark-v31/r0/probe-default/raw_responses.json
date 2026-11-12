@@ -1,0 +1,906 @@
+{
+  "run_token": "AP1a-81b4e36962a3",
+  "exchanges": {
+    "getnetworkinfo []": {
+      "method": "getnetworkinfo",
+      "params": [],
+      "envelope": "1.0",
+      "request_id": 1,
+      "result": {
+        "connections": 0,
+        "connections_in": 0,
+        "connections_out": 0,
+        "incrementalfee": 1e-06,
+        "localaddresses": [],
+        "localrelay": false,
+        "localservices": "0000000000000809",
+        "localservicesnames": [
+          "NETWORK",
+          "WITNESS",
+          "P2P_V2"
+        ],
+        "networkactive": true,
+        "networks": [
+          {
+            "limited": false,
+            "name": "ipv4",
+            "proxy": "",
+            "proxy_randomize_credentials": false,
+            "reachable": true
+          },
+          {
+            "limited": false,
+            "name": "ipv6",
+            "proxy": "",
+            "proxy_randomize_credentials": false,
+            "reachable": true
+          },
+          {
+            "limited": true,
+            "name": "onion",
+            "proxy": "",
+            "proxy_randomize_credentials": false,
+            "reachable": false
+          },
+          {
+            "limited": true,
+            "name": "i2p",
+            "proxy": "",
+            "proxy_randomize_credentials": false,
+            "reachable": false
+          },
+          {
+            "limited": true,
+            "name": "cjdns",
+            "proxy": "",
+            "proxy_randomize_credentials": false,
+            "reachable": false
+          }
+        ],
+        "protocolversion": 70016,
+        "relayfee": 1e-06,
+        "subversion": "/rbitcoin:0.8.99/",
+        "timeoffset": 0,
+        "version": 190000,
+        "warnings": []
+      },
+      "error": null,
+      "receipt": {
+        "http_status": 200,
+        "request_id": 1,
+        "response_id": 1,
+        "response_envelope": null,
+        "id_match": true
+      }
+    },
+    "getnetworkinfo [] [jsonrpc 2.0]": {
+      "method": "getnetworkinfo",
+      "params": [],
+      "envelope": "2.0",
+      "request_id": 1,
+      "result": {
+        "connections": 0,
+        "connections_in": 0,
+        "connections_out": 0,
+        "incrementalfee": 1e-06,
+        "localaddresses": [],
+        "localrelay": false,
+        "localservices": "0000000000000809",
+        "localservicesnames": [
+          "NETWORK",
+          "WITNESS",
+          "P2P_V2"
+        ],
+        "networkactive": true,
+        "networks": [
+          {
+            "limited": false,
+            "name": "ipv4",
+            "proxy": "",
+            "proxy_randomize_credentials": false,
+            "reachable": true
+          },
+          {
+            "limited": false,
+            "name": "ipv6",
+            "proxy": "",
+            "proxy_randomize_credentials": false,
+            "reachable": true
+          },
+          {
+            "limited": true,
+            "name": "onion",
+            "proxy": "",
+            "proxy_randomize_credentials": false,
+            "reachable": false
+          },
+          {
+            "limited": true,
+            "name": "i2p",
+            "proxy": "",
+            "proxy_randomize_credentials": false,
+            "reachable": false
+          },
+          {
+            "limited": true,
+            "name": "cjdns",
+            "proxy": "",
+            "proxy_randomize_credentials": false,
+            "reachable": false
+          }
+        ],
+        "protocolversion": 70016,
+        "relayfee": 1e-06,
+        "subversion": "/rbitcoin:0.8.99/",
+        "timeoffset": 0,
+        "version": 190000,
+        "warnings": []
+      },
+      "error": null,
+      "receipt": {
+        "http_status": 200,
+        "request_id": 1,
+        "response_id": 1,
+        "response_envelope": "2.0",
+        "id_match": true
+      }
+    },
+    "getblockchaininfo []": {
+      "method": "getblockchaininfo",
+      "params": [],
+      "envelope": "1.0",
+      "request_id": 2,
+      "result": {
+        "bestblockhash": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+        "bits": "207fffff",
+        "blocks": 0,
+        "chain": "regtest",
+        "chainwork": "0000000000000000000000000000000000000000000000000000000000000002",
+        "consensus": {
+          "activation_heights": {
+            "bip34": 1,
+            "bip65": 1,
+            "bip66": 1,
+            "csv": 1,
+            "segwit": 0,
+            "taproot": 0
+          },
+          "allow_min_difficulty_blocks": true,
+          "coinbase_maturity": 100,
+          "difficulty_adjustment_interval": 2016,
+          "enforce_bip94": false,
+          "genesis_hash": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+          "network": "regtest",
+          "no_pow_retargeting": true,
+          "pow_limit_bits": "207fffff",
+          "pow_limit_target": "7fffff0000000000000000000000000000000000000000000000000000000000",
+          "pow_target_spacing": 600,
+          "pow_target_timespan": 1209600,
+          "regtest_pow_bits_overlay": null,
+          "retarget_floor_bits": "207fffff",
+          "retarget_floor_target": "7fffff0000000000000000000000000000000000000000000000000000000000",
+          "subsidy_halving_interval": 150
+        },
+        "difficulty": 4.656542373906925e-10,
+        "headers": 0,
+        "initialblockdownload": true,
+        "mediantime": 1296688602,
+        "pruned": false,
+        "size_on_disk": 1044449687,
+        "target": "7fffff0000000000000000000000000000000000000000000000000000000000",
+        "time": 1296688602,
+        "verificationprogress": 1.0,
+        "warnings": []
+      },
+      "error": null,
+      "receipt": {
+        "http_status": 200,
+        "request_id": 2,
+        "response_id": 2,
+        "response_envelope": null,
+        "id_match": true
+      }
+    },
+    "getindexinfo []": {
+      "method": "getindexinfo",
+      "params": [],
+      "envelope": "1.0",
+      "request_id": 3,
+      "result": {
+        "txindex": {
+          "best_block_height": 0,
+          "synced": true
+        }
+      },
+      "error": null,
+      "receipt": {
+        "http_status": 200,
+        "request_id": 3,
+        "response_id": 3,
+        "response_envelope": null,
+        "id_match": true
+      }
+    },
+    "getblockcount []": {
+      "method": "getblockcount",
+      "params": [],
+      "envelope": "1.0",
+      "request_id": 4,
+      "result": 0,
+      "error": null,
+      "receipt": {
+        "http_status": 200,
+        "request_id": 4,
+        "response_id": 4,
+        "response_envelope": null,
+        "id_match": true
+      }
+    },
+    "getbestblockhash []": {
+      "method": "getbestblockhash",
+      "params": [],
+      "envelope": "1.0",
+      "request_id": 5,
+      "result": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+      "error": null,
+      "receipt": {
+        "http_status": 200,
+        "request_id": 5,
+        "response_id": 5,
+        "response_envelope": null,
+        "id_match": true
+      }
+    },
+    "getblockhash [0]": {
+      "method": "getblockhash",
+      "params": [
+        0
+      ],
+      "envelope": "1.0",
+      "request_id": 6,
+      "result": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+      "error": null,
+      "receipt": {
+        "http_status": 200,
+        "request_id": 6,
+        "response_id": 6,
+        "response_envelope": null,
+        "id_match": true
+      }
+    },
+    "getblock [\"0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206\", 0]": {
+      "method": "getblock",
+      "params": [
+        "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+        0
+      ],
+      "envelope": "1.0",
+      "request_id": 7,
+      "result": "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff7f20020000000101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff4d04ffff001d0104455468652054696d65732030332f4a616e2f32303039204368616e63656c6c6f72206f6e206272696e6b206f66207365636f6e64206261696c6f757420666f722062616e6b73ffffffff0100f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5fac00000000",
+      "error": null,
+      "receipt": {
+        "http_status": 200,
+        "request_id": 7,
+        "response_id": 7,
+        "response_envelope": null,
+        "id_match": true
+      }
+    },
+    "getblock [\"0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206\", 1] [jsonrpc 2.0]": {
+      "method": "getblock",
+      "params": [
+        "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+        1
+      ],
+      "envelope": "2.0",
+      "request_id": 2,
+      "result": {
+        "bits": "207fffff",
+        "chainwork": "0000000000000000000000000000000000000000000000000000000000000002",
+        "coinbase_tx": {
+          "coinbase": "04ffff001d0104455468652054696d65732030332f4a616e2f32303039204368616e63656c6c6f72206f6e206272696e6b206f66207365636f6e64206261696c6f757420666f722062616e6b73",
+          "locktime": 0,
+          "sequence": 4294967295,
+          "version": 1
+        },
+        "confirmations": 1,
+        "difficulty": 4.656542373906925e-10,
+        "hash": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+        "height": 0,
+        "mediantime": 1296688602,
+        "merkleroot": "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
+        "nTx": 1,
+        "nonce": 2,
+        "size": 285,
+        "strippedsize": 285,
+        "target": "7fffff0000000000000000000000000000000000000000000000000000000000",
+        "time": 1296688602,
+        "tx": [
+          "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"
+        ],
+        "version": 1,
+        "versionHex": "00000001",
+        "weight": 1140
+      },
+      "error": null,
+      "receipt": {
+        "http_status": 200,
+        "request_id": 2,
+        "response_id": 2,
+        "response_envelope": "2.0",
+        "id_match": true
+      }
+    },
+    "getblock [\"0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206\"]": {
+      "method": "getblock",
+      "params": [
+        "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"
+      ],
+      "envelope": "1.0",
+      "request_id": 8,
+      "result": {
+        "bits": "207fffff",
+        "chainwork": "0000000000000000000000000000000000000000000000000000000000000002",
+        "coinbase_tx": {
+          "coinbase": "04ffff001d0104455468652054696d65732030332f4a616e2f32303039204368616e63656c6c6f72206f6e206272696e6b206f66207365636f6e64206261696c6f757420666f722062616e6b73",
+          "locktime": 0,
+          "sequence": 4294967295,
+          "version": 1
+        },
+        "confirmations": 1,
+        "difficulty": 4.656542373906925e-10,
+        "hash": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+        "height": 0,
+        "mediantime": 1296688602,
+        "merkleroot": "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
+        "nTx": 1,
+        "nonce": 2,
+        "size": 285,
+        "strippedsize": 285,
+        "target": "7fffff0000000000000000000000000000000000000000000000000000000000",
+        "time": 1296688602,
+        "tx": [
+          "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"
+        ],
+        "version": 1,
+        "versionHex": "00000001",
+        "weight": 1140
+      },
+      "error": null,
+      "receipt": {
+        "http_status": 200,
+        "request_id": 8,
+        "response_id": 8,
+        "response_envelope": null,
+        "id_match": true
+      }
+    },
+    "getblockheader [\"0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206\", true]": {
+      "method": "getblockheader",
+      "params": [
+        "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+        true
+      ],
+      "envelope": "1.0",
+      "request_id": 9,
+      "result": {
+        "bits": "207fffff",
+        "chainwork": "0000000000000000000000000000000000000000000000000000000000000002",
+        "confirmations": 1,
+        "difficulty": 4.656542373906925e-10,
+        "hash": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+        "height": 0,
+        "mediantime": 1296688602,
+        "merkleroot": "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
+        "nTx": 1,
+        "nonce": 2,
+        "target": "7fffff0000000000000000000000000000000000000000000000000000000000",
+        "time": 1296688602,
+        "version": 1,
+        "versionHex": "00000001"
+      },
+      "error": null,
+      "receipt": {
+        "http_status": 200,
+        "request_id": 9,
+        "response_id": 9,
+        "response_envelope": null,
+        "id_match": true
+      }
+    },
+    "getblockheader [\"0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206\", true] [jsonrpc 2.0]": {
+      "method": "getblockheader",
+      "params": [
+        "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+        true
+      ],
+      "envelope": "2.0",
+      "request_id": 3,
+      "result": {
+        "bits": "207fffff",
+        "chainwork": "0000000000000000000000000000000000000000000000000000000000000002",
+        "confirmations": 1,
+        "difficulty": 4.656542373906925e-10,
+        "hash": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+        "height": 0,
+        "mediantime": 1296688602,
+        "merkleroot": "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
+        "nTx": 1,
+        "nonce": 2,
+        "target": "7fffff0000000000000000000000000000000000000000000000000000000000",
+        "time": 1296688602,
+        "version": 1,
+        "versionHex": "00000001"
+      },
+      "error": null,
+      "receipt": {
+        "http_status": 200,
+        "request_id": 3,
+        "response_id": 3,
+        "response_envelope": "2.0",
+        "id_match": true
+      }
+    },
+    "getblockheader [\"0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206\", false] [jsonrpc 2.0]": {
+      "method": "getblockheader",
+      "params": [
+        "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+        false
+      ],
+      "envelope": "2.0",
+      "request_id": 4,
+      "result": "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff7f2002000000",
+      "error": null,
+      "receipt": {
+        "http_status": 200,
+        "request_id": 4,
+        "response_id": 4,
+        "response_envelope": "2.0",
+        "id_match": true
+      }
+    },
+    "getrawtransaction [\"4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b\", 0]": {
+      "method": "getrawtransaction",
+      "params": [
+        "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
+        0
+      ],
+      "envelope": "1.0",
+      "request_id": 10,
+      "result": null,
+      "error": {
+        "category": "server_error_-5",
+        "detail": "The genesis block coinbase is not considered an ordinary transaction and cannot be retrieved",
+        "code": -5,
+        "http_status": 500,
+        "receipt": {
+          "http_status": 500,
+          "request_id": 10,
+          "response_id": 10,
+          "response_envelope": null,
+          "id_match": true
+        }
+      },
+      "receipt": {
+        "http_status": 500,
+        "request_id": 10,
+        "response_id": 10,
+        "response_envelope": null,
+        "id_match": true
+      }
+    },
+    "getrawtransaction [\"4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b\", 1]": {
+      "method": "getrawtransaction",
+      "params": [
+        "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
+        1
+      ],
+      "envelope": "1.0",
+      "request_id": 11,
+      "result": null,
+      "error": {
+        "category": "server_error_-5",
+        "detail": "The genesis block coinbase is not considered an ordinary transaction and cannot be retrieved",
+        "code": -5,
+        "http_status": 500,
+        "receipt": {
+          "http_status": 500,
+          "request_id": 11,
+          "response_id": 11,
+          "response_envelope": null,
+          "id_match": true
+        }
+      },
+      "receipt": {
+        "http_status": 500,
+        "request_id": 11,
+        "response_id": 11,
+        "response_envelope": null,
+        "id_match": true
+      }
+    },
+    "getrawtransaction [\"4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b\", true] [jsonrpc 2.0]": {
+      "method": "getrawtransaction",
+      "params": [
+        "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
+        true
+      ],
+      "envelope": "2.0",
+      "request_id": 5,
+      "result": null,
+      "error": {
+        "category": "server_error_-5",
+        "detail": "The genesis block coinbase is not considered an ordinary transaction and cannot be retrieved",
+        "code": -5,
+        "http_status": 200,
+        "receipt": {
+          "http_status": 200,
+          "request_id": 5,
+          "response_id": 5,
+          "response_envelope": "2.0",
+          "id_match": true
+        }
+      },
+      "receipt": {
+        "http_status": 200,
+        "request_id": 5,
+        "response_id": 5,
+        "response_envelope": "2.0",
+        "id_match": true
+      }
+    },
+    "getrawtransaction [\"4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b\", true]": {
+      "method": "getrawtransaction",
+      "params": [
+        "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
+        true
+      ],
+      "envelope": "1.0",
+      "request_id": 12,
+      "result": null,
+      "error": {
+        "category": "server_error_-5",
+        "detail": "The genesis block coinbase is not considered an ordinary transaction and cannot be retrieved",
+        "code": -5,
+        "http_status": 500,
+        "receipt": {
+          "http_status": 500,
+          "request_id": 12,
+          "response_id": 12,
+          "response_envelope": null,
+          "id_match": true
+        }
+      },
+      "receipt": {
+        "http_status": 500,
+        "request_id": 12,
+        "response_id": 12,
+        "response_envelope": null,
+        "id_match": true
+      }
+    },
+    "gettxout [\"4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b\", 0, true]": {
+      "method": "gettxout",
+      "params": [
+        "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
+        0,
+        true
+      ],
+      "envelope": "1.0",
+      "request_id": 13,
+      "result": null,
+      "error": null,
+      "receipt": {
+        "http_status": 200,
+        "request_id": 13,
+        "response_id": 13,
+        "response_envelope": null,
+        "id_match": true
+      }
+    },
+    "gettxout [\"4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b\", 0, false]": {
+      "method": "gettxout",
+      "params": [
+        "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
+        0,
+        false
+      ],
+      "envelope": "1.0",
+      "request_id": 14,
+      "result": null,
+      "error": null,
+      "receipt": {
+        "http_status": 200,
+        "request_id": 14,
+        "response_id": 14,
+        "response_envelope": null,
+        "id_match": true
+      }
+    },
+    "getrawmempool []": {
+      "method": "getrawmempool",
+      "params": [],
+      "envelope": "1.0",
+      "request_id": 15,
+      "result": [],
+      "error": null,
+      "receipt": {
+        "http_status": 200,
+        "request_id": 15,
+        "response_id": 15,
+        "response_envelope": null,
+        "id_match": true
+      }
+    },
+    "getrawmempool [false] [jsonrpc 2.0]": {
+      "method": "getrawmempool",
+      "params": [
+        false
+      ],
+      "envelope": "2.0",
+      "request_id": 6,
+      "result": [],
+      "error": null,
+      "receipt": {
+        "http_status": 200,
+        "request_id": 6,
+        "response_id": 6,
+        "response_envelope": "2.0",
+        "id_match": true
+      }
+    },
+    "getmempoolentry [\"4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b\"]": {
+      "method": "getmempoolentry",
+      "params": [
+        "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"
+      ],
+      "envelope": "1.0",
+      "request_id": 16,
+      "result": null,
+      "error": {
+        "category": "server_error_-5",
+        "detail": "Transaction not in mempool",
+        "code": -5,
+        "http_status": 500,
+        "receipt": {
+          "http_status": 500,
+          "request_id": 16,
+          "response_id": 16,
+          "response_envelope": null,
+          "id_match": true
+        }
+      },
+      "receipt": {
+        "http_status": 500,
+        "request_id": 16,
+        "response_id": 16,
+        "response_envelope": null,
+        "id_match": true
+      }
+    },
+    "estimatesmartfee [1, \"ECONOMICAL\"]": {
+      "method": "estimatesmartfee",
+      "params": [
+        1,
+        "ECONOMICAL"
+      ],
+      "envelope": "1.0",
+      "request_id": 17,
+      "result": {
+        "blocks": 1,
+        "errors": [
+          "Insufficient data or no feerate found"
+        ]
+      },
+      "error": null,
+      "receipt": {
+        "http_status": 200,
+        "request_id": 17,
+        "response_id": 17,
+        "response_envelope": null,
+        "id_match": true
+      }
+    },
+    "estimatesmartfee [3, \"ECONOMICAL\"]": {
+      "method": "estimatesmartfee",
+      "params": [
+        3,
+        "ECONOMICAL"
+      ],
+      "envelope": "1.0",
+      "request_id": 18,
+      "result": {
+        "blocks": 3,
+        "errors": [
+          "Insufficient data or no feerate found"
+        ]
+      },
+      "error": null,
+      "receipt": {
+        "http_status": 200,
+        "request_id": 18,
+        "response_id": 18,
+        "response_envelope": null,
+        "id_match": true
+      }
+    },
+    "estimatesmartfee [6, \"ECONOMICAL\"]": {
+      "method": "estimatesmartfee",
+      "params": [
+        6,
+        "ECONOMICAL"
+      ],
+      "envelope": "1.0",
+      "request_id": 19,
+      "result": {
+        "blocks": 6,
+        "errors": [
+          "Insufficient data or no feerate found"
+        ]
+      },
+      "error": null,
+      "receipt": {
+        "http_status": 200,
+        "request_id": 19,
+        "response_id": 19,
+        "response_envelope": null,
+        "id_match": true
+      }
+    },
+    "getmempoolinfo []": {
+      "method": "getmempoolinfo",
+      "params": [],
+      "envelope": "1.0",
+      "request_id": 20,
+      "result": {
+        "bytes": 0,
+        "fullrbf": true,
+        "incrementalrelayfee": 1e-06,
+        "limitclustercount": 64,
+        "limitclustersize": 101000,
+        "loaded": true,
+        "maxdatacarriersize": null,
+        "maxmempool": 75000000,
+        "mempoolminfee": 1e-06,
+        "minrelaytxfee": 1e-06,
+        "optimal": true,
+        "orphanage": {
+          "bytes": 0,
+          "size": 0
+        },
+        "permitbaremultisig": true,
+        "relay_enabled": false,
+        "size": 0,
+        "total_fee": 0.0,
+        "unbroadcastcount": 0,
+        "usage": 0
+      },
+      "error": null,
+      "receipt": {
+        "http_status": 200,
+        "request_id": 20,
+        "response_id": 20,
+        "response_envelope": null,
+        "id_match": true
+      }
+    },
+    "testmempoolaccept [[\"00\"]]": {
+      "method": "testmempoolaccept",
+      "params": [
+        [
+          "00"
+        ]
+      ],
+      "envelope": "1.0",
+      "request_id": 21,
+      "result": null,
+      "error": {
+        "category": "server_error_-22",
+        "detail": "TX decode failed: 00 Make sure the tx has at least one input.",
+        "code": -22,
+        "http_status": 500,
+        "receipt": {
+          "http_status": 500,
+          "request_id": 21,
+          "response_id": 21,
+          "response_envelope": null,
+          "id_match": true
+        }
+      },
+      "receipt": {
+        "http_status": 500,
+        "request_id": 21,
+        "response_id": 21,
+        "response_envelope": null,
+        "id_match": true
+      }
+    },
+    "submitpackage [[\"00\"]]": {
+      "method": "submitpackage",
+      "params": [
+        [
+          "00"
+        ]
+      ],
+      "envelope": "1.0",
+      "request_id": 22,
+      "result": null,
+      "error": {
+        "category": "server_error_-22",
+        "detail": "TX decode failed: 00 Make sure the tx has at least one input.",
+        "code": -22,
+        "http_status": 500,
+        "receipt": {
+          "http_status": 500,
+          "request_id": 22,
+          "response_id": 22,
+          "response_envelope": null,
+          "id_match": true
+        }
+      },
+      "receipt": {
+        "http_status": 500,
+        "request_id": 22,
+        "response_id": 22,
+        "response_envelope": null,
+        "id_match": true
+      }
+    },
+    "sendrawtransaction [\"00\"]": {
+      "method": "sendrawtransaction",
+      "params": [
+        "00"
+      ],
+      "envelope": "1.0",
+      "request_id": 23,
+      "result": null,
+      "error": {
+        "category": "server_error_-22",
+        "detail": "TX decode failed. Make sure the tx has at least one input.",
+        "code": -22,
+        "http_status": 500,
+        "receipt": {
+          "http_status": 500,
+          "request_id": 23,
+          "response_id": 23,
+          "response_envelope": null,
+          "id_match": true
+        }
+      },
+      "receipt": {
+        "http_status": 500,
+        "request_id": 23,
+        "response_id": 23,
+        "response_envelope": null,
+        "id_match": true
+      }
+    },
+    "getzmqnotifications []": {
+      "method": "getzmqnotifications",
+      "params": [],
+      "envelope": "1.0",
+      "request_id": 24,
+      "result": null,
+      "error": {
+        "category": "method_missing",
+        "detail": "Method not found",
+        "code": -32601,
+        "http_status": 404,
+        "receipt": {
+          "http_status": 404,
+          "request_id": 24,
+          "response_id": 24,
+          "response_envelope": null,
+          "id_match": true
+        }
+      },
+      "receipt": {
+        "http_status": 404,
+        "request_id": 24,
+        "response_id": 24,
+        "response_envelope": null,
+        "id_match": true
+      }
+    }
+  }
+}

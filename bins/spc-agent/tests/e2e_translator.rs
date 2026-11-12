@@ -7,7 +7,7 @@ use bitcoin::BlockHash;
 use spc_agent::config::{AgentConfig, Downstream, Upstream};
 use spc_crypto::Network;
 use spc_pool::front::{Front, FrontConfig};
-use spc_pool::sv2_server::Sv2Server;
+use spc_pool::sv2_server::{ShareOutcome, Sv2Server};
 use spc_pool::template::{MockTemplateSource, Template, TemplateSource};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
@@ -94,10 +94,11 @@ async fn sv1_miner_reaches_the_pool_through_the_translator() {
     let address = spc_crypto::address::encode_sp_address(Network::Regtest, &scan, &spend).unwrap();
 
     let agent_cfg = AgentConfig {
+        loaded_from: None,
+        source_audit: None,
         upstream: Upstream {
             address: pool_addr.to_string(),
-            authority_public_key:
-                "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            authority_public_key: server.authority_public_key().to_string(),
             sp_address: address,
             require_own_payout: "warn".into(),
             request_share_accounting: true,
@@ -190,6 +191,7 @@ async fn sv1_miner_reaches_the_pool_through_the_translator() {
         .unwrap()
         .unwrap();
     let block = front.on_share(share).unwrap().expect("block");
+    server.resolve_share(1, 0, ShareOutcome::Accepted { credited_work: 1 });
     source.submit_block(&block.block).await.unwrap();
     task.abort();
 }

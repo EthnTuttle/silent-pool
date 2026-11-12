@@ -1,0 +1,18 @@
+{
+  "name": "id_string_echo",
+  "description": "server echoes numeric request ids as JSON strings: the async client (Response.id: u64) cannot parse any response; a protocol failure, never method evidence",
+  "overrides": [
+    {"op": "id_string_echo"}
+  ],
+  "expect": {
+    "verdict_status": "incompatible",
+    "reasons": ["fail-protocol", "funded-unproven"],
+    "funded_state": "unproven",
+    "checks": {
+      "protocol.id-echo": "failed",
+      "getnetworkinfo.version-shape": {"availability": "unknown", "behavior": "unknown"},
+      "getmempoolentry.recognized": {"availability": "unknown", "behavior": "unknown"},
+      "testmempoolaccept.recognized": {"availability": "unknown", "behavior": "not_run"}
+    }
+  }
+}

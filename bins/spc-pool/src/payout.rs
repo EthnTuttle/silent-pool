@@ -23,14 +23,18 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::json;
+use spc_accounting::work_unit::check_version_rule_compatibility;
 use spc_accounting::{
-    claim_jd, p2tr_script, raw_payouts, route_tiers, select_window, ArkCapability, RawPayouts,
-    SliceAgg, SpId, TierConfig,
+    claim_jd, claim_jd_v2, p2tr_script, raw_payouts, raw_payouts_v2, select_window,
+    select_window_v2, ArkCapability, RawPayouts, SliceAgg, SpId, TierConfig, WorkUnitError,
+    WorkUnitVersion,
 };
 use spc_ext::{ArkSendOrder, ArkSendReceipt, ReceiptStatus};
 use spc_store::models::*;
 use spc_store::redis::{RedisError, Streams};
-use spc_store::wire::{ArkRegEvent, BlockEvent, Entry, FrontEvent, Rail, SliceEvent};
+use spc_store::wire::{
+    ArkEpochRegEvent, ArkRegEvent, BlockEvent, Entry, FrontEvent, Rail, SliceEvent,
+};
 use spc_store::Store;
 
 use crate::ark::SeenOrders;
@@ -71,6 +75,8 @@ pub enum PayoutError {
     Codec(#[from] spc_store::codec::CodecError),
     #[error("invalid registration")]
     Registration,
+    #[error("registration rejected: {0}")]
+    RegistrationCode(&'static str),
     #[error("malformed snapshot {0}")]
     Snapshot(&'static str),
     #[error("value exceeds i64")]
@@ -100,12 +106,31 @@ pub struct BlockEconomics {
     pub subsidy: u64,
     pub fees: u64,
 }
+#[derive(Clone, Debug)]
+pub struct ChainEconomicEvidence {
+    pub parent_hash: [u8; 32],
+    pub coinbase_digest: [u8; 32],
+    pub pool_script: Vec<u8>,
+    pub spc: bool,
+}
 
 /// The slice of chain state settlement needs (SPEC §7.4, review 4.1): is
 /// this block the active-chain block at its height, how deep is it, what did
 /// its coinbase pay, and what were its subsidy and fees?
 #[async_trait::async_trait]
 pub trait ChainView: Send + Sync {
+    async fn economic_evidence(
+        &self,
+        _block: &[u8; 32],
+    ) -> Result<Option<ChainEconomicEvidence>, ChainError> {
+        Ok(None)
+    }
+    async fn transaction(
+        &self,
+        _txid: &[u8; 32],
+    ) -> Result<Option<bitcoin::Transaction>, ChainError> {
+        Ok(None)
+    }
     /// Height of the active-chain tip.
     async fn tip_height(&self) -> Result<u32, ChainError>;
     /// The active-chain block hash at `height`, or `None` when the chain
@@ -198,6 +223,52 @@ impl RpcChainView {
 #[cfg(feature = "rpc")]
 #[async_trait::async_trait]
 impl ChainView for RpcChainView {
+    async fn economic_evidence(
+        &self,
+        hash: &[u8; 32],
+    ) -> Result<Option<ChainEconomicEvidence>, ChainError> {
+        use bitcoin::hashes::{sha256, Hash};
+        use bitcoincore_rpc::RpcApi;
+        let block = self
+            .client
+            .get_block(&bitcoin::BlockHash::from_byte_array(*hash))
+            .map_err(|e| ChainError::Unavailable(e.to_string()))?;
+        let cb = block
+            .txdata
+            .first()
+            .ok_or_else(|| ChainError::Unavailable("empty block".into()))?;
+        let outputs: Vec<_> = cb
+            .output
+            .iter()
+            .map(|o| spc_crypto::carriers::TxOut {
+                value: o.value.to_sat(),
+                script_pubkey: o.script_pubkey.as_bytes(),
+            })
+            .collect();
+        Ok(Some(ChainEconomicEvidence {
+            parent_hash: block.header.prev_blockhash.to_byte_array(),
+            coinbase_digest: sha256::Hash::hash(&bitcoin::consensus::serialize(cb)).to_byte_array(),
+            pool_script: cb
+                .output
+                .first()
+                .map(|o| o.script_pubkey.as_bytes().to_vec())
+                .unwrap_or_default(),
+            spc: cb.input.first().is_some_and(|i| {
+                spc_crypto::parse_carrier(i.script_sig.as_bytes(), &outputs).is_some()
+            }),
+        }))
+    }
+    async fn transaction(
+        &self,
+        txid: &[u8; 32],
+    ) -> Result<Option<bitcoin::Transaction>, ChainError> {
+        use bitcoin::hashes::Hash;
+        use bitcoincore_rpc::RpcApi;
+        self.client
+            .get_raw_transaction(&bitcoin::Txid::from_byte_array(*txid), None)
+            .map(Some)
+            .map_err(|e| ChainError::Unavailable(e.to_string()))
+    }
     async fn tip_height(&self) -> Result<u32, ChainError> {
         use bitcoincore_rpc::RpcApi;
         let count = self
@@ -344,7 +415,7 @@ impl Default for AccountingConfig {
             fee_bps: 100,
             window_n: 8,
             dust_limit_sats: 330,
-            max_payout_slots: 256,
+            max_payout_slots: 1024,
             budget_wu: 50_000,
             overhead_wu: 0,
         }
@@ -381,6 +452,10 @@ pub enum ReconstructError {
     Config,
     #[error("accounting: {0}")]
     Accounting(#[from] spc_accounting::Error),
+    #[error("work unit: {0}")]
+    WorkUnit(#[from] WorkUnitError),
+    #[error("v2 distribution has no frozen window target")]
+    MissingFrozenV2Target,
     #[error("snapshot has two entries for one id")]
     DuplicateEntry(SpId),
     #[error("window contains an id the distribution did not publish")]
@@ -399,6 +474,12 @@ pub enum ReconstructError {
     RevenueMismatch { t_actual: u64, expected: u64 },
     #[error("distribution weight is zero")]
     ZeroWeight,
+    #[error("v2 stored difficulty {stored} on slice {slice_id} differs from credit sum {credits}")]
+    StoredDifficultyMismatch {
+        slice_id: u64,
+        stored: u128,
+        credits: u128,
+    },
     #[error("numeric value out of range")]
     Number,
     #[error("value exceeds i64")]
@@ -417,6 +498,10 @@ pub struct ReconstructInput<'a> {
     pub entries: &'a [Entry],
     /// Sealed slices at or below the high-water mark, newest first.
     pub slices: &'a [SliceRow],
+    /// Frozen work-unit metadata selecting the window and payout arithmetic.
+    pub work_unit_version: WorkUnitVersion,
+    pub work_unit_fingerprint: Option<[u8; 32]>,
+    pub window_rule: WindowRule,
     /// The exact window target (`N x d`, SPEC §4.3) frozen in
     /// `distribution_snapshot.window_target` when the front built this
     /// distribution. `None` only for rows written before that column
@@ -463,28 +548,7 @@ pub struct Reconstructed {
 pub fn reconstruct_settlement(
     input: &ReconstructInput<'_>,
 ) -> Result<Reconstructed, ReconstructError> {
-    match reconstruct_once(input) {
-        Err(ReconstructError::CoinbaseTierMismatch) => {
-            let mark = single_front_high_water(input.high_water)?;
-            let is_finding_slice = input
-                .slices
-                .first()
-                .is_some_and(|s| s.slice_id == mark && s.height == input.height);
-            if !is_finding_slice {
-                return Err(ReconstructError::CoinbaseTierMismatch);
-            }
-            let rest: Vec<SliceRow> = input
-                .slices
-                .iter()
-                .filter(|s| s.slice_id != mark)
-                .cloned()
-                .collect();
-            let mut retry = *input;
-            retry.slices = &rest;
-            reconstruct_once(&retry)
-        }
-        other => other,
-    }
+    reconstruct_once(input)
 }
 
 fn reconstruct_once(input: &ReconstructInput<'_>) -> Result<Reconstructed, ReconstructError> {
@@ -492,7 +556,7 @@ fn reconstruct_once(input: &ReconstructInput<'_>) -> Result<Reconstructed, Recon
     // window}` (SPEC §4.3), so every stored slice at or below it is a
     // candidate. The finding share lives in the still-open slice, whose id
     // is above the mark and is therefore absent.
-    single_front_high_water(input.high_water)?;
+    let high_water = single_front_high_water(input.high_water)?;
     let expected = input
         .economics
         .subsidy
@@ -508,12 +572,12 @@ fn reconstruct_once(input: &ReconstructInput<'_>) -> Result<Reconstructed, Recon
     }
     let mode = detect_mode(input.coinbase);
 
-    if input.slices.is_empty() {
+    // Keep historical JD empty-window behavior separate from this pool-template
+    // correction. O11 claims and gross JD weights are unchanged.
+    if input.slices.is_empty() && mode == TemplateMode::Jd {
         if !input.entries.is_empty() {
             return Err(ReconstructError::NoSlices);
         }
-        // A block found before any slice sealed: the whole coinbase is the
-        // pool output, nothing is owed.
         return Ok(Reconstructed {
             mode,
             ledger: Vec::new(),
@@ -529,32 +593,69 @@ fn reconstruct_once(input: &ReconstructInput<'_>) -> Result<Reconstructed, Recon
         .iter()
         .map(slice_agg)
         .collect::<Result<Vec<_>, _>>()?;
+    if aggs.is_empty() && high_water != 0 {
+        return Err(ReconstructError::NoSlices);
+    }
+    check_version_rule_compatibility(input.work_unit_version, input.window_rule)?;
+    if input.work_unit_version == WorkUnitVersion::V2 && input.window_target.is_none() {
+        return Err(ReconstructError::MissingFrozenV2Target);
+    }
     // The persisted target is the one the front selected this window with;
     // only a pre-migration row (no stored value) falls back to the estimate.
     let target = match input.window_target {
         Some(target) => target,
+        // A legacy known-empty window has no target estimate to perform. V2
+        // above always requires its actual frozen Q, even when no slice exists.
+        None if aggs.is_empty() => 0,
         None => window_target(input.slices, input.height, input.cfg.window_n)?,
     };
     // `u64::MAX`: nothing is skipped. The stored slices at or below the
     // high-water mark already are the window's slice set (SPEC §4.3).
-    let window = select_window(&aggs, u64::MAX, target, input.high_water.clone());
-    if window.t == 0 {
-        return Err(ReconstructError::NoSlices);
-    }
+    let window = match input.work_unit_version {
+        WorkUnitVersion::V1 => select_window(&aggs, u64::MAX, target, input.high_water.clone()),
+        WorkUnitVersion::V2 => select_window_v2(
+            &aggs,
+            u64::MAX,
+            target,
+            input.high_water.clone(),
+            input.work_unit_fingerprint,
+        )?,
+    };
     // A capped walk is only ambiguous when the window itself consumed every
     // returned slice; then there may be older rows it needed.
     if input.window_truncated && window.slices.len() == aggs.len() {
         return Err(ReconstructError::WindowTruncated);
     }
-    let raw = raw_payouts(
-        &window,
-        input.economics.subsidy,
-        input.economics.fees,
-        input.cfg.fee_bps,
-    )?;
+    let raw = if window.slices.is_empty() {
+        // Same raw adapter as front: no new earnings, but frozen prior P still
+        // participates in ordinary routing, mined-output checks and E-P below.
+        spc_accounting::RawPayouts {
+            raw: BTreeMap::new(),
+            pool_sats: t_actual,
+            r_net: input.economics.subsidy,
+            f_net: input.economics.fees,
+        }
+    } else {
+        match input.work_unit_version {
+            WorkUnitVersion::V1 => raw_payouts(
+                &window,
+                input.economics.subsidy,
+                input.economics.fees,
+                input.cfg.fee_bps,
+            )?,
+            WorkUnitVersion::V2 => raw_payouts_v2(
+                &window,
+                input.economics.subsidy,
+                input.economics.fees,
+                input.cfg.fee_bps,
+            )?,
+        }
+    };
 
     let mut entry_by_id: BTreeMap<SpId, &Entry> = BTreeMap::new();
     for e in input.entries {
+        e.validate()
+            .map_err(|_| ReconstructError::MissingPayoutKey(e.sp_id))?;
         if entry_by_id.insert(e.sp_id, e).is_some() {
             return Err(ReconstructError::DuplicateEntry(e.sp_id));
         }
@@ -566,6 +667,14 @@ fn reconstruct_once(input: &ReconstructInput<'_>) -> Result<Reconstructed, Recon
             return Err(ReconstructError::WindowMismatch);
         }
     }
+    if mode == TemplateMode::Pool
+        && input
+            .pending
+            .iter()
+            .any(|(id, p)| *p > 0 && !entry_by_id.contains_key(id))
+    {
+        return Err(ReconstructError::WindowMismatch);
+    }
 
     let mut script_value: BTreeMap<&[u8], u64> = BTreeMap::new();
     for o in input.coinbase {
@@ -574,6 +683,7 @@ fn reconstruct_once(input: &ReconstructInput<'_>) -> Result<Reconstructed, Recon
         }
     }
     let mut paid: BTreeMap<SpId, u64> = BTreeMap::new();
+    let mut all_keys = BTreeSet::new();
     for e in input.entries {
         if e.p_x.is_empty() {
             if e.rail == Rail::Coinbase {
@@ -581,17 +691,21 @@ fn reconstruct_once(input: &ReconstructInput<'_>) -> Result<Reconstructed, Recon
             }
             continue;
         }
-        let p_x: [u8; 32] = e
-            .p_x
-            .as_slice()
-            .try_into()
-            .map_err(|_| ReconstructError::MissingPayoutKey(e.sp_id))?;
-        let script = p2tr_script(&p_x);
-        if let Some(value) = script_value.get(script.as_slice()).copied() {
-            if e.rail != Rail::Coinbase {
-                return Err(ReconstructError::PaidMismatch(e.sp_id));
+        if mode == TemplateMode::Jd && e.p_x.len() != 1 {
+            return Err(ReconstructError::PaidMismatch(e.sp_id));
+        }
+        for p_x in &e.p_x {
+            if !all_keys.insert(*p_x) {
+                return Err(ReconstructError::DuplicateScript);
             }
-            paid.insert(e.sp_id, value);
+            let script = p2tr_script(p_x);
+            if let Some(value) = script_value.get(script.as_slice()).copied() {
+                if e.rail != Rail::Coinbase {
+                    return Err(ReconstructError::PaidMismatch(e.sp_id));
+                }
+                let sum = paid.entry(e.sp_id).or_insert(0);
+                *sum = sum.checked_add(value).ok_or(ReconstructError::Overflow)?;
+            }
         }
     }
 
@@ -610,18 +724,17 @@ fn reconstruct_once(input: &ReconstructInput<'_>) -> Result<Reconstructed, Recon
                 let owed = raw_sats
                     .checked_add(before)
                     .ok_or(ReconstructError::Overflow)?;
-                // The distribution's `sats` is metadata: it was frozen from
-                // the front's pending forecast, which normally equals the
-                // booked ledger by the time this block is `confirmation_depth`
-                // deep. A difference is not fatal (the mined coinbase still
-                // says what was actually paid), but it is worth a line.
-                if e.sats != owed {
-                    tracing::warn!(
-                        sp_id = %hex::encode(e.sp_id),
-                        event_sats = e.sats,
-                        reconstructed = owed,
-                        "distribution entry differs from slices + booked pending"
-                    );
+                // Reconstruct from this job's frozen P, not the later booked B.
+                // Full owed and every actual k-associated amount must agree.
+                let expected_sats = if e.rail == Rail::Coinbase {
+                    spc_accounting::band_amount(owed).0
+                } else if e.rail == Rail::Forfeit {
+                    raw_sats
+                } else {
+                    owed
+                };
+                if e.sats != expected_sats || e.owed_sats != owed {
+                    return Err(ReconstructError::CoinbaseTierMismatch);
                 }
                 amounts.insert(e.sp_id, owed);
             }
@@ -631,12 +744,33 @@ fn reconstruct_once(input: &ReconstructInput<'_>) -> Result<Reconstructed, Recon
                     e.sp_id,
                     ArkCapability {
                         registered: input.delivered.contains(&e.sp_id),
+                        registration_committed: input.delivered.contains(&e.sp_id),
                         dest_known: !e.dest_id.is_empty(),
                     },
                 );
             }
             let tier = tier_config(input);
-            let routing = route_tiers(&raw, input.pending, &caps, &tier, t_actual)?;
+            let known = input
+                .entries
+                .iter()
+                .filter(|e| e.rail == Rail::Coinbase)
+                .map(|e| e.sp_id)
+                .collect();
+            let routing = spc_accounting::route_tiers_with_keys(
+                &raw,
+                input.pending,
+                &caps,
+                &tier,
+                t_actual,
+                Some(&known),
+            )?;
+            if input
+                .coinbase
+                .first()
+                .is_none_or(|output| output.value != routing.pay_p)
+            {
+                return Err(ReconstructError::CoinbaseTierMismatch);
+            }
             forfeited_now = routing.forfeited.iter().copied().collect();
             let expected_kept: BTreeSet<SpId> = routing.kept.iter().map(|(id, _)| *id).collect();
             let paid_ids: BTreeSet<SpId> = paid.keys().copied().collect();
@@ -644,44 +778,65 @@ fn reconstruct_once(input: &ReconstructInput<'_>) -> Result<Reconstructed, Recon
             // when pending moved between the distribution build and this
             // booking, so only a reconstruction that would over-credit the
             // window is fatal.
-            if expected_kept != paid_ids {
-                tracing::warn!(
-                    expected = expected_kept.len(),
-                    mined = paid_ids.len(),
-                    "tier routing differs from the mined coinbase"
-                );
+            // Unknown delivery keys are the sole legitimate large-balance
+            // hold. Every represented coinbase row still pays full entitlement.
+            if expected_kept
+                .difference(&paid_ids)
+                .any(|id| entry_by_id.get(id).is_none_or(|e| e.rail != Rail::Pending))
+                || !paid_ids.is_subset(&expected_kept)
+            {
+                return Err(ReconstructError::CoinbaseTierMismatch);
             }
             for e in input.entries {
                 if e.rail == Rail::Coinbase {
                     let value = paid
                         .get(&e.sp_id)
                         .ok_or(ReconstructError::MissingCoinbaseOutput(e.sp_id))?;
-                    let raw_sats = raw.raw.get(&e.sp_id).copied().unwrap_or(0);
-                    // `route_tiers` can pay only what the coinbase carries
-                    // when one balance exceeds the block reward: `paid` is
-                    // then `raw` plus part of the carried pending, and the
-                    // rest stays pending. Fail closed on a coinbase that
-                    // pays less than this block's raw share or more than
-                    // the frozen distribution entry.
-                    if *value < raw_sats || *value > e.sats {
+                    let owed = amounts[&e.sp_id];
+                    let shape = spc_accounting::decompose(owed, input.cfg.max_payout_slots)?;
+                    // Every represented coinbase row pays its complete greedy
+                    // decomposition. No partial entitlement or trimming.
+                    if *value != shape.paid || e.p_x.len() != shape.outputs.len() {
                         return Err(ReconstructError::CoinbaseTierMismatch);
+                    }
+                    for (key, expected) in e.p_x.iter().zip(&shape.outputs) {
+                        if script_value.get(p2tr_script(key).as_slice()) != Some(expected) {
+                            return Err(ReconstructError::CoinbaseTierMismatch);
+                        }
                     }
                 } else if paid.contains_key(&e.sp_id) {
                     return Err(ReconstructError::PaidMismatch(e.sp_id));
                 }
             }
+            // No unrepresented miner output may masquerade as pool rounding.
+            for output in input.coinbase.iter().skip(1) {
+                if output.script.len() == 34 && output.script[..2] == [0x51, 0x20] {
+                    let key: [u8; 32] = output.script[2..]
+                        .try_into()
+                        .map_err(|_| ReconstructError::DuplicateScript)?;
+                    if !all_keys.contains(&key) {
+                        return Err(ReconstructError::CoinbaseTierMismatch);
+                    }
+                }
+            }
         }
         TemplateMode::Jd => {
+            if input.entries.iter().any(|e| e.owed_sats != e.sats) {
+                return Err(ReconstructError::CoinbaseTierMismatch);
+            }
             let weight = jd_weight(input.entries, &raw)?;
             let mut payout_scripts = BTreeSet::new();
             for e in input.entries {
-                if let Ok(p_x) = <[u8; 32]>::try_from(e.p_x.as_slice()) {
-                    payout_scripts.insert(p2tr_script(&p_x));
+                for p_x in &e.p_x {
+                    payout_scripts.insert(p2tr_script(p_x));
                 }
             }
             let fixed = fixed_outputs(input.coinbase, &paid, t_actual, &payout_scripts)?;
             for e in input.entries {
-                let claim = claim_jd(e.sats, t_actual, fixed, weight)?;
+                let claim = match input.work_unit_version {
+                    WorkUnitVersion::V1 => claim_jd(e.sats, t_actual, fixed, weight)?,
+                    WorkUnitVersion::V2 => claim_jd_v2(e.sats, t_actual, fixed, weight)?,
+                };
                 amounts.insert(e.sp_id, claim);
             }
         }
@@ -695,12 +850,23 @@ fn reconstruct_once(input: &ReconstructInput<'_>) -> Result<Reconstructed, Recon
         let amount = amounts.get(&id).copied().unwrap_or(0);
         let row = if let Some(value) = paid.get(&id) {
             // The mined coinbase paid this identity.
-            let after = amount.saturating_sub(*value);
+            let remainder = amount
+                .checked_sub(*value)
+                .ok_or(ReconstructError::PaidMismatch(id))?;
+            let ark_due = if mode == TemplateMode::Pool
+                && input.delivered.contains(&id)
+                && !e.dest_id.is_empty()
+            {
+                remainder
+            } else {
+                0
+            };
+            let after = remainder - ark_due;
             LedgerRow {
                 sp_id: id,
                 rail: LedgerRail::Coinbase,
                 paid_sats: *value,
-                ark_due_sats: 0,
+                ark_due_sats: ark_due,
                 forfeited_sats: 0,
                 pending_delta: delta_of(after, before)?,
             }
@@ -725,7 +891,11 @@ fn reconstruct_once(input: &ReconstructInput<'_>) -> Result<Reconstructed, Recon
                 amount,
                 input.delivered.contains(&id),
                 !e.dest_id.is_empty(),
-                input.coinbase_threshold_sats,
+                if mode == TemplateMode::Pool {
+                    spc_accounting::LADDER_BASE_SATS
+                } else {
+                    input.coinbase_threshold_sats
+                },
             );
             let (ark_due, forfeited, after) = match rail {
                 LedgerRail::Ark => (amount, 0, 0),
@@ -758,8 +928,28 @@ fn reconstruct_once(input: &ReconstructInput<'_>) -> Result<Reconstructed, Recon
         ledger.push(row);
     }
 
-    // Kept ids are the ones the mined coinbase paid; the routing set is a
-    // cross-check for pool-template mode (done above).
+    if mode == TemplateMode::Pool {
+        let mut net_pool = i128::from(raw.pool_sats);
+        for row in &ledger {
+            let prior = i128::from(input.pending.get(&row.sp_id).copied().unwrap_or(0));
+            let after = prior + i128::from(row.pending_delta);
+            let fresh = i128::from(raw.raw.get(&row.sp_id).copied().unwrap_or(0));
+            let noncoinbase = i128::from(row.ark_due_sats) + i128::from(row.forfeited_sats);
+            if after < 0 || i128::from(row.paid_sats) + noncoinbase + after != fresh + prior {
+                return Err(ReconstructError::CoinbaseTierMismatch);
+            }
+            net_pool = net_pool
+                .checked_add(noncoinbase + i128::from(row.pending_delta))
+                .ok_or(ReconstructError::Overflow)?;
+        }
+        if input
+            .coinbase
+            .first()
+            .is_none_or(|output| i128::from(output.value) != net_pool)
+        {
+            return Err(ReconstructError::CoinbaseTierMismatch);
+        }
+    }
 
     Ok(Reconstructed {
         mode,
@@ -788,7 +978,18 @@ fn single_front_high_water(high_water: &BTreeMap<u8, String>) -> Result<u64, Rec
 }
 
 fn detect_mode(coinbase: &[CoinbaseOutput]) -> TemplateMode {
-    if coinbase.iter().any(|o| o.script.first() == Some(&0x6a)) {
+    // A pool-template witness commitment output is also an OP_RETURN
+    // output (BIP 141, decision 2026-11-08-pool-witness-commitment); it is
+    // not a JD carrier and must not flip a pool-template block into JD
+    // mode. The real JD carrier is `OP_RETURN OP_PUSHBYTES_35 "SPc"
+    // <ser_x(A_send)>` (`6a23535063…`, SPEC §2.4.2,
+    // `spc_crypto::carriers::emit_op_return`), whose `6a23` push cannot
+    // collide with the commitment's `6a24` push. Any other (unknown)
+    // OP_RETURN output still selects JD mode: settlement then assumes the
+    // least about the coinbase.
+    if coinbase.iter().any(|o| {
+        o.script.first() == Some(&0x6a) && !crate::witness::looks_like_commitment(&o.script)
+    }) {
         TemplateMode::Jd
     } else {
         TemplateMode::Pool
@@ -839,6 +1040,7 @@ fn slice_agg(row: &SliceRow) -> Result<SliceAgg, ReconstructError> {
         .parse::<u128>()
         .map_err(|_| ReconstructError::Number)?;
     let mut per_id: BTreeMap<SpId, (u128, u128)> = BTreeMap::new();
+    let mut credit_difficulty = 0u128;
     let mut diff_fee_sum = 0u128;
     for c in &row.credits {
         let d = c
@@ -849,10 +1051,30 @@ fn slice_agg(row: &SliceRow) -> Result<SliceAgg, ReconstructError> {
             .diff_fee_sum
             .parse::<u128>()
             .map_err(|_| ReconstructError::Number)?;
-        diff_fee_sum = diff_fee_sum.saturating_add(df);
-        let slot = per_id.entry(c.sp_id).or_insert((0, 0));
-        slot.0 = slot.0.saturating_add(d);
-        slot.1 = slot.1.saturating_add(df);
+        match row.work_unit_version {
+            WorkUnitVersion::V1 => {
+                credit_difficulty = credit_difficulty.saturating_add(d);
+                diff_fee_sum = diff_fee_sum.saturating_add(df);
+                let slot = per_id.entry(c.sp_id).or_insert((0, 0));
+                slot.0 = slot.0.saturating_add(d);
+                slot.1 = slot.1.saturating_add(df);
+            }
+            WorkUnitVersion::V2 => {
+                credit_difficulty =
+                    spc_accounting::work_unit::checked_add_window_work(credit_difficulty, d)?;
+                diff_fee_sum = spc_accounting::work_unit::checked_add_fee_work(diff_fee_sum, df)?;
+                let slot = per_id.entry(c.sp_id).or_insert((0, 0));
+                slot.0 = spc_accounting::work_unit::checked_add_window_work(slot.0, d)?;
+                slot.1 = spc_accounting::work_unit::checked_add_fee_work(slot.1, df)?;
+            }
+        }
+    }
+    if row.work_unit_version == WorkUnitVersion::V2 && difficulty != credit_difficulty {
+        return Err(ReconstructError::StoredDifficultyMismatch {
+            slice_id: row.slice_id,
+            stored: difficulty,
+            credits: credit_difficulty,
+        });
     }
     Ok(SliceAgg {
         slice_id: row.slice_id,
@@ -864,6 +1086,8 @@ fn slice_agg(row: &SliceRow) -> Result<SliceAgg, ReconstructError> {
         diff_fee_sum,
         per_id,
         root: row.root,
+        work_unit_version: row.work_unit_version,
+        work_unit_fingerprint: row.work_unit_fingerprint,
     })
 }
 
@@ -915,7 +1139,27 @@ fn tier_config(input: &ReconstructInput<'_>) -> TierConfig {
         coinbase_threshold_sats: input.coinbase_threshold_sats,
         max_payout_slots: input.cfg.max_payout_slots,
         budget_wu: input.cfg.budget_wu,
-        overhead_wu: input.cfg.overhead_wu,
+        // Mirror the front (SPEC §4.8, Fable rework 2026-11-08 R5): a mined
+        // coinbase carrying a BIP 141 witness commitment spent 224 WU the
+        // distribution could not pay out, and the front's routing budgeted
+        // exactly that. Settlement must charge the same overhead - detected
+        // from the mined coinbase, the truth this reconstruction runs on -
+        // or the budget crosscheck at the boundary would keep more ids than
+        // the coinbase pays and warn (or fail) spuriously. The front
+        // constructs exactly one 38-byte zero-value commitment output last
+        // (`assemble_witness` verified it before submission); the 6-byte
+        // structural prefix identifies it here.
+        overhead_wu: input.cfg.overhead_wu.saturating_add(
+            if input
+                .coinbase
+                .iter()
+                .any(|o| crate::witness::looks_like_commitment(&o.script))
+            {
+                crate::witness::WITNESS_COMMITMENT_OVERHEAD_WU
+            } else {
+                0
+            },
+        ),
     }
 }
 
@@ -942,7 +1186,9 @@ impl Default for ScrubConfig {
     }
 }
 
+#[derive(Clone)]
 pub struct PayoutService {
+    economic_pool: Option<crate::front::FrontConfig>,
     store: Store,
     streams: Streams,
     confirmation_depth: u32,
@@ -959,6 +1205,11 @@ pub struct PayoutService {
     orders_stream: String,
     receipts_stream: String,
     front_events_stream: String,
+    registration_stream: String,
+    registration_ack_key: String,
+    registration_ack_ttl_secs: u64,
+    registration_ark_id: Option<[u8; 4]>,
+    aggregate_server: Option<(String, bitcoin::Network)>,
 }
 
 /// How one group entry ends up after handling.
@@ -968,8 +1219,32 @@ enum Disposition {
     /// Waiting on the chain: leave unacked; the pending pass retries it.
     Retry,
 }
+struct AbortTask(tokio::task::JoinHandle<()>);
+#[cfg(all(test, feature = "postgres-integration"))]
+#[path = "aggregate_boundary_tests.rs"]
+mod aggregate_boundary_tests;
+impl Drop for AbortTask {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
 
 impl PayoutService {
+    async fn authorization_dispatcher(&self) -> Result<Option<AbortTask>, PayoutError> {
+        if self.order_key.is_none() {
+            return Ok(None);
+        }
+        let mut authorizer = self.clone();
+        authorizer.streams = self.streams.independent().await?;
+        Ok(Some(AbortTask(tokio::spawn(async move {
+            loop {
+                if let Err(error) = authorizer.process_authorizations().await {
+                    tracing::warn!(error=%error,"authorization dispatcher unavailable");
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }
+        }))))
+    }
     pub fn new(
         store: Store,
         streams: Streams,
@@ -981,6 +1256,7 @@ impl PayoutService {
     ) -> Self {
         Self {
             store,
+            economic_pool: None,
             streams,
             confirmation_depth,
             coinbase_threshold_sats,
@@ -993,6 +1269,11 @@ impl PayoutService {
             orders_stream: "spc:ark:orders".to_string(),
             receipts_stream: "spc:ark:receipts".to_string(),
             front_events_stream: "spc:front:events".to_string(),
+            registration_stream: "spc:arkreg".to_string(),
+            registration_ack_key: "spc:arkreg:ack".to_string(),
+            registration_ack_ttl_secs: 3_600,
+            registration_ark_id: None,
+            aggregate_server: None,
         }
     }
 
@@ -1000,6 +1281,14 @@ impl PayoutService {
     /// fails closed if the window/fee parameters differ from the front's.
     pub fn with_accounting(mut self, accounting: AccountingConfig) -> Self {
         self.accounting = accounting;
+        self
+    }
+    pub fn with_economic_pool(mut self, pool: crate::front::FrontConfig) -> Self {
+        self.economic_pool = Some(pool);
+        self
+    }
+    pub fn with_aggregate_server(mut self, address: String, network: bitcoin::Network) -> Self {
+        self.aggregate_server = Some((address, network));
         self
     }
 
@@ -1034,11 +1323,41 @@ impl PayoutService {
         self
     }
 
+    /// Bind registration validation to the pool's actual Ark server id.
+    pub fn with_registration_ark_id(mut self, ark_id: [u8; 4]) -> Self {
+        self.registration_ark_id = Some(ark_id);
+        self
+    }
+
+    /// Override registration stream/cache names for an isolated integration
+    /// resource. Production keeps the exact SPEC names.
+    pub fn with_registration_streams(
+        mut self,
+        registration_stream: impl Into<String>,
+        registration_ack_key: impl Into<String>,
+    ) -> Self {
+        self.registration_stream = registration_stream.into();
+        self.registration_ack_key = registration_ack_key.into();
+        self
+    }
+
+    pub fn with_registration_ack_ttl(mut self, ttl_secs: u64) -> Self {
+        self.registration_ack_ttl_secs = ttl_secs.max(1);
+        self
+    }
+
     pub async fn run(&self) -> Result<(), PayoutError> {
         self.store.migrate().await?;
-        for s in ["spc:slices", "spc:blocks", "spc:arkreg"] {
+        self.streams
+            .ensure_group_from(spc_ext::authorization::REQUESTS_STREAM, GROUP, "0")
+            .await?;
+        let _authorization_task = self.authorization_dispatcher().await?;
+        for s in ["spc:slices", "spc:blocks"] {
             self.streams.ensure_group(s, GROUP).await?;
         }
+        self.streams
+            .ensure_group_from(&self.registration_stream, GROUP, "0")
+            .await?;
         // Receipts are idempotent, so start a first-created group at 0:
         // a receipt emitted before this payout process started must not be
         // lost.
@@ -1063,6 +1382,13 @@ impl PayoutService {
             .checked_sub(REPUBLISH_INTERVAL)
             .unwrap_or_else(Instant::now);
         loop {
+            if let Err(e) = self.reconcile_economics().await {
+                let _ = self
+                    .store
+                    .economic_hold("chain/economic reconciliation unavailable")
+                    .await;
+                tracing::warn!(error=%e,"economic readiness unavailable");
+            }
             // Receipts are the only path that resolves a scheduled Ark send.
             if let Err(e) = self.process_receipts_once().await {
                 tracing::error!(error = %e, "ark receipt processing failed");
@@ -1086,17 +1412,12 @@ impl PayoutService {
                 }
             }
             let mut did = false;
-            for (stream, kind) in [
-                ("spc:slices", Kind::Slice),
-                ("spc:blocks", Kind::Block),
-                ("spc:arkreg", Kind::Reg),
-            ] {
+            for (stream, kind) in [("spc:slices", Kind::Slice), ("spc:blocks", Kind::Block)] {
                 let entries = self.streams.read_group(stream, GROUP, CONSUMER, 16).await?;
                 for (id, payload) in entries {
                     let res: Result<Disposition, PayoutError> = match kind {
                         Kind::Slice => self.on_slice(&payload).await.map(|_| Disposition::Done),
                         Kind::Block => self.on_block(&payload).await,
-                        Kind::Reg => self.on_reg(&payload).await.map(|_| Disposition::Done),
                     };
                     match res {
                         Ok(Disposition::Done) => {
@@ -1111,6 +1432,9 @@ impl PayoutService {
                         }
                     }
                 }
+            }
+            if let Err(error) = self.process_registrations_once().await {
+                tracing::warn!(error = %error, "registration processing failed");
             }
             if last_pending.elapsed() >= PENDING_RETRY_INTERVAL {
                 last_pending = Instant::now();
@@ -1179,6 +1503,8 @@ impl PayoutService {
                 difficulty: e.difficulty.to_string(),
                 root: e.root,
                 shares: e.shares_blob,
+                work_unit_version: e.work_unit_version,
+                work_unit_fingerprint: e.work_unit_fingerprint,
                 credits,
             })
             .await?;
@@ -1187,6 +1513,11 @@ impl PayoutService {
 
     async fn on_block(&self, payload: &[u8]) -> Result<Disposition, PayoutError> {
         let e = BlockEvent::decode(payload)?;
+        if let Some(old) = self.store.economic_event_digest(&e.block_hash).await? {
+            if old != e.snapshot_id()? {
+                return Err(PayoutError::Snapshot("conflicting found payload"));
+            }
+        }
 
         // Terminal states are absorbing (§7.4 idempotency); a redelivery
         // then changes nothing. The one exception is a confirmed block whose
@@ -1236,6 +1567,53 @@ impl PayoutService {
                 return Ok(Disposition::Retry);
             }
         };
+        if self.economic_pool.is_some() && active {
+            let Some(job) = &e.economic else {
+                self.store
+                    .economic_hold("pool event omitted frozen P")
+                    .await?;
+                return Ok(Disposition::Retry);
+            };
+            let proof = self
+                .chain
+                .economic_evidence(&e.block_hash)
+                .await
+                .map_err(|e| PayoutError::LedgerEvent(e.to_string()))?
+                .ok_or(PayoutError::Snapshot("missing raw ancestry"))?;
+            if proof.parent_hash != job.parent_hash {
+                return Err(PayoutError::Snapshot(
+                    "frozen parent differs from mined parent",
+                ));
+            }
+            let fingerprint = self.persist_economic_snapshot(&e).await?;
+            let Some((ledger, _)) = self.recompute(&e, fingerprint).await? else {
+                return Ok(Disposition::Retry);
+            };
+            if self.store.economic_found(&e, &ledger, false).await.is_err() {
+                return Ok(Disposition::Retry);
+            }
+            let view = self.store.economic_view().await?;
+            if view.anchor_height + 1 == e.height {
+                self.store
+                    .economic_advance(
+                        e.height,
+                        e.block_hash,
+                        proof.parent_hash,
+                        true,
+                        proof.coinbase_digest,
+                    )
+                    .await?;
+                let current = self.store.economic_view().await?;
+                let hint = FrontEvent::EconomicChanged {
+                    rev: self.store.bump_front_rev().await?,
+                    economic_revision: current.revision,
+                    anchor_hash: current.anchor_hash,
+                };
+                self.streams
+                    .add(&self.front_events_stream, &hint.encode()?)
+                    .await?;
+            }
+        }
         match chain_gate(
             active,
             hash_at_height,
@@ -1246,6 +1624,9 @@ impl PayoutService {
         ) {
             ChainGate::Wait => return Ok(Disposition::Retry),
             ChainGate::Orphan => {
+                if e.economic.is_some() {
+                    self.store.orphan(&e.block_hash).await?;
+                }
                 tracing::warn!(
                     block = %display_hash(&e.block_hash),
                     height = e.height,
@@ -1277,7 +1658,7 @@ impl PayoutService {
         let fingerprint = if e.fingerprint == [0u8; 32] {
             None
         } else {
-            Some(e.fingerprint)
+            Some(e.snapshot_id()?)
         };
         let status = match fingerprint {
             Some(fingerprint) => {
@@ -1291,6 +1672,9 @@ impl PayoutService {
                         high_water: json!(e.high_water),
                         // The exact target the front selected this window
                         // with; settlement must never re-derive it.
+                        work_unit_version: e.work_unit_version,
+                        work_unit_fingerprint: e.work_unit_fingerprint,
+                        window_rule: e.window_rule,
                         window_target: Some(e.window_target.to_string()),
                     })
                     .await?;
@@ -1370,6 +1754,159 @@ impl PayoutService {
         Ok(Disposition::Done)
     }
 
+    async fn persist_economic_snapshot(&self, e: &BlockEvent) -> Result<[u8; 32], PayoutError> {
+        let fingerprint = e.snapshot_id()?;
+        self.store
+            .insert_snapshot(&SnapshotRow {
+                fingerprint,
+                height: e.height,
+                a_send_x: e.a_send_x,
+                distribution_id: None,
+                entries: json!(e.entries),
+                high_water: json!(e.high_water),
+                window_target: Some(e.window_target.to_string()),
+                work_unit_version: e.work_unit_version,
+                work_unit_fingerprint: e.work_unit_fingerprint,
+                window_rule: e.window_rule,
+            })
+            .await?;
+        Ok(fingerprint)
+    }
+
+    async fn reconcile_economics(&self) -> Result<(), PayoutError> {
+        let Some(pool) = &self.economic_pool else {
+            return Ok(());
+        };
+        if !self.chain.authoritative() {
+            return Err(PayoutError::Snapshot(
+                "economic chain authority unavailable",
+            ));
+        }
+        let tip = self
+            .chain
+            .tip_height()
+            .await
+            .map_err(|e| PayoutError::LedgerEvent(e.to_string()))?;
+        let genesis = self
+            .chain
+            .block_hash_at(0)
+            .await
+            .map_err(|e| PayoutError::LedgerEvent(e.to_string()))?
+            .ok_or(PayoutError::Snapshot("genesis unavailable"))?;
+        self.store.economic_initialize(genesis).await?;
+        let mut view = self.store.economic_view().await?;
+        if view.anchor_hash == [0; 32] {
+            return Err(PayoutError::Snapshot("economic history checkpoint missing"));
+        }
+        let actual = self
+            .chain
+            .block_hash_at(view.anchor_height)
+            .await
+            .map_err(|e| PayoutError::LedgerEvent(e.to_string()))?;
+        if actual != Some(view.anchor_hash) {
+            self.store
+                .economic_hold("canonical fork reconciliation")
+                .await?;
+            let mut fork = view.anchor_height.min(tip);
+            loop {
+                let node = self
+                    .chain
+                    .block_hash_at(fork)
+                    .await
+                    .map_err(|e| PayoutError::LedgerEvent(e.to_string()))?;
+                if node.is_some() && node == self.store.economic_chain_hash(fork).await? {
+                    break;
+                }
+                fork = fork
+                    .checked_sub(1)
+                    .ok_or(PayoutError::Snapshot("economic genesis mismatch"))?;
+            }
+            for hash in self.store.economic_displaced(fork).await? {
+                self.store.orphan(&hash).await?;
+            }
+            let hash = self
+                .store
+                .economic_chain_hash(fork)
+                .await?
+                .ok_or(PayoutError::Snapshot("fork anchor missing"))?;
+            self.store.economic_rewind(fork, hash).await?;
+            view = self.store.economic_view().await?;
+        }
+        for height in
+            view.anchor_height.saturating_add(1)..=tip.min(view.anchor_height.saturating_add(64))
+        {
+            let hash = self
+                .chain
+                .block_hash_at(height)
+                .await
+                .map_err(|e| PayoutError::LedgerEvent(e.to_string()))?
+                .ok_or(PayoutError::Snapshot("canonical block missing"))?;
+            let proof = self
+                .chain
+                .economic_evidence(&hash)
+                .await
+                .map_err(|e| PayoutError::LedgerEvent(e.to_string()))?
+                .ok_or(PayoutError::Snapshot("raw coinbase evidence missing"))?;
+            let relevant = proof.spc
+                && proof.pool_script
+                    == pool
+                        .pool_script_at(height)
+                        .map_err(|_| PayoutError::Snapshot("pool script derivation"))?;
+            if relevant {
+                let Some(event) = self.store.economic_saved_event(&hash).await? else {
+                    self.store
+                        .economic_hold("canonical pool event unresolved")
+                        .await?;
+                    return Ok(());
+                };
+                let fp = self.persist_economic_snapshot(&event).await?;
+                let Some((ledger, _)) = self.recompute(&event, fp).await? else {
+                    return Err(PayoutError::Snapshot("recanonical ledger unavailable"));
+                };
+                if self.store.economic_lifecycle(&hash).await?.as_deref() == Some("loss_held") {
+                    if self
+                        .chain
+                        .tip_height()
+                        .await
+                        .map_err(|e| PayoutError::LedgerEvent(e.to_string()))?
+                        != tip
+                        || self
+                            .chain
+                            .block_hash_at(height)
+                            .await
+                            .map_err(|e| PayoutError::LedgerEvent(e.to_string()))?
+                            != Some(hash)
+                    {
+                        return Err(PayoutError::Snapshot(
+                            "recanonical chain observation changed",
+                        ));
+                    }
+                    self.store
+                        .economic_restore_loss_held(&event, self.confirmation_depth, tip)
+                        .await?;
+                } else {
+                    self.store.economic_found(&event, &ledger, true).await?;
+                }
+            }
+            self.store
+                .economic_advance(
+                    height,
+                    hash,
+                    proof.parent_hash,
+                    relevant,
+                    proof.coinbase_digest,
+                )
+                .await?;
+        }
+        let view = self.store.economic_view().await?;
+        if view.anchor_height == tip {
+            self.store
+                .economic_confirm_anchor(tip, view.anchor_hash)
+                .await?;
+        }
+        Ok(())
+    }
+
     /// Recompute one block's ledger (SPEC §7.4). `None` means hold: the
     /// reconstruction cannot be trusted yet and the event stays unacked.
     async fn recompute(
@@ -1377,6 +1914,14 @@ impl PayoutService {
         e: &BlockEvent,
         fingerprint: [u8; 32],
     ) -> Result<Option<(Vec<LedgerRow>, Vec<([u8; 32], i64)>)>, PayoutError> {
+        if let Some(ledger) = self.store.economic_ledger(&e.block_hash).await? {
+            let deltas = ledger
+                .iter()
+                .filter(|r| r.pending_delta != 0)
+                .map(|r| (r.sp_id, r.pending_delta))
+                .collect();
+            return Ok(Some((ledger, deltas)));
+        }
         let coinbase = match self.chain.coinbase_outputs(&e.block_hash).await {
             Ok(outputs) => outputs,
             Err(err) => {
@@ -1431,16 +1976,37 @@ impl PayoutService {
                         return Ok(None);
                     }
                 };
-                let slices = self
+                let mut slices = self
                     .store
                     .window_slices_to(high_water_mark, WINDOW_SLICE_LIMIT)
                     .await?;
                 // `slice` rows are never pruned, so the walk is capped. That
                 // is only ambiguous when the window itself consumes every
                 // returned row (checked by `reconstruct_settlement`).
-                let window_truncated =
-                    i64::try_from(slices.len()).unwrap_or(i64::MAX) >= WINDOW_SLICE_LIMIT;
-                let pending = self.store.pending_map().await?;
+                let window_truncated = e.economic.is_none()
+                    && i64::try_from(slices.len()).unwrap_or(i64::MAX) >= WINDOW_SLICE_LIMIT;
+                let pending = if let Some(job) = &e.economic {
+                    let frozen = job
+                        .prior()
+                        .map_err(|_| PayoutError::Snapshot("frozen economic P"))?;
+                    let mut selected = Vec::new();
+                    for id in &job.slice_ids {
+                        let row = slices
+                            .iter()
+                            .find(|s| s.slice_id == *id)
+                            .ok_or(PayoutError::Snapshot("frozen visible slice missing"))?;
+                        selected.push(row.clone());
+                    }
+                    if selected.windows(2).any(|w| w[0].slice_id <= w[1].slice_id) {
+                        return Err(PayoutError::Snapshot("frozen slice ordering"));
+                    }
+                    slices = selected;
+                    frozen
+                } else if self.economic_pool.is_some() {
+                    return Ok(None);
+                } else {
+                    self.store.pending_map().await?
+                };
                 let ids: Vec<[u8; 32]> = entries.iter().map(|entry| entry.sp_id).collect();
                 let delivered = self.store.ark_delivery_ids(&ids).await?;
                 let input = ReconstructInput {
@@ -1448,6 +2014,9 @@ impl PayoutService {
                     high_water: &high_water,
                     entries: &entries,
                     slices: &slices,
+                    work_unit_version: snapshot.work_unit_version,
+                    work_unit_fingerprint: snapshot.work_unit_fingerprint,
+                    window_rule: snapshot.window_rule,
                     window_target,
                     window_truncated,
                     pending: &pending,
@@ -1555,58 +2124,332 @@ impl PayoutService {
     }
 
     async fn on_reg(&self, payload: &[u8]) -> Result<(), PayoutError> {
-        let e = ArkRegEvent::decode(payload)?;
-        // The pool recomputes sp_id; a mismatch is a rejected registration.
-        let scan = bitcoin::secp256k1::PublicKey::from_slice(&e.b_scan)
-            .map_err(|_| PayoutError::Registration)?;
-        let spend = bitcoin::secp256k1::PublicKey::from_slice(&e.b_spend)
-            .map_err(|_| PayoutError::Registration)?;
-        if spc_crypto::sp_id(&scan, &spend) != e.sp_id {
-            return Err(PayoutError::Registration);
+        let kind = payload
+            .first()
+            .copied()
+            .ok_or(PayoutError::RegistrationCode("invalid-message"))?;
+        let result = match kind {
+            ArkRegEvent::KIND => self.on_identity_reg(payload).await,
+            ArkEpochRegEvent::KIND => self.on_epoch_reg(payload).await,
+            _ => Err(PayoutError::RegistrationCode("invalid-message")),
+        };
+        match result {
+            Err(PayoutError::RegistrationCode(code)) => match kind {
+                ArkRegEvent::KIND => self.reject_identity(payload, code).await,
+                ArkEpochRegEvent::KIND => self.reject_epoch(payload, code).await,
+                _ => Err(PayoutError::RegistrationCode(code)),
+            },
+            Err(PayoutError::Codec(_)) => match kind {
+                ArkRegEvent::KIND => self.reject_identity(payload, "invalid-message").await,
+                ArkEpochRegEvent::KIND => self.reject_epoch(payload, "invalid-message").await,
+                _ => Err(PayoutError::RegistrationCode("invalid-message")),
+            },
+            Err(PayoutError::Registration) => match kind {
+                ArkRegEvent::KIND => self.reject_identity(payload, "invalid-message").await,
+                ArkEpochRegEvent::KIND => self.reject_epoch(payload, "invalid-message").await,
+                _ => Err(PayoutError::RegistrationCode("invalid-message")),
+            },
+            Err(PayoutError::Store(spc_store::postgres::StoreError::Invalid(_))) => match kind {
+                ArkRegEvent::KIND => self.reject_identity(payload, "invalid-message").await,
+                ArkEpochRegEvent::KIND => self.reject_epoch(payload, "invalid-message").await,
+                _ => Err(PayoutError::RegistrationCode("invalid-message")),
+            },
+            other => other,
         }
-        self.store
-            .upsert_identity(&SpIdentityRow {
+    }
+
+    async fn on_identity_reg(&self, payload: &[u8]) -> Result<(), PayoutError> {
+        let e = ArkRegEvent::decode(payload)?;
+        let scan = bitcoin::secp256k1::PublicKey::from_slice(&e.b_scan)
+            .map_err(|_| PayoutError::RegistrationCode("invalid-message"))?;
+        let spend = bitcoin::secp256k1::PublicKey::from_slice(&e.b_spend)
+            .map_err(|_| PayoutError::RegistrationCode("invalid-message"))?;
+        if spc_crypto::sp_id(&scan, &spend) != e.sp_id {
+            return Err(PayoutError::RegistrationCode("bad-signature"));
+        }
+        let mailbox_mode = match e.mailbox_mode {
+            0 => spc_ext::MailboxMode::None,
+            1 => spc_ext::MailboxMode::Static,
+            2 => spc_ext::MailboxMode::EpochDerived,
+            3 => spc_ext::MailboxMode::EpochRegistered,
+            _ => return Err(PayoutError::RegistrationCode("invalid-message")),
+        };
+        let epoch_fallback = match e.epoch_fallback {
+            0 => spc_ext::EpochFallback::Static,
+            1 => spc_ext::EpochFallback::Hold,
+            _ => return Err(PayoutError::RegistrationCode("invalid-message")),
+        };
+        let request = spc_ext::SetArkIdentity {
+            ark_id: e.ark_id,
+            b_ark: e.b_ark,
+            mailbox_mode,
+            mailbox_pubkey: e.mailbox_pubkey.clone(),
+            mailbox_dh: e.mailbox_dh.clone(),
+            epoch_fallback,
+            sig: e.sig,
+            request_id: e.request_id,
+        };
+        let ext_scan = secp256k1::PublicKey::from_slice(&e.b_scan)
+            .map_err(|_| PayoutError::RegistrationCode("invalid-message"))?
+            .x_only_public_key()
+            .0;
+        let configured_ark = self
+            .registration_ark_id
+            .ok_or(PayoutError::RegistrationCode("wrong-ark-server"))?;
+        if let Some(code) = request.error_code(&e.sp_id, &ext_scan, &e.b_spend, &configured_ark) {
+            return Err(PayoutError::RegistrationCode(code));
+        }
+        let digest = request
+            .signed_fields_digest(&e.sp_id)
+            .map_err(|_| PayoutError::RegistrationCode("invalid-message"))?;
+        let stored_mode = match mailbox_mode {
+            spc_ext::MailboxMode::None => MailboxMode::None,
+            spc_ext::MailboxMode::Static => MailboxMode::Static,
+            spc_ext::MailboxMode::EpochDerived => MailboxMode::EpochDerived,
+            spc_ext::MailboxMode::EpochRegistered => MailboxMode::EpochRegistered,
+        };
+        let stored_fallback = match epoch_fallback {
+            spc_ext::EpochFallback::Static => EpochFallback::Static,
+            spc_ext::EpochFallback::Hold => EpochFallback::Hold,
+        };
+        let effect = RegistrationEffect::Delivery {
+            identity: SpIdentityRow {
                 sp_id: e.sp_id,
                 b_scan: e.b_scan.to_vec(),
                 b_spend: e.b_spend.to_vec(),
                 network: identity_network(self.network, 1),
-            })
-            .await?;
-        let mode = match e.mailbox_mode {
-            0 => MailboxMode::None,
-            1 => MailboxMode::Static,
-            2 => MailboxMode::EpochDerived,
-            3 => MailboxMode::EpochRegistered,
-            _ => return Err(PayoutError::Registration),
-        };
-        self.store
-            .upsert_ark_delivery(&ArkDeliveryRow {
+            },
+            delivery: ArkDeliveryRow {
                 sp_id: e.sp_id,
                 ark_id: e.ark_id,
                 b_ark: e.b_ark.to_vec(),
-                mailbox_mode: mode,
-                mailbox_m: if e.mailbox_pubkey.is_empty() {
-                    None
-                } else {
-                    Some(e.mailbox_pubkey)
-                },
-                mailbox_d: if e.mailbox_dh.is_empty() {
-                    None
-                } else {
-                    Some(e.mailbox_dh)
-                },
-            })
-            .await?;
-        // Registration is durable above; bump then publish.
-        let rev = self.store.bump_front_rev().await?;
-        let event = FrontEvent::ArkRegApplied {
-            rev,
-            sp_id: e.sp_id,
+                mailbox_mode: stored_mode,
+                mailbox_m: (!e.mailbox_pubkey.is_empty()).then_some(e.mailbox_pubkey),
+                mailbox_d: (!e.mailbox_dh.is_empty()).then_some(e.mailbox_dh),
+                epoch_fallback: stored_fallback,
+            },
         };
-        if let Ok(bytes) = event.encode() {
-            let _ = self.streams.add(&self.front_events_stream, &bytes).await;
+        let resolution = self
+            .store
+            .apply_registration(effect, e.request_id, digest)
+            .await?;
+        self.complete_registration(&resolution, e.attempt, Vec::new())
+            .await
+    }
+
+    async fn on_epoch_reg(&self, payload: &[u8]) -> Result<(), PayoutError> {
+        let e = ArkEpochRegEvent::decode(payload)?;
+        let identity = self
+            .store
+            .identity(&e.sp_id)
+            .await?
+            .ok_or(PayoutError::RegistrationCode("invalid-message"))?;
+        let scan = secp256k1::PublicKey::from_slice(&identity.b_scan)
+            .map_err(|_| PayoutError::RegistrationCode("invalid-message"))?
+            .x_only_public_key()
+            .0;
+        let request = spc_ext::RegisterEpochMailboxes {
+            entries: e.entries.clone(),
+            sig: e.sig,
+            request_id: e.request_id,
+        };
+        request
+            .verify(&e.sp_id, &scan)
+            .map_err(|_| PayoutError::RegistrationCode("bad-signature"))?;
+        let digest = request
+            .signed_fields_digest(&e.sp_id)
+            .map_err(|_| PayoutError::RegistrationCode("invalid-message"))?;
+        let delivery = self.store.ark_delivery(&e.sp_id).await?;
+        let Some(delivery) = delivery else {
+            return Err(PayoutError::RegistrationCode("invalid-message"));
+        };
+        if delivery.mailbox_mode != MailboxMode::EpochRegistered {
+            return Err(PayoutError::RegistrationCode("bad-mailbox-fields"));
         }
+
+        let mut entries = Vec::with_capacity(e.entries.len());
+        for entry in &e.entries {
+            let height = u32::from_be_bytes(
+                entry[..4]
+                    .try_into()
+                    .map_err(|_| PayoutError::RegistrationCode("invalid-message"))?,
+            );
+            let mailbox_mi: [u8; 33] = entry[4..]
+                .try_into()
+                .map_err(|_| PayoutError::RegistrationCode("invalid-message"))?;
+            secp256k1::PublicKey::from_slice(&mailbox_mi)
+                .map_err(|_| PayoutError::RegistrationCode("invalid-point"))?;
+            entries.push(ArkEpochMailboxRow {
+                sp_id: e.sp_id,
+                height,
+                mailbox_mi,
+            });
+        }
+        let resolution = self
+            .store
+            .apply_registration(
+                RegistrationEffect::EpochMailboxes {
+                    sp_id: e.sp_id,
+                    entries: entries.clone(),
+                },
+                e.request_id,
+                digest,
+            )
+            .await?;
+        self.complete_registration(&resolution, e.attempt, entries)
+            .await
+    }
+
+    async fn reject_identity(&self, payload: &[u8], code: &'static str) -> Result<(), PayoutError> {
+        let e = ArkRegEvent::decode(payload)
+            .map_err(|_| PayoutError::RegistrationCode("invalid-message"))?;
+        let request = identity_request(&e)?;
+        let digest = request
+            .signed_fields_digest(&e.sp_id)
+            .map_err(|_| PayoutError::RegistrationCode("invalid-message"))?;
+        let resolution = self
+            .store
+            .reject_registration(
+                &identity_effect(&e, identity_network(self.network, 1)),
+                e.request_id,
+                digest,
+                code,
+            )
+            .await?;
+        self.complete_registration(&resolution, e.attempt, Vec::new())
+            .await
+    }
+
+    async fn reject_epoch(&self, payload: &[u8], code: &'static str) -> Result<(), PayoutError> {
+        let e = ArkEpochRegEvent::decode(payload)
+            .map_err(|_| PayoutError::RegistrationCode("invalid-message"))?;
+        let request = spc_ext::RegisterEpochMailboxes {
+            entries: e.entries.clone(),
+            sig: e.sig,
+            request_id: e.request_id,
+        };
+        let digest = request
+            .signed_fields_digest(&e.sp_id)
+            .map_err(|_| PayoutError::RegistrationCode("invalid-message"))?;
+        let entries = epoch_rows(&e)?;
+        let resolution = self
+            .store
+            .reject_registration(
+                &RegistrationEffect::EpochMailboxes {
+                    sp_id: e.sp_id,
+                    entries,
+                },
+                e.request_id,
+                digest,
+                code,
+            )
+            .await?;
+        self.complete_registration(&resolution, e.attempt, Vec::new())
+            .await
+    }
+
+    /// Cache the already-durable resolution, then propagate the current full
+    /// capability to every front. A duplicate after Redis cache expiry follows
+    /// exactly this path again; a superseded replay never restores old fields.
+    async fn complete_registration(
+        &self,
+        resolution: &RegistrationResolution,
+        attempt: [u8; 16],
+        epoch_mailboxes: Vec<ArkEpochMailboxRow>,
+    ) -> Result<(), PayoutError> {
+        let expires_at = unix_secs().saturating_add(self.registration_ack_ttl_secs);
+        let ack = ArkRegistrationAck::from_resolution(resolution, &attempt, expires_at);
+        let bytes = serde_json::to_string(&ack)
+            .map_err(|e| PayoutError::LedgerEvent(format!("registration ack json: {e}")))?;
+        self.streams
+            .hset(
+                &self.registration_ack_key,
+                &registration_ack_field(&resolution.sp_id, resolution.request_id, &attempt),
+                &bytes,
+            )
+            .await?;
+        self.streams
+            .expire(&self.registration_ack_key, self.registration_ack_ttl_secs)
+            .await?;
+        if !resolution.is_success() {
+            return Ok(());
+        }
+
+        let identity = self
+            .store
+            .identity(&resolution.sp_id)
+            .await?
+            .ok_or(PayoutError::Registration)?;
+        let delivery = self
+            .store
+            .ark_delivery(&resolution.sp_id)
+            .await?
+            .ok_or(PayoutError::Registration)?;
+        let state = match resolution.outcome {
+            RegistrationOutcome::Applied => spc_ext::RegistrationSuccessState::Applied,
+            RegistrationOutcome::AlreadyApplied => {
+                spc_ext::RegistrationSuccessState::AlreadyApplied
+            }
+            RegistrationOutcome::Superseded => spc_ext::RegistrationSuccessState::Superseded,
+            _ => return Err(PayoutError::Registration),
+        };
+        let event_rev = self.store.bump_front_rev().await?;
+        let event = FrontEvent::ArkRegApplied {
+            rev: event_rev,
+            sp_id: resolution.sp_id,
+            request_id: resolution.request_id,
+            registration_rev: resolution.registration_rev,
+            state,
+            identity,
+            delivery,
+            epoch_mailboxes,
+        };
+        let bytes = event
+            .encode()
+            .map_err(|e| PayoutError::LedgerEvent(e.to_string()))?;
+        self.streams.add(&self.front_events_stream, &bytes).await?;
         Ok(())
+    }
+
+    /// One deterministic registration-stream pass, also used by real
+    /// PostgreSQL/Redis integration tests. Postgres failures leave entries
+    /// unacknowledged; structurally invalid entries are acknowledged and logged
+    /// because no retry can make them valid.
+    pub async fn process_registrations_once(&self) -> Result<usize, PayoutError> {
+        self.streams
+            .ensure_group_from(&self.registration_stream, GROUP, "0")
+            .await?;
+        let new = self
+            .streams
+            .read_group(&self.registration_stream, GROUP, CONSUMER, 32)
+            .await?;
+        let pending = self
+            .streams
+            .read_pending(&self.registration_stream, GROUP, CONSUMER, 64)
+            .await?;
+        let mut seen = std::collections::BTreeSet::new();
+        let mut handled = 0usize;
+        for (id, payload) in new.into_iter().chain(pending) {
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            match self.on_reg(&payload).await {
+                Ok(()) => {
+                    self.streams
+                        .ack(&self.registration_stream, GROUP, &id)
+                        .await?;
+                    handled += 1;
+                }
+                Err(PayoutError::RegistrationCode(code)) => {
+                    tracing::warn!(id, code, "invalid registration stream entry rejected");
+                    self.streams
+                        .ack(&self.registration_stream, GROUP, &id)
+                        .await?;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(handled)
     }
 
     /// Re-emit `LedgerApplied` only for confirmed blocks whose event has not
@@ -1656,6 +2499,9 @@ impl PayoutService {
     /// is left alone; a row with no destination or over the cap is skipped
     /// with a warning (the row stays scheduled).
     async fn emit_due_ark_orders(&self) -> Result<(), PayoutError> {
+        if self.aggregate_server.is_some() {
+            return self.emit_aggregate_orders().await;
+        }
         let emissions = self.store.scheduled_ark_emissions().await?;
         if emissions.is_empty() {
             return Ok(());
@@ -1680,6 +2526,24 @@ impl PayoutService {
             // emission can be one confirmation early; `ark` holds it until
             // the tip reaches `not_before_height`.
             if row.due_height > tip {
+                continue;
+            }
+            // A due row is not active-chain evidence. Never publish while
+            // canonical membership is unknown or its block has been removed.
+            if !matches!(
+                self.chain
+                    .is_active(&row.block_hash, row.block_height)
+                    .await,
+                Ok(true)
+            ) {
+                tracing::warn!("ark_emission_noncanonical: holding for reorg reconciliation");
+                continue;
+            }
+            if row.is_remainder && row.sats < spc_store::aggregation::MIN_OVERAGE_SATS {
+                // SPEC requires aggregation, but AGGREGATEDEST is unresolved.
+                // Keep the booked liability visible instead of creating a
+                // forbidden micro-VTXO or guessing another epoch's destination.
+                tracing::warn!("aggregate_destination_unbound: remainder remains scheduled");
                 continue;
             }
             if row.dest_id.is_empty() {
@@ -1723,30 +2587,373 @@ impl PayoutService {
         Ok(())
     }
 
+    async fn canonical_members(
+        &self,
+        members: &[spc_store::aggregate_store::AggregateMember],
+    ) -> Option<(u32, [u8; 32], BTreeSet<[u8; 32]>)> {
+        if !self.chain.authoritative() {
+            return None;
+        }
+        let tip = self.chain.tip_height().await.ok()?;
+        let tip_hash = self.chain.block_hash_at(tip).await.ok()??;
+        let mut canonical = BTreeSet::new();
+        for member in members {
+            let actual = self.chain.block_hash_at(member.block_height).await.ok()??;
+            if actual == member.block_hash {
+                canonical.insert(actual);
+            }
+        }
+        if self.chain.tip_height().await.ok()? != tip
+            || self.chain.block_hash_at(tip).await.ok()?? != tip_hash
+        {
+            return None;
+        }
+        Some((tip, tip_hash, canonical))
+    }
+
+    async fn process_authorizations(&self) -> Result<(), PayoutError> {
+        use spc_ext::authorization::{AuthorizationRequest, GRANTS_KEY, REQUESTS_STREAM};
+        let Some(signer) = &self.order_key else {
+            return Ok(());
+        };
+        let requests = self
+            .streams
+            .read_group(REQUESTS_STREAM, GROUP, CONSUMER, 16)
+            .await?;
+        for (stream_id, bytes) in requests {
+            if let Ok(request) = AuthorizationRequest::decode(&bytes) {
+                if let Some(frozen) = self.store.aggregate(&request.order_id).await? {
+                    if let Some((tip, hash, canonical)) =
+                        self.canonical_members(&frozen.members).await
+                    {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map_err(|_| PayoutError::Overflow)?
+                            .as_secs();
+                        if let Some(grant) = self
+                            .store
+                            .authorize_aggregate(&request, tip, hash, &canonical, now, signer)
+                            .await?
+                        {
+                            let field = format!(
+                                "{}:{}",
+                                hex::encode(request.order_id),
+                                hex::encode(request.nonce)
+                            );
+                            self.streams
+                                .hset(GRANTS_KEY, &field, &hex::encode(grant.encode()))
+                                .await?;
+                            self.streams.expire(GRANTS_KEY, 60).await?; // cleanup only, never send authority
+                        }
+                    }
+                }
+            }
+            self.streams.ack(REQUESTS_STREAM, GROUP, &stream_id).await?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "ark")]
+    async fn emit_aggregate_orders(&self) -> Result<(), PayoutError> {
+        use spc_store::aggregate_store::{bounded_members, DeliveryLimits};
+        let Some((address, network)) = &self.aggregate_server else {
+            return Ok(());
+        };
+        let Some(signer) = &self.order_key else {
+            return Ok(());
+        };
+        let server = match server_rpc::ServerConnection::builder()
+            .address(address.clone())
+            .network(*network)
+            .connect()
+            .await
+        {
+            Ok(server) => server,
+            Err(error) => {
+                tracing::warn!(error=%error,"aggregate delivery policy unavailable");
+                return Ok(());
+            }
+        };
+        let info = server.ark_info().await;
+        let actual_id =
+            <[u8; 4]>::from(ark::address::ArkId::from_server_pubkey(info.server_pubkey));
+        if self.registration_ark_id.is_some_and(|id| id != actual_id)
+            || info.fees.validate().is_err()
+        {
+            return Err(PayoutError::Snapshot("Ark provider policy mismatch"));
+        }
+        // Pinned stock arkoor supports positive subdust outputs and has no
+        // arkoor fee entry; max_vtxo_amount is discovered from actual ArkInfo.
+        // Board/refresh/offboard fees remain provider-discovered pool expense.
+        let circuit = if self.max_order_sats == 0 {
+            5_000_000
+        } else {
+            self.max_order_sats
+        };
+        let limits = DeliveryLimits {
+            min_sats: 1,
+            max_sats: info
+                .max_vtxo_amount
+                .map_or(circuit, |v| v.to_sat().min(circuit)),
+            max_members: 2048,
+        };
+        let emissions = self.store.scheduled_ark_emissions().await?;
+        let identities: BTreeSet<_> = emissions.iter().map(|e| e.sp_id).collect();
+        for identity in identities {
+            let candidates = self.store.aggregate_candidates(&identity).await?;
+            let Some((tip, tip_hash, canonical)) = self.canonical_members(&candidates).await else {
+                continue;
+            };
+            let candidates = candidates
+                .into_iter()
+                .filter(|r| canonical.contains(&r.block_hash))
+                .collect();
+            let selected = bounded_members(
+                candidates,
+                tip,
+                limits,
+                spc_store::aggregation::MIN_OVERAGE_SATS,
+                spc_store::aggregation::OVERAGE_MAX_DELAY_BLOCKS,
+            )?;
+            if selected.is_empty() {
+                continue;
+            }
+            self.store
+                .freeze_aggregate_bound(
+                    &selected,
+                    tip,
+                    tip_hash,
+                    signer,
+                    info.server_pubkey.serialize(),
+                )
+                .await?;
+        }
+        for id in self.store.publishable_aggregate_ids().await? {
+            let Some(frozen) = self.store.aggregate(&id).await? else {
+                continue;
+            };
+            let Some((_, _, canonical)) = self.canonical_members(&frozen.members).await else {
+                continue;
+            };
+            if canonical.len() != frozen.members.len() {
+                if !self
+                    .store
+                    .cancel_aggregate_without_authorization(&id, &canonical)
+                    .await?
+                {
+                    self.store.block_aggregate_unknown(&id).await?;
+                }
+                continue;
+            }
+            self.store.publish_aggregate(&id).await?;
+            let bytes = frozen
+                .order
+                .encode()
+                .map_err(|_| PayoutError::Snapshot("aggregate order"))?;
+            self.streams.add(&self.orders_stream, &bytes).await?;
+        }
+        Ok(())
+    }
+    #[cfg(not(feature = "ark"))]
+    async fn emit_aggregate_orders(&self) -> Result<(), PayoutError> {
+        tracing::warn!("aggregate delivery requires the stock Ark policy/proof adapter");
+        Ok(())
+    }
+
+    async fn apply_proved_receipt(&self, bytes: &[u8]) -> Result<(), PayoutError> {
+        use ark::ProtocolEncoding;
+        use bitcoin::hashes::Hash;
+        let receipt = spc_ext::authorization::ProvedReceipt::decode(bytes)
+            .map_err(|_| PayoutError::Snapshot("aggregate receipt encoding"))?;
+        let grant = &receipt.grant;
+        let Some(signer) = &self.order_key else {
+            return Err(PayoutError::Snapshot("receipt signer unavailable"));
+        };
+        grant
+            .verify_signature(&signer.x_only_public_key().0)
+            .map_err(|_| PayoutError::Snapshot("receipt grant signature"))?;
+        let frozen = self
+            .store
+            .aggregate(&grant.request.order_id)
+            .await?
+            .ok_or(PayoutError::Snapshot("unknown aggregate receipt"))?;
+        let address: ark::Address = frozen
+            .order
+            .ark_address
+            .parse()
+            .map_err(|_| PayoutError::Snapshot("aggregate address"))?;
+        let server = frozen
+            .server_pubkey
+            .ok_or(PayoutError::Snapshot("frozen server proof unavailable"))?;
+        let mut total = 0u64;
+        let mut expiry = u32::MAX;
+        let mut ids = BTreeSet::new();
+        for proof in &receipt.vtxos {
+            let vtxo = ark::Vtxo::<ark::vtxo::Full>::deserialize(proof)
+                .map_err(|_| PayoutError::Snapshot("VTXO proof encoding"))?;
+            if vtxo.serialize() != *proof
+                || vtxo.policy() != address.policy()
+                || vtxo.server_pubkey().serialize() != server
+            {
+                return Err(PayoutError::Snapshot("VTXO destination/proof mismatch"));
+            }
+            let anchor = self
+                .chain
+                .transaction(&vtxo.chain_anchor().txid.to_byte_array())
+                .await
+                .map_err(|e| PayoutError::LedgerEvent(e.to_string()))?
+                .ok_or(PayoutError::Snapshot(
+                    "VTXO anchor unavailable; outcome unknown",
+                ))?;
+            vtxo.validate(&anchor)
+                .map_err(|_| PayoutError::Snapshot("invalid VTXO signature/ancestry proof"))?;
+            total = total
+                .checked_add(vtxo.amount().to_sat())
+                .ok_or(PayoutError::Overflow)?;
+            expiry = expiry.min(vtxo.expiry_height().to_u32());
+            if !ids.insert(vtxo.id().to_bytes()) {
+                return Err(PayoutError::Snapshot("duplicate VTXO proof"));
+            }
+        }
+        if total != receipt.sats || total != frozen.order.sats {
+            return Err(PayoutError::Snapshot("partial aggregate delivery"));
+        }
+        let Some((_, _, canonical)) = self.canonical_members(&frozen.members).await else {
+            return Err(PayoutError::Snapshot(
+                "aggregate receipt canonicality unknown",
+            ));
+        };
+        let first = ids
+            .first()
+            .ok_or(PayoutError::Snapshot("empty aggregate delivery"))?;
+        self.store
+            .resolve_aggregate_sent(
+                &grant.request,
+                grant.revision,
+                total,
+                spc_store::aggregate_store::SentDeliveryProof {
+                    vtxo_id: first,
+                    expiry,
+                    proof: bytes,
+                },
+                &canonical,
+            )
+            .await?;
+        Ok(())
+    }
+
     /// Consume `spc:ark:receipts` and close out scheduled payouts
     /// (SPEC §11.3). `Sent` records the VTXO and never credits pending;
     /// `Failed` moves the sats to pending, never to forfeit.
     async fn process_receipts_once(&self) -> Result<(), PayoutError> {
-        let entries = self
+        let mut entries = self
             .streams
             .read_group(&self.receipts_stream, GROUP, CONSUMER, 64)
             .await?;
+        let cursor = self.store.receipt_cursor(&self.receipts_stream).await?;
+        let pending = self
+            .streams
+            .read_pending_after(&self.receipts_stream, GROUP, CONSUMER, 64, &cursor)
+            .await?;
+        let next_cursor = pending
+            .last()
+            .map(|(id, _)| id.clone())
+            .unwrap_or_else(|| "0".into());
+        entries.extend(pending);
+        let mut seen = BTreeSet::new();
+        let mut terminal_count = 0usize;
+        let mut retry_count = 0usize;
         for (id, payload) in entries {
-            let receipt = match ArkSendReceipt::decode(&payload) {
-                Ok(receipt) => receipt,
-                Err(e) => {
-                    tracing::warn!(error = %e, "undecodable ark receipt dropped");
-                    self.streams.ack(&self.receipts_stream, GROUP, &id).await?;
-                    continue;
-                }
-            };
-            if let Err(e) = self.apply_receipt(&receipt).await {
-                // Leave the receipt unacked: the store update failed and is
-                // retried on the next pass.
-                tracing::error!(error = %e, "ark receipt not applied");
+            if !seen.insert(id.clone()) {
                 continue;
             }
-            self.streams.ack(&self.receipts_stream, GROUP, &id).await?;
+            let result = if payload.starts_with(b"SPRP") {
+                self.apply_proved_receipt(&payload).await
+            } else if self.aggregate_server.is_some() {
+                Err(PayoutError::Snapshot(
+                    "legacy receipt forbidden for aggregate mode",
+                ))
+            } else {
+                match ArkSendReceipt::decode(&payload) {
+                    Ok(receipt) => self.apply_receipt(&receipt).await,
+                    Err(_) => Err(PayoutError::Snapshot("aggregate receipt encoding")),
+                }
+            };
+            match result {
+                Ok(()) => {
+                    self.store
+                        .record_receipt_disposition(
+                            &self.receipts_stream,
+                            &id,
+                            "applied",
+                            "verified",
+                            &payload,
+                        )
+                        .await?;
+                    self.streams.ack(&self.receipts_stream, GROUP, &id).await?;
+                }
+                Err(error) => {
+                    let terminal = matches!(
+                        &error,
+                        PayoutError::Snapshot(
+                            "legacy receipt forbidden for aggregate mode"
+                                | "aggregate receipt encoding"
+                                | "receipt grant signature"
+                                | "aggregate address"
+                                | "VTXO proof encoding"
+                                | "VTXO destination/proof mismatch"
+                                | "invalid VTXO signature/ancestry proof"
+                                | "duplicate VTXO proof"
+                                | "partial aggregate delivery"
+                                | "empty aggregate delivery"
+                        )
+                    ) || matches!(
+                        &error,
+                        PayoutError::Store(spc_store::postgres::StoreError::Invalid(
+                            "aggregate sent proof"
+                                | "aggregate partial or mismatched receipt"
+                                | "aggregate receipt authorization mismatch"
+                                | "aggregate receipt replay mismatch"
+                                | "aggregate member cannot accept a legacy Sent receipt"
+                        ))
+                    );
+                    if terminal {
+                        terminal_count += 1;
+                    } else {
+                        retry_count += 1;
+                    }
+                    self.store
+                        .record_receipt_disposition(
+                            &self.receipts_stream,
+                            &id,
+                            if terminal {
+                                "terminal_invalid"
+                            } else {
+                                "retry_unknown"
+                            },
+                            if terminal {
+                                "invalid proof/binding"
+                            } else {
+                                "proof source unavailable"
+                            },
+                            &payload,
+                        )
+                        .await?;
+                    if terminal {
+                        self.streams.ack(&self.receipts_stream, GROUP, &id).await?;
+                    }
+                }
+            }
+        }
+        self.store
+            .set_receipt_cursor(&self.receipts_stream, &next_cursor)
+            .await?;
+        if terminal_count + retry_count > 0 {
+            tracing::warn!(
+                terminal_count,
+                retry_count,
+                "receipt batch retained evidence without releasing uncertain reservations"
+            );
         }
         Ok(())
     }
@@ -1814,16 +3021,116 @@ impl PayoutService {
         // (rounded up) even if the configured retention is smaller: under-
         // retention is a silent settlement hold, over-retention only costs
         // storage.
+        // Store chooses the actual deletion horizon per stored row version;
+        // this legacy calculation never expands v1 retention to the v2 limit.
         let retain = scrub_retain_windows(
             self.scrub.retain_windows,
             self.confirmation_depth,
             self.accounting.window_n,
         );
         self.store
-            .scrub(tip, retain, self.scrub.scrub_after_blocks)
+            .scrub(
+                tip,
+                retain,
+                V2_RETENTION_HEIGHT_BLOCKS,
+                self.scrub.scrub_after_blocks,
+            )
             .await?;
         Ok(())
     }
+}
+
+fn identity_request(e: &ArkRegEvent) -> Result<spc_ext::SetArkIdentity, PayoutError> {
+    let mailbox_mode = match e.mailbox_mode {
+        0 => spc_ext::MailboxMode::None,
+        1 => spc_ext::MailboxMode::Static,
+        2 => spc_ext::MailboxMode::EpochDerived,
+        3 => spc_ext::MailboxMode::EpochRegistered,
+        _ => return Err(PayoutError::RegistrationCode("invalid-message")),
+    };
+    let epoch_fallback = match e.epoch_fallback {
+        0 => spc_ext::EpochFallback::Static,
+        1 => spc_ext::EpochFallback::Hold,
+        _ => return Err(PayoutError::RegistrationCode("invalid-message")),
+    };
+    Ok(spc_ext::SetArkIdentity {
+        ark_id: e.ark_id,
+        b_ark: e.b_ark,
+        mailbox_mode,
+        mailbox_pubkey: e.mailbox_pubkey.clone(),
+        mailbox_dh: e.mailbox_dh.clone(),
+        epoch_fallback,
+        sig: e.sig,
+        request_id: e.request_id,
+    })
+}
+
+fn identity_effect(e: &ArkRegEvent, network: i16) -> RegistrationEffect {
+    let mailbox_mode = match e.mailbox_mode {
+        0 => MailboxMode::None,
+        1 => MailboxMode::Static,
+        2 => MailboxMode::EpochDerived,
+        3 => MailboxMode::EpochRegistered,
+        _ => MailboxMode::None,
+    };
+    let epoch_fallback = match e.epoch_fallback {
+        0 => EpochFallback::Static,
+        1 => EpochFallback::Hold,
+        _ => EpochFallback::Static,
+    };
+    RegistrationEffect::Delivery {
+        identity: SpIdentityRow {
+            sp_id: e.sp_id,
+            b_scan: e.b_scan.to_vec(),
+            b_spend: e.b_spend.to_vec(),
+            network,
+        },
+        delivery: ArkDeliveryRow {
+            sp_id: e.sp_id,
+            ark_id: e.ark_id,
+            b_ark: e.b_ark.to_vec(),
+            mailbox_mode,
+            mailbox_m: (!e.mailbox_pubkey.is_empty()).then_some(e.mailbox_pubkey.clone()),
+            mailbox_d: (!e.mailbox_dh.is_empty()).then_some(e.mailbox_dh.clone()),
+            epoch_fallback,
+        },
+    }
+}
+
+fn epoch_rows(e: &ArkEpochRegEvent) -> Result<Vec<ArkEpochMailboxRow>, PayoutError> {
+    e.entries
+        .iter()
+        .map(|entry| {
+            let height = u32::from_be_bytes(
+                entry[..4]
+                    .try_into()
+                    .map_err(|_| PayoutError::RegistrationCode("invalid-message"))?,
+            );
+            let mailbox_mi: [u8; 33] = entry[4..]
+                .try_into()
+                .map_err(|_| PayoutError::RegistrationCode("invalid-message"))?;
+            Ok(ArkEpochMailboxRow {
+                sp_id: e.sp_id,
+                height,
+                mailbox_mi,
+            })
+        })
+        .collect()
+}
+
+pub fn registration_ack_field(sp_id: &[u8; 32], request_id: u32, attempt: &[u8; 16]) -> String {
+    format!(
+        "reg:{}:{request_id}:{}",
+        hex::encode(sp_id),
+        hex::encode(attempt)
+    )
+}
+
+fn unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
 }
 
 /// Deterministic `order_id` for an `ark_payout` row. The same
@@ -1846,7 +3153,6 @@ pub fn ark_order_id(block_hash: &[u8; 32], sp_id: &[u8; 32]) -> [u8; 16] {
 enum Kind {
     Slice,
     Block,
-    Reg,
 }
 
 /// Conservative `slice_credit` retention in blocks. A block at the
@@ -1932,6 +3238,8 @@ mod tests {
             difficulty: difficulty.to_string(),
             root: [0u8; 32],
             shares: Vec::new(),
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
             credits: credits
                 .iter()
                 .map(|(sp_id, d, df)| SliceCreditRow {
@@ -1946,8 +3254,9 @@ mod tests {
     fn entry(sp_id: [u8; 32], rail: Rail, p_x: Option<[u8; 32]>, sats: u64) -> Entry {
         Entry {
             sp_id,
+            owed_sats: sats,
             rail,
-            p_x: p_x.map(|x| x.to_vec()).unwrap_or_default(),
+            p_x: p_x.into_iter().collect(),
             dest_id: Vec::new(),
             sats,
         }
@@ -1961,6 +3270,393 @@ mod tests {
         spc_accounting::p2tr_script(&[0x99; 32])
     }
 
+    /// Explicit current-ladder settlement fixture, with independently allocated
+    /// valid output points. Crypto ownership is tested by the scanner vectors.
+    fn ladder_fixture(owed: &[(SpId, u64)], pool: u64) -> (Vec<Entry>, Vec<CoinbaseOutput>) {
+        use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
+        let secp = Secp256k1::new();
+        let mut entries = Vec::new();
+        let mut outputs = vec![output(pool_script(), pool)];
+        for (id, owed) in owed {
+            let shape = spc_accounting::decompose(*owed, 1024).unwrap();
+            let mut keys = Vec::new();
+            for (k, sats) in shape.outputs.into_iter().enumerate() {
+                let mut secret = [0u8; 32];
+                secret[0] = 1;
+                secret[1..28].copy_from_slice(&id[..27]);
+                secret[28..].copy_from_slice(&(k as u32).to_be_bytes());
+                let key =
+                    PublicKey::from_secret_key(&secp, &SecretKey::from_slice(&secret).unwrap())
+                        .x_only_public_key()
+                        .0
+                        .serialize();
+                outputs.push(output(p2tr_script(&key), sats));
+                keys.push(key);
+            }
+            entries.push(Entry {
+                sp_id: *id,
+                owed_sats: *owed,
+                rail: Rail::Coinbase,
+                p_x: keys,
+                dest_id: vec![],
+                sats: shape.paid,
+            });
+        }
+        outputs[1..].sort_by(|a, b| a.script.cmp(&b.script));
+        (entries, outputs)
+    }
+
+    #[test]
+    fn ladder_grouped_settlement_binds_full_owed_and_witness_shape() {
+        use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
+        let id = id(7);
+        let secp = Secp256k1::new();
+        let keys: Vec<_> = (1..=4)
+            .map(|i| {
+                PublicKey::from_secret_key(&secp, &SecretKey::from_slice(&[i; 32]).unwrap())
+                    .x_only_public_key()
+                    .0
+                    .serialize()
+            })
+            .collect();
+        let entries = vec![Entry {
+            sp_id: id,
+            owed_sats: 9_500_123,
+            rail: Rail::Coinbase,
+            p_x: keys.clone(),
+            dest_id: vec![1],
+            sats: 9_500_000,
+        }];
+        let mut coinbase = vec![output(pool_script(), 123)];
+        for (key, amount) in keys.iter().zip([5_000_000, 3_000_000, 1_000_000, 500_000]) {
+            coinbase.push(output(p2tr_script(key), amount));
+        }
+        coinbase[1..].sort_by(|a, b| a.script.cmp(&b.script));
+        coinbase.push(output(crate::witness::commitment_script(&[0x42; 32]), 0));
+        let mut slices = vec![slice_row(1, 100, 1, 1, &[(id, 1, 0)])];
+        slices[0].work_unit_version = WorkUnitVersion::V2;
+        slices[0].work_unit_fingerprint = Some([0x55; 32]);
+        let hw = high_water(0, "1");
+        let pending = BTreeMap::new();
+        let delivered = BTreeSet::from([id]);
+        let input = ReconstructInput {
+            height: 101,
+            high_water: &hw,
+            entries: &entries,
+            slices: &slices,
+            work_unit_version: WorkUnitVersion::V2,
+            work_unit_fingerprint: Some([0x55; 32]),
+            window_rule: WindowRule::NetworkBlockWork,
+            window_target: Some(1),
+            window_truncated: false,
+            pending: &pending,
+            coinbase: &coinbase,
+            economics: BlockEconomics {
+                subsidy: 9_500_123,
+                fees: 0,
+            },
+            delivered: &delivered,
+            cfg: AccountingConfig {
+                fee_bps: 0,
+                ..AccountingConfig::default()
+            },
+            coinbase_threshold_sats: 330,
+        };
+        let result = reconstruct_settlement(&input).unwrap();
+        assert_eq!(result.mode, TemplateMode::Pool);
+        assert_eq!(result.ledger.len(), 1);
+        assert_eq!(result.ledger[0].paid_sats, 9_500_000);
+        assert_eq!(result.ledger[0].ark_due_sats, 123);
+        assert_eq!(result.ledger[0].pending_delta, 0);
+        let mut changed = entries.clone();
+        changed[0].owed_sats += 1;
+        assert!(reconstruct_settlement(&ReconstructInput {
+            entries: &changed,
+            ..input
+        })
+        .is_err());
+        let mut changed = entries.clone();
+        changed[0].p_x.swap(0, 1);
+        assert!(reconstruct_settlement(&ReconstructInput {
+            entries: &changed,
+            ..input
+        })
+        .is_err());
+        let mut changed = entries.clone();
+        changed[0].p_x.pop();
+        assert!(reconstruct_settlement(&ReconstructInput {
+            entries: &changed,
+            ..input
+        })
+        .is_err());
+        let mut changed = entries.clone();
+        changed.push(changed[0].clone());
+        assert!(matches!(
+            reconstruct_settlement(&ReconstructInput {
+                entries: &changed,
+                ..input
+            }),
+            Err(ReconstructError::DuplicateEntry(_))
+        ));
+        assert!(matches!(
+            reconstruct_settlement(&ReconstructInput {
+                window_target: None,
+                ..input
+            }),
+            Err(ReconstructError::MissingFrozenV2Target)
+        ));
+    }
+
+    #[test]
+    fn empty_partial_and_full_settlement_repay_frozen_prior_with_signed_net_pool_value() {
+        let who = id(7);
+        let prior = BTreeMap::from([(who, 1_000_123)]);
+        let delivered = BTreeSet::new();
+        for work in [0, 1, 2] {
+            let raw = if work == 0 { 0 } else { 4_950_000_000 };
+            let owed = raw + 1_000_123;
+            let paid = owed - owed % 500_000;
+            let (entries, coinbase) = ladder_fixture(&[(who, owed)], 5_000_000_000 - paid);
+            let mut slices = Vec::new();
+            if work > 0 {
+                let mut row = slice_row(1, 100, work as u128, work, &[(who, work as u128, 0)]);
+                row.work_unit_version = WorkUnitVersion::V2;
+                row.work_unit_fingerprint = Some([0x55; 32]);
+                slices.push(row);
+            }
+            let hw = high_water(0, if work == 0 { "0" } else { "1" });
+            let input = ReconstructInput {
+                height: 101,
+                high_water: &hw,
+                entries: &entries,
+                slices: &slices,
+                work_unit_version: WorkUnitVersion::V2,
+                work_unit_fingerprint: Some([0x55; 32]),
+                window_rule: WindowRule::NetworkBlockWork,
+                window_target: Some(2),
+                window_truncated: false,
+                pending: &prior,
+                coinbase: &coinbase,
+                economics: BlockEconomics {
+                    subsidy: 5_000_000_000,
+                    fees: 0,
+                },
+                delivered: &delivered,
+                cfg: AccountingConfig {
+                    fee_bps: 100,
+                    max_payout_slots: 2048,
+                    budget_wu: 1_000_000,
+                    ..AccountingConfig::default()
+                },
+                coinbase_threshold_sats: 330,
+            };
+            let result = reconstruct_settlement(&input).unwrap();
+            assert_eq!(result.raw.get(&who).copied().unwrap_or(0), raw);
+            assert_eq!(result.ledger.len(), 1);
+            let row = &result.ledger[0];
+            assert_eq!(row.rail, LedgerRail::Coinbase);
+            assert_eq!(row.paid_sats, paid);
+            assert_eq!(row.ark_due_sats, 0);
+            assert_eq!(row.forfeited_sats, 0);
+            assert_eq!(row.pending_delta, -1_000_000);
+            assert_eq!(
+                i128::from(coinbase[0].value),
+                i128::from(5_000_000_000 - raw) + i128::from(row.pending_delta)
+            );
+            let mut wrong_prior = prior.clone();
+            *wrong_prior.get_mut(&who).unwrap() += 1;
+            assert!(reconstruct_settlement(&ReconstructInput {
+                pending: &wrong_prior,
+                ..input
+            })
+            .is_err());
+            assert!(reconstruct_settlement(&ReconstructInput {
+                window_truncated: true,
+                ..input
+            })
+            .is_err());
+            if work == 0 {
+                let missing = high_water(0, "1");
+                assert!(matches!(
+                    reconstruct_settlement(&ReconstructInput {
+                        high_water: &missing,
+                        ..input
+                    }),
+                    Err(ReconstructError::NoSlices)
+                ));
+                assert!(matches!(
+                    reconstruct_settlement(&ReconstructInput {
+                        window_target: None,
+                        ..input
+                    }),
+                    Err(ReconstructError::MissingFrozenV2Target)
+                ));
+                assert!(matches!(
+                    reconstruct_settlement(&ReconstructInput {
+                        entries: &[],
+                        ..input
+                    }),
+                    Err(ReconstructError::WindowMismatch)
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn empty_settlement_can_hold_total_owed_above_t_and_repay_a_known_identity() {
+        let held = id(1);
+        let paid_id = id(2);
+        let prior = BTreeMap::from([(held, 2_000_000), (paid_id, 600_123)]);
+        let (mut entries, coinbase) = ladder_fixture(&[(paid_id, 600_123)], 500_000);
+        entries.push(entry(held, Rail::Pending, None, 2_000_000));
+        let hw = high_water(0, "0");
+        let delivered = BTreeSet::new();
+        let input = ReconstructInput {
+            height: 101,
+            high_water: &hw,
+            entries: &entries,
+            slices: &[],
+            work_unit_version: WorkUnitVersion::V2,
+            work_unit_fingerprint: Some([0x55; 32]),
+            window_rule: WindowRule::NetworkBlockWork,
+            window_target: Some(2),
+            window_truncated: false,
+            pending: &prior,
+            coinbase: &coinbase,
+            economics: BlockEconomics {
+                subsidy: 1_000_000,
+                fees: 0,
+            },
+            delivered: &delivered,
+            cfg: AccountingConfig {
+                max_payout_slots: 2048,
+                budget_wu: 1_000_000,
+                ..AccountingConfig::default()
+            },
+            coinbase_threshold_sats: 330,
+        };
+        let result = reconstruct_settlement(&input).unwrap();
+        let held_row = result.ledger.iter().find(|r| r.sp_id == held).unwrap();
+        assert_eq!(held_row.rail, LedgerRail::Pending);
+        assert_eq!(held_row.pending_delta, 0);
+        let paid = result.ledger.iter().find(|r| r.sp_id == paid_id).unwrap();
+        assert_eq!(paid.paid_sats, 500_000);
+        assert_eq!(paid.pending_delta, -500_000);
+        assert_eq!(paid.forfeited_sats, 0);
+    }
+
+    #[test]
+    fn native_r4_failed_candidate_reconstructs_exact_net_pending_correction() {
+        let priors = BTreeMap::from([(id(1), 386_759), (id(2), 566_201), (id(3), 547_037)]);
+        let owed = [
+            (id(1), 1_699_640_490),
+            (id(2), 1_625_939_335),
+            (id(3), 1_625_920_171),
+        ];
+        let (entries, coinbase) = ladder_fixture(&owed, 49_500_000);
+        let mut row = slice_row(
+            1,
+            11,
+            67,
+            67,
+            &[(id(1), 23, 0), (id(2), 22, 0), (id(3), 22, 0)],
+        );
+        row.work_unit_version = WorkUnitVersion::V2;
+        row.work_unit_fingerprint = Some([0x55; 32]);
+        let slices = [row];
+        let hw = high_water(0, "1");
+        let delivered = BTreeSet::new();
+        let input = ReconstructInput {
+            height: 12,
+            high_water: &hw,
+            entries: &entries,
+            slices: &slices,
+            work_unit_version: WorkUnitVersion::V2,
+            work_unit_fingerprint: Some([0x55; 32]),
+            window_rule: WindowRule::NetworkBlockWork,
+            window_target: Some(65),
+            window_truncated: false,
+            pending: &priors,
+            coinbase: &coinbase,
+            economics: BlockEconomics {
+                subsidy: 5_000_000_000,
+                fees: 0,
+            },
+            delivered: &delivered,
+            cfg: AccountingConfig {
+                fee_bps: 100,
+                max_payout_slots: 2048,
+                budget_wu: 1_000_000,
+                ..AccountingConfig::default()
+            },
+            coinbase_threshold_sats: 330,
+        };
+        let result = reconstruct_settlement(&input).unwrap();
+        assert_eq!(result.raw.values().sum::<u64>(), 4_949_999_999);
+        assert_eq!(
+            result.ledger.iter().map(|r| r.paid_sats).sum::<u64>(),
+            4_950_500_000
+        );
+        assert_eq!(
+            result.pending_deltas,
+            vec![(id(1), -246_269), (id(2), -126_866), (id(3), -126_866)]
+        );
+        assert_eq!(
+            result.ledger.iter().map(|r| r.pending_delta).sum::<i64>(),
+            -500_001
+        );
+        assert!(result
+            .ledger
+            .iter()
+            .all(|r| r.ark_due_sats == 0 && r.forfeited_sats == 0));
+    }
+
+    /// A BIP 141 witness commitment output is an OP_RETURN output but not a
+    /// JD carrier: pool-template blocks with witness data must settle in
+    /// pool mode (decision 2026-11-08-pool-witness-commitment). The real JD
+    /// carrier is `OP_RETURN OP_PUSHBYTES_35 "SPc" <ser_x(A_send)>`
+    /// (`6a23535063…`, SPEC §2.4.2, `spc_crypto::carriers::emit_op_return`)
+    /// and still selects JD mode - alone or alongside a commitment - and an
+    /// unknown `OP_RETURN` output keeps selecting JD mode.
+    #[test]
+    fn a_witness_commitment_output_is_not_a_jd_carrier() {
+        let commitment = output(crate::witness::commitment_script(&[0x42; 32]), 0);
+        let pool = output(pool_script(), 100);
+        assert_eq!(detect_mode(std::slice::from_ref(&pool)), TemplateMode::Pool);
+        assert_eq!(
+            detect_mode(&[pool, commitment.clone()]),
+            TemplateMode::Pool,
+            "a pool-template commitment output must not flip mode to Jd"
+        );
+        // The actual JD carrier (spc_crypto's own emitter), alone...
+        let carrier = spc_crypto::carriers::emit_op_return(&[0x77; 32]);
+        assert_eq!(
+            carrier.as_bytes()[..3],
+            [0x6a, 0x23, 0x53][..],
+            "the real JD carrier is a 6a23 SPc push"
+        );
+        assert_eq!(
+            detect_mode(&[output(carrier.as_bytes().to_vec(), 0)]),
+            TemplateMode::Jd,
+            "the actual JD carrier selects Jd mode"
+        );
+        // ...and alongside a witness commitment: the commitment does not
+        // suppress JD detection.
+        assert_eq!(
+            detect_mode(&[output(carrier.as_bytes().to_vec(), 0), commitment]),
+            TemplateMode::Jd,
+            "a commitment output must not mask a JD carrier"
+        );
+        // An unknown OP_RETURN shape still selects JD mode.
+        let mut unknown = vec![0x6a, 0x20];
+        unknown.extend_from_slice(&[0u8; 32]);
+        assert_eq!(
+            detect_mode(&[output(unknown, 0)]),
+            TemplateMode::Jd,
+            "an unknown OP_RETURN still selects Jd mode"
+        );
+    }
+
     fn base_cfg(window_n: u32) -> AccountingConfig {
         AccountingConfig {
             fee_bps: 0,
@@ -1970,6 +3666,176 @@ mod tests {
             budget_wu: 100_000,
             overhead_wu: 0,
         }
+    }
+
+    /// R5 (Fable rework 2026-11-08): settlement's tier crosscheck mirrors the
+    /// front's 224 WU witness overhead, detected from the mined coinbase. At
+    /// the exact budget boundary (224 WU overhead + two 172 WU payout slots)
+    /// the settlement routing keeps precisely the ids the coinbase pays;
+    /// without the mirror the same budget would keep a third id the coinbase
+    /// does not carry and the routing crosscheck would diverge. A legacy
+    /// (witness-free) coinbase keeps the configured overhead unchanged.
+    #[test]
+    fn settlement_mirrors_the_witness_overhead_at_the_budget_boundary() {
+        let alice = id(0xa1);
+        let bob = id(0xb2);
+        let carol = id(0xc3);
+        let slices = vec![
+            slice_row(3, 100, 100, 1, &[(alice, 60, 0), (carol, 30, 0)]),
+            slice_row(2, 100, 100, 1, &[(bob, 40, 0)]),
+        ];
+        // The front's distribution: alice and bob paid by the coinbase,
+        // carol trimmed at the weight boundary to pending.
+        let (entries, mut coinbase) = ladder_fixture(
+            &[(alice, 6_000_000), (bob, 4_000_000), (carol, 3_000_000)],
+            7_000_000,
+        );
+        // The mined coinbase: pool output first, the two paid payouts, and
+        // the BIP 141 commitment output last (zero value).
+        let commitment = crate::witness::commitment_script(&[0x42; 32]);
+        coinbase.push(output(commitment, 0));
+        let pending = BTreeMap::new();
+        let delivered = BTreeSet::new();
+        let hw = high_water(0, "3");
+        // 224 WU commitment overhead + exactly two 172 WU payout slots.
+        let mut cfg = base_cfg(2);
+        cfg.budget_wu = 224 + 5 * 172;
+        let input = ReconstructInput {
+            height: 100,
+            high_water: &hw,
+            entries: &entries,
+            slices: &slices,
+            // Pre-migration shape: the warned slice-estimate fallback, like
+            // the neighbouring reconstruction tests.
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            window_rule: WindowRule::ShareWorkLegacy,
+            window_target: None,
+            window_truncated: false,
+            pending: &pending,
+            coinbase: &coinbase,
+            economics: BlockEconomics {
+                subsidy: 20_000_000,
+                fees: 0,
+            },
+            delivered: &delivered,
+            cfg,
+            coinbase_threshold_sats: 30,
+        };
+
+        // The mirror: the commitment output in the mined coinbase costs the
+        // settlement routing the same 224 WU the front budgeted.
+        assert_eq!(tier_config(&input).overhead_wu, 224);
+
+        let reconstructed = reconstruct_settlement(&input).unwrap();
+        // Exactly the paid ids settle on the coinbase rail with their paid
+        // values; carol stays beyond the boundary.
+        for row in &reconstructed.ledger {
+            if row.sp_id == alice {
+                assert_eq!(row.rail, LedgerRail::Coinbase);
+                assert_eq!(row.paid_sats, 6_000_000);
+            } else if row.sp_id == bob {
+                assert_eq!(row.rail, LedgerRail::Coinbase);
+                assert_eq!(row.paid_sats, 4_000_000);
+            } else if row.sp_id == carol {
+                assert_eq!(row.paid_sats, 3_000_000, "no capacity deferral");
+            } else {
+                panic!("unexpected ledger row");
+            }
+        }
+
+        // The counterfactual: the same routing with the overhead unmirrored
+        // (what settlement charged before the rework) keeps carol too, at
+        // the very same budget - the spurious divergence the mirror removes.
+        let raw = spc_accounting::RawPayouts {
+            raw: BTreeMap::from([(alice, 6_000_000), (bob, 4_000_000), (carol, 3_000_000)]),
+            pool_sats: 0,
+            r_net: 130,
+            f_net: 0,
+        };
+        let caps = BTreeMap::from([
+            (
+                alice,
+                spc_accounting::ArkCapability {
+                    // AP-2 reconciliation: `ArkCapability` gained
+                    // `registration_committed`; these T4-era counterfactual
+                    // caps stay fully unregistered.
+                    registered: false,
+                    registration_committed: false,
+                    dest_known: false,
+                },
+            ),
+            (
+                bob,
+                spc_accounting::ArkCapability {
+                    // AP-2 reconciliation: `ArkCapability` gained
+                    // `registration_committed`; these T4-era counterfactual
+                    // caps stay fully unregistered.
+                    registered: false,
+                    registration_committed: false,
+                    dest_known: false,
+                },
+            ),
+            (
+                carol,
+                spc_accounting::ArkCapability {
+                    // AP-2 reconciliation: `ArkCapability` gained
+                    // `registration_committed`; these T4-era counterfactual
+                    // caps stay fully unregistered.
+                    registered: false,
+                    registration_committed: false,
+                    dest_known: false,
+                },
+            ),
+        ]);
+        let mirrored = tier_config(&input);
+        let routing =
+            spc_accounting::route_tiers(&raw, &pending, &caps, &mirrored, 20_000_000).unwrap();
+        let kept: BTreeSet<[u8; 32]> = routing.kept.iter().map(|(id, _)| *id).collect();
+        assert_eq!(
+            kept,
+            BTreeSet::from([alice, bob, carol]),
+            "the mirrored boundary keeps exactly what the coinbase pays"
+        );
+        let unmirrored = spc_accounting::TierConfig {
+            overhead_wu: 0,
+            budget_wu: 5 * 172,
+            ..mirrored
+        };
+        let wrong =
+            spc_accounting::route_tiers(&raw, &pending, &caps, &unmirrored, 20_000_000).unwrap();
+        let too_small = spc_accounting::TierConfig {
+            overhead_wu: 224,
+            ..unmirrored
+        };
+        assert_eq!(
+            spc_accounting::route_tiers(&raw, &pending, &caps, &too_small, 20_000_000),
+            Err(spc_accounting::Error::PayoutWeight)
+        );
+        assert!(
+            wrong.kept.iter().any(|(id, _)| *id == carol),
+            "without the mirror the same budget keeps an unpaid id"
+        );
+
+        // Legacy control: a witness-free coinbase with the same payouts, at
+        // its own boundary (two slots, no overhead), settles identically -
+        // the mirror is commitment-driven, never a default.
+        let legacy_coinbase = coinbase[..coinbase.len() - 1].to_vec();
+        let mut legacy_input = input;
+        legacy_input.coinbase = &legacy_coinbase;
+        let mut legacy_cfg = cfg;
+        legacy_cfg.budget_wu = 5 * 172;
+        legacy_input.cfg = legacy_cfg;
+        assert_eq!(tier_config(&legacy_input).overhead_wu, 0);
+        let legacy = reconstruct_settlement(&legacy_input).unwrap();
+        assert_eq!(
+            legacy
+                .ledger
+                .iter()
+                .filter(|r| r.rail == LedgerRail::Coinbase)
+                .count(),
+            3
+        );
     }
 
     fn high_water(front: u8, slice_id: &str) -> BTreeMap<u8, String> {
@@ -2065,15 +3931,8 @@ mod tests {
             // Outside the N x D window even though it is below the mark.
             slice_row(1, 99, 100, 1, &[(carol, 100, 0)]),
         ];
-        let entries = vec![
-            entry(alice, Rail::Coinbase, Some(id(0x01)), 60),
-            entry(bob, Rail::Coinbase, Some(id(0x02)), 40),
-        ];
-        let coinbase = vec![
-            output(pool_script(), 100),
-            output(spc_accounting::p2tr_script(&id(0x01)), 60),
-            output(spc_accounting::p2tr_script(&id(0x02)), 40),
-        ];
+        let (entries, coinbase) =
+            ladder_fixture(&[(alice, 6_000_000), (bob, 4_000_000)], 10_000_000);
         let pending = BTreeMap::new();
         let delivered = BTreeSet::new();
         let high_water = high_water(0, "4");
@@ -2084,12 +3943,15 @@ mod tests {
             slices: &slices,
             // Pre-migration shape: no persisted target, so these tests
             // exercise the warned slice-estimate fallback.
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            window_rule: WindowRule::ShareWorkLegacy,
             window_target: None,
             window_truncated: false,
             pending: &pending,
             coinbase: &coinbase,
             economics: BlockEconomics {
-                subsidy: 200,
+                subsidy: 20_000_000,
                 fees: 0,
             },
             delivered: &delivered,
@@ -2100,10 +3962,10 @@ mod tests {
         let reconstructed = reconstruct_settlement(&input).unwrap();
         assert_eq!(reconstructed.mode, TemplateMode::Pool);
         assert_eq!(reconstructed.window, vec![3, 2]);
-        assert_eq!(reconstructed.raw.get(&alice), Some(&60));
-        assert_eq!(reconstructed.raw.get(&bob), Some(&40));
+        assert_eq!(reconstructed.raw.get(&alice), Some(&6_000_000));
+        assert_eq!(reconstructed.raw.get(&bob), Some(&4_000_000));
         assert_eq!(reconstructed.raw.get(&carol), None);
-        assert_eq!(reconstructed.t_actual, 200);
+        assert_eq!(reconstructed.t_actual, 20_000_000);
         assert_eq!(reconstructed.ledger.len(), 2);
         assert!(reconstructed
             .ledger
@@ -2142,6 +4004,9 @@ mod tests {
             slices: &slices,
             // Pre-migration shape: no persisted target, so these tests
             // exercise the warned slice-estimate fallback.
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            window_rule: WindowRule::ShareWorkLegacy,
             window_target: None,
             window_truncated: false,
             pending: &pending,
@@ -2205,6 +4070,9 @@ mod tests {
             slices: &slices,
             // Pre-migration shape: no persisted target, so these tests
             // exercise the warned slice-estimate fallback.
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            window_rule: WindowRule::ShareWorkLegacy,
             window_target: None,
             window_truncated: false,
             pending: &pending,
@@ -2249,14 +4117,8 @@ mod tests {
         let slices = vec![slice_row(2, 100, 200, 1, &[(alice, 200, 0)])];
         let mut carol_entry = entry(carol, Rail::Pending, None, 100);
         carol_entry.dest_id = b"ark-destination".to_vec();
-        let entries = vec![
-            entry(alice, Rail::Coinbase, Some(id(0x01)), 200),
-            carol_entry,
-        ];
-        let coinbase = vec![
-            output(pool_script(), 0),
-            output(spc_accounting::p2tr_script(&id(0x01)), 200),
-        ];
+        let (mut entries, coinbase) = ladder_fixture(&[(alice, 20_000_000)], 0);
+        entries.push(carol_entry);
         let pending = BTreeMap::from([(carol, 100)]);
         let delivered = BTreeSet::from([carol]);
         let high_water = high_water(0, "3");
@@ -2267,12 +4129,15 @@ mod tests {
             slices: &slices,
             // Pre-migration shape: no persisted target, so these tests
             // exercise the warned slice-estimate fallback.
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            window_rule: WindowRule::ShareWorkLegacy,
             window_target: None,
             window_truncated: false,
             pending: &pending,
             coinbase: &coinbase,
             economics: BlockEconomics {
-                subsidy: 200,
+                subsidy: 20_000_000,
                 fees: 0,
             },
             delivered: &delivered,
@@ -2300,7 +4165,7 @@ mod tests {
     /// reconstruction retries without that slice and matches the known
     /// window (SPEC §4.3, §7.4).
     #[test]
-    fn high_water_naming_the_open_slice_is_excluded_on_retry() {
+    fn high_water_naming_the_open_slice_is_rejected_without_alternative_window() {
         let alice = id(0xa1);
         let bob = id(0xb2);
         let slices = vec![
@@ -2309,15 +4174,8 @@ mod tests {
             slice_row(3, 100, 100, 1, &[(alice, 60, 0)]),
             slice_row(2, 100, 100, 1, &[(bob, 40, 0)]),
         ];
-        let entries = vec![
-            entry(alice, Rail::Coinbase, Some(id(0x01)), 60),
-            entry(bob, Rail::Coinbase, Some(id(0x02)), 40),
-        ];
-        let coinbase = vec![
-            output(pool_script(), 100),
-            output(spc_accounting::p2tr_script(&id(0x01)), 60),
-            output(spc_accounting::p2tr_script(&id(0x02)), 40),
-        ];
+        let (entries, coinbase) =
+            ladder_fixture(&[(alice, 6_000_000), (bob, 4_000_000)], 10_000_000);
         let pending = BTreeMap::new();
         let delivered = BTreeSet::new();
         let hw = high_water(0, "4");
@@ -2328,12 +4186,15 @@ mod tests {
             slices: &slices,
             // Pre-migration shape: no persisted target, so these tests
             // exercise the warned slice-estimate fallback.
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            window_rule: WindowRule::ShareWorkLegacy,
             window_target: None,
             window_truncated: false,
             pending: &pending,
             coinbase: &coinbase,
             economics: BlockEconomics {
-                subsidy: 200,
+                subsidy: 20_000_000,
                 fees: 0,
             },
             delivered: &delivered,
@@ -2341,10 +4202,10 @@ mod tests {
             coinbase_threshold_sats: 30,
         };
 
-        let reconstructed = reconstruct_settlement(&input).unwrap();
-        assert_eq!(reconstructed.window, vec![3, 2]);
-        assert_eq!(reconstructed.raw.get(&alice), Some(&60));
-        assert_eq!(reconstructed.raw.get(&bob), Some(&40));
+        assert!(matches!(
+            reconstruct_settlement(&input),
+            Err(ReconstructError::CoinbaseTierMismatch)
+        ));
     }
 
     #[test]
@@ -2355,6 +4216,9 @@ mod tests {
             high_water: &hw,
             entries: &[],
             slices: &[],
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            window_rule: WindowRule::ShareWorkLegacy,
             window_target: None,
             window_truncated: false,
             pending: &BTreeMap::new(),
@@ -2390,6 +4254,9 @@ mod tests {
             slices: &slices,
             // Pre-migration shape: no persisted target, so these tests
             // exercise the warned slice-estimate fallback.
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            window_rule: WindowRule::ShareWorkLegacy,
             window_target: None,
             window_truncated: false,
             pending: &BTreeMap::new(),
@@ -2442,6 +4309,9 @@ mod tests {
             slices: &slices,
             // Pre-migration shape: no persisted target, so these tests
             // exercise the warned slice-estimate fallback.
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            window_rule: WindowRule::ShareWorkLegacy,
             window_target: None,
             window_truncated: false,
             pending: &pending,
@@ -2460,6 +4330,31 @@ mod tests {
         let deltas = deltas_map(reconstructed.pending_deltas);
         assert_eq!(deltas.get(&alice), Some(&26)); // 96 - 70
         assert_eq!(deltas.get(&bob), Some(&16)); // 96 - 80
+    }
+
+    #[test]
+    fn v2_slice_restoration_rejects_stored_sum_mismatch_and_saturating_overflow() {
+        let id = id(0xa1);
+        let mut mismatch = slice_row(3, 100, 100, 1, &[(id, 99, 2)]);
+        mismatch.work_unit_version = WorkUnitVersion::V2;
+        mismatch.work_unit_fingerprint = Some([7; 32]);
+        let err = slice_agg(&mismatch).unwrap_err();
+        assert!(format!("{err}").contains("stored difficulty"));
+
+        let mut overflow = slice_row(4, 100, u128::MAX, 1, &[(id, u128::MAX, 1)]);
+        overflow.credits.push(SliceCreditRow {
+            sp_id: id,
+            diff_sum: "1".into(),
+            diff_fee_sum: "1".into(),
+        });
+        overflow.work_unit_version = WorkUnitVersion::V2;
+        overflow.work_unit_fingerprint = Some([7; 32]);
+        assert!(matches!(
+            slice_agg(&overflow),
+            Err(ReconstructError::WorkUnit(
+                spc_accounting::WorkUnitError::WindowWorkOverflow
+            ))
+        ));
     }
 
     #[test]
@@ -2501,15 +4396,7 @@ mod tests {
             slice_row(3, 199, 300, 1, &[(alice, 300, 0)]),
             slice_row(2, 198, 300, 1, &[(bob, 300, 0)]),
         ];
-        let entries = vec![
-            entry(alice, Rail::Coinbase, Some(id(0x01)), 300),
-            entry(bob, Rail::Coinbase, Some(id(0x02)), 300),
-        ];
-        let coinbase = vec![
-            output(pool_script(), 0),
-            output(spc_accounting::p2tr_script(&id(0x01)), 300),
-            output(spc_accounting::p2tr_script(&id(0x02)), 300),
-        ];
+        let (entries, coinbase) = ladder_fixture(&[(alice, 3_000_000), (bob, 3_000_000)], 0);
         let hw = high_water(0, "3");
         let input = ReconstructInput {
             height: 200,
@@ -2517,12 +4404,15 @@ mod tests {
             entries: &entries,
             slices: &slices,
             // The exact target the front froze for this distribution.
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            window_rule: WindowRule::ShareWorkLegacy,
             window_target: Some(600),
             window_truncated: false,
             pending: &BTreeMap::new(),
             coinbase: &coinbase,
             economics: BlockEconomics {
-                subsidy: 600,
+                subsidy: 6_000_000,
                 fees: 0,
             },
             delivered: &BTreeSet::new(),
@@ -2534,10 +4424,54 @@ mod tests {
         // The persisted 600 target takes both slices (Σ 600); the 300
         // estimate would have taken only slice 3 and paid Bob nothing.
         assert_eq!(reconstructed.window, vec![3, 2]);
-        assert_eq!(reconstructed.raw.get(&alice), Some(&300));
-        assert_eq!(reconstructed.raw.get(&bob), Some(&300));
+        assert_eq!(reconstructed.raw.get(&alice), Some(&3_000_000));
+        assert_eq!(reconstructed.raw.get(&bob), Some(&3_000_000));
         // Replay determinism: the same frozen inputs book the same ledger.
         assert_eq!(reconstruct_settlement(&input).unwrap(), reconstructed);
+    }
+
+    #[test]
+    fn v2_settlement_uses_frozen_reference_target_not_current_generation() {
+        let alice = id(0xa1);
+        let fp = [0x55; 32];
+        let mut slices = vec![
+            slice_row(3, 199, 300, 1, &[(alice, 300, 0)]),
+            slice_row(2, 198, 300, 1, &[(id(0xb2), 300, 0)]),
+        ];
+        for row in &mut slices {
+            row.work_unit_version = WorkUnitVersion::V2;
+            row.work_unit_fingerprint = Some(fp);
+        }
+        // Only Alice's output belongs to this Q=65 distribution. The other
+        // slice exists in history but is not part of the selected window.
+        let (entries, coinbase) = ladder_fixture(&[(alice, 3_000_000)], 0);
+        let hw = high_water(0, "3");
+        let input = ReconstructInput {
+            height: 200,
+            high_water: &hw,
+            entries: &entries,
+            slices: &slices,
+            work_unit_version: WorkUnitVersion::V2,
+            work_unit_fingerprint: Some(fp),
+            window_rule: WindowRule::NetworkBlockWork,
+            // Frozen Q at build time, not a later target or network difficulty.
+            window_target: Some(65),
+            window_truncated: false,
+            pending: &BTreeMap::new(),
+            coinbase: &coinbase,
+            economics: BlockEconomics {
+                subsidy: 3_000_000,
+                fees: 0,
+            },
+            delivered: &BTreeSet::new(),
+            cfg: base_cfg(1),
+            coinbase_threshold_sats: 30,
+        };
+        let settled = reconstruct_settlement(&input).unwrap();
+        assert_eq!(settled.window, vec![3]);
+        assert_eq!(settled.raw.get(&alice), Some(&3_000_000));
+        assert!(!input.work_unit_version.eq(&WorkUnitVersion::V1));
+        assert!(settled.raw.len() == 1);
     }
 
     /// Test (b): a pre-migration snapshot row carries no target, so
@@ -2551,23 +4485,22 @@ mod tests {
             slice_row(3, 199, 300, 1, &[(alice, 300, 0)]),
             slice_row(2, 198, 300, 1, &[(id(0xb2), 300, 0)]),
         ];
-        let entries = vec![entry(alice, Rail::Coinbase, Some(id(0x01)), 300)];
-        let coinbase = vec![
-            output(pool_script(), 0),
-            output(spc_accounting::p2tr_script(&id(0x01)), 300),
-        ];
+        let (entries, coinbase) = ladder_fixture(&[(alice, 3_000_000)], 0);
         let hw = high_water(0, "3");
         let input = ReconstructInput {
             height: 200,
             high_water: &hw,
             entries: &entries,
             slices: &slices,
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            window_rule: WindowRule::ShareWorkLegacy,
             window_target: None,
             window_truncated: false,
             pending: &BTreeMap::new(),
             coinbase: &coinbase,
             economics: BlockEconomics {
-                subsidy: 300,
+                subsidy: 3_000_000,
                 fees: 0,
             },
             delivered: &BTreeSet::new(),
@@ -2579,7 +4512,7 @@ mod tests {
         // The estimate (300 from the newest slice) closes on slice 3 alone -
         // a smaller window than the persisted 600 target would select.
         assert_eq!(reconstructed.window, vec![3]);
-        assert_eq!(reconstructed.raw.get(&alice), Some(&300));
+        assert_eq!(reconstructed.raw.get(&alice), Some(&3_000_000));
     }
 
     #[test]
@@ -2688,6 +4621,7 @@ mod tests {
             .unwrap();
         let fingerprint: [u8; 32] = rand::random();
         let entries = vec![Entry {
+            owed_sats: sats,
             sp_id,
             rail: Rail::Ark,
             p_x: Vec::new(),
@@ -2702,6 +4636,9 @@ mod tests {
                 distribution_id: None,
                 entries: serde_json::to_value(entries).unwrap(),
                 high_water: serde_json::json!({"0": "1"}),
+                work_unit_version: WorkUnitVersion::V1,
+                work_unit_fingerprint: None,
+                window_rule: WindowRule::ShareWorkLegacy,
                 window_target: Some("8".into()),
             })
             .await
@@ -2921,6 +4858,8 @@ mod tests {
                 difficulty: "10".into(),
                 root: [2; 32],
                 shares: vec![3],
+                work_unit_version: WorkUnitVersion::V1,
+                work_unit_fingerprint: None,
                 credits: vec![SliceCreditRow {
                     sp_id,
                     diff_sum: "10".into(),
@@ -3058,6 +4997,8 @@ mod tests {
                     difficulty: "100".into(),
                     root: [2; 32],
                     shares: vec![3],
+                    work_unit_version: WorkUnitVersion::V1,
+                    work_unit_fingerprint: None,
                     credits: vec![SliceCreditRow {
                         sp_id,
                         diff_sum: "100".into(),
@@ -3080,6 +5021,9 @@ mod tests {
                 distribution_id: None,
                 entries: serde_json::to_value(entries).unwrap(),
                 high_water: serde_json::json!({ "0": newer.to_string() }),
+                work_unit_version: WorkUnitVersion::V1,
+                work_unit_fingerprint: None,
+                window_rule: WindowRule::ShareWorkLegacy,
                 window_target: window_target.map(str::to_string),
             })
             .await
@@ -3120,12 +5064,16 @@ mod tests {
         )
         .with_accounting(base_cfg(2));
         let event = BlockEvent {
+            economic: None,
             block_hash: rand::random(),
             height: finding_height,
             front_id: 0,
             fingerprint,
             a_send_x: [4; 32],
             high_water: BTreeMap::from([(0u8, newer.to_string())]),
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            window_rule: WindowRule::ShareWorkLegacy,
             window_target: 0,
             entries: Vec::new(),
         };
@@ -3169,12 +5117,16 @@ mod tests {
         )
         .with_accounting(base_cfg(2));
         let event = BlockEvent {
+            economic: None,
             block_hash: rand::random(),
             height: finding_height,
             front_id: 0,
             fingerprint,
             a_send_x: [4; 32],
             high_water: BTreeMap::from([(0u8, newer.to_string())]),
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            window_rule: WindowRule::ShareWorkLegacy,
             window_target: 0,
             entries: Vec::new(),
         };
@@ -3192,7 +5144,9 @@ mod tests {
         let alice = id(0xa1);
         // raw = 40 (the window's only credit), pending = 100, owed = 140.
         let slices = vec![slice_row(2, 400, 100, 1, &[(alice, 100, 0)])];
-        let entries = vec![entry(alice, Rail::Forfeit, None, 140)];
+        let mut owned = entry(alice, Rail::Forfeit, None, 40);
+        owned.owed_sats = 140;
+        let entries = vec![owned];
         // T = 40: nothing is kept, so the whole coinbase is the pool output.
         let coinbase = vec![output(pool_script(), 40)];
         let pending = BTreeMap::from([(alice, 100u64)]);
@@ -3204,6 +5158,9 @@ mod tests {
             slices: &slices,
             // Pre-migration shape: no persisted target, so these tests
             // exercise the warned slice-estimate fallback.
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            window_rule: WindowRule::ShareWorkLegacy,
             window_target: None,
             window_truncated: false,
             pending: &pending,
@@ -3244,15 +5201,11 @@ mod tests {
     /// reward cannot cover the full owed total, the routing pays what the
     /// coinbase carries and retains the rest as pending (partial keep).
     #[test]
-    fn raw_at_threshold_routes_to_coinbase_and_retains_the_rest() {
+    fn raw_at_base_rung_pays_full_canonical_amount_and_retains_only_remainder() {
         let alice = id(0xa1);
         // raw = 330 (>= C), pending = 100: owed = 430, T = 330.
         let slices = vec![slice_row(2, 500, 100, 1, &[(alice, 100, 0)])];
-        let entries = vec![entry(alice, Rail::Coinbase, Some(id(0x01)), 430)];
-        let coinbase = vec![
-            output(pool_script(), 0),
-            output(spc_accounting::p2tr_script(&id(0x01)), 330),
-        ];
+        let (entries, coinbase) = ladder_fixture(&[(alice, 500_100)], 0);
         let pending = BTreeMap::from([(alice, 100u64)]);
         let hw = high_water(0, "3");
         let input = ReconstructInput {
@@ -3262,12 +5215,15 @@ mod tests {
             slices: &slices,
             // Pre-migration shape: no persisted target, so these tests
             // exercise the warned slice-estimate fallback.
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            window_rule: WindowRule::ShareWorkLegacy,
             window_target: None,
             window_truncated: false,
             pending: &pending,
             coinbase: &coinbase,
             economics: BlockEconomics {
-                subsidy: 330,
+                subsidy: 500_000,
                 fees: 0,
             },
             delivered: &BTreeSet::new(),
@@ -3276,14 +5232,14 @@ mod tests {
         };
 
         let reconstructed = reconstruct_settlement(&input).unwrap();
-        assert_eq!(reconstructed.raw.get(&alice), Some(&330));
+        assert_eq!(reconstructed.raw.get(&alice), Some(&500_000));
         let row = reconstructed
             .ledger
             .iter()
             .find(|row| row.sp_id == alice)
             .expect("coinbase row");
         assert_eq!(row.rail, LedgerRail::Coinbase);
-        assert_eq!(row.paid_sats, 330);
+        assert_eq!(row.paid_sats, 500_000);
         assert_eq!(row.pending_delta, 0, "the carried 100 is retained");
         assert!(reconstructed
             .pending_deltas
@@ -3291,7 +5247,7 @@ mod tests {
             .all(|(id, _)| *id != alice));
         // Conservation: paid + retained pending == owed.
         let after = 100i64 + row.pending_delta;
-        assert_eq!(i64::try_from(row.paid_sats).unwrap() + after, 430);
+        assert_eq!(i64::try_from(row.paid_sats).unwrap() + after, 500_100);
     }
 
     fn test_front() -> crate::front::Front {
@@ -3350,16 +5306,21 @@ mod tests {
     #[test]
     fn front_ignores_events_at_or_below_the_bootstrap_rev() {
         let mut front = test_front();
-        front.apply_bootstrap(&BootstrapSnapshot {
-            rev: 42,
-            applied_blocks: Vec::new(),
-            pending_balance: Vec::new(),
-            ark_delivery: Vec::new(),
-            window_tail: Vec::new(),
-            type32_blobs: Vec::new(),
-            slices_cursor: None,
-            front_events_cursor: None,
-        });
+        front
+            .apply_bootstrap(&BootstrapSnapshot {
+                economic: None,
+                rev: 42,
+                applied_blocks: Vec::new(),
+                pending_balance: Vec::new(),
+                ark_delivery: Vec::new(),
+                ark_identities: vec![],
+                ark_epoch_mailboxes: vec![],
+                window_tail: Vec::new(),
+                type32_blobs: Vec::new(),
+                slices_cursor: None,
+                front_events_cursor: None,
+            })
+            .unwrap();
 
         let stale = FrontEvent::LedgerApplied {
             rev: 42,
@@ -3413,12 +5374,16 @@ mod tests {
             .unwrap();
         let block: [u8; 32] = rand::random();
         let event = BlockEvent {
+            economic: None,
             block_hash: block,
             height: 800_000,
             front_id: 0,
             fingerprint: rand::random(),
             a_send_x: [4; 32],
             high_water: BTreeMap::from([(0u8, "1".to_string())]),
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            window_rule: WindowRule::ShareWorkLegacy,
             window_target: 8,
             entries: vec![entry(sp_id, Rail::Coinbase, Some(id(0x01)), 100)],
         };
@@ -3464,16 +5429,21 @@ mod tests {
         let block = [0x0b; 32];
         let sp_id = [0x21; 32];
         let mut front = test_front();
-        front.apply_bootstrap(&BootstrapSnapshot {
-            rev: 7,
-            applied_blocks: vec![block],
-            pending_balance: vec![(sp_id, 40)],
-            ark_delivery: Vec::new(),
-            window_tail: Vec::new(),
-            type32_blobs: Vec::new(),
-            slices_cursor: None,
-            front_events_cursor: None,
-        });
+        front
+            .apply_bootstrap(&BootstrapSnapshot {
+                economic: None,
+                rev: 7,
+                applied_blocks: vec![block],
+                pending_balance: vec![(sp_id, 40)],
+                ark_delivery: Vec::new(),
+                ark_identities: vec![],
+                ark_epoch_mailboxes: vec![],
+                window_tail: Vec::new(),
+                type32_blobs: Vec::new(),
+                slices_cursor: None,
+                front_events_cursor: None,
+            })
+            .unwrap();
 
         let republished = FrontEvent::LedgerApplied {
             rev: 8,
@@ -3522,6 +5492,9 @@ mod tests {
                 distribution_id: None,
                 entries: serde_json::json!([]),
                 high_water: serde_json::json!({"0": "1"}),
+                work_unit_version: WorkUnitVersion::V1,
+                work_unit_fingerprint: None,
+                window_rule: WindowRule::ShareWorkLegacy,
                 window_target: Some("8".into()),
             })
             .await
@@ -3620,12 +5593,16 @@ mod tests {
         )
         .with_front_events_stream(&events);
         let event = BlockEvent {
+            economic: None,
             block_hash: block,
             height: 800_000,
             front_id: 0,
             fingerprint: rand::random(),
             a_send_x: [4; 32],
             high_water: BTreeMap::from([(0u8, "1".to_string())]),
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            window_rule: WindowRule::ShareWorkLegacy,
             window_target: 8,
             entries: vec![entry(sp_id, Rail::Coinbase, None, 100)],
         };
@@ -3670,6 +5647,9 @@ mod tests {
                 distribution_id: None,
                 entries: serde_json::json!([]),
                 high_water: serde_json::json!({"0": "1"}),
+                work_unit_version: WorkUnitVersion::V1,
+                work_unit_fingerprint: None,
+                window_rule: WindowRule::ShareWorkLegacy,
                 window_target: Some("8".into()),
             })
             .await

@@ -23,6 +23,8 @@ use thiserror::Error;
 use tokio::sync::Mutex;
 
 pub const CHALLENGE_TTL: Duration = Duration::from_secs(60);
+#[derive(Debug)]
+pub struct AggregateOrderUnavailable;
 
 /// Content type of the Prometheus text exposition format 0.0.4.
 pub const METRICS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
@@ -37,6 +39,19 @@ pub trait ApiBackend: Send + Sync + 'static {
     async fn capacity(&self) -> Value;
     async fn me(&self, sp_id: &[u8; 32]) -> Option<Value>;
     async fn audit(&self, sp_id: &[u8; 32], block_hash: &str) -> Option<Value>;
+    async fn aggregates(&self, _sp_id: &[u8; 32]) -> Option<Value> {
+        None
+    }
+    async fn aggregate_receipt(&self, _sp_id: &[u8; 32], _order_id: &[u8; 16]) -> Option<Vec<u8>> {
+        None
+    }
+    async fn aggregate_order(
+        &self,
+        _sp_id: &[u8; 32],
+        _order_id: &[u8; 16],
+    ) -> Result<Option<Vec<u8>>, AggregateOrderUnavailable> {
+        Err(AggregateOrderUnavailable)
+    }
     /// Rendered Prometheus 0.0.4 text for `/metrics`. A failed source omits
     /// its family and is counted in `spc_metrics_scrape_errors_total`
     /// (SPEC §9); absent means unknown, never zero.
@@ -167,6 +182,15 @@ pub fn router<B: ApiBackend>(backend: Arc<B>, network: Network) -> Router {
         .route("/api/sp/challenge", post(challenge::<B>))
         .route("/api/sp/me", get(me::<B>))
         .route("/api/sp/me/audit/{block_hash}", get(audit::<B>))
+        .route("/api/sp/me/ark-aggregates", get(aggregates::<B>))
+        .route(
+            "/api/sp/me/ark-aggregates/{order_id}/order",
+            get(aggregate_order::<B>),
+        )
+        .route(
+            "/api/sp/me/ark-aggregates/{order_id}/receipt",
+            get(aggregate_receipt::<B>),
+        )
         .route("/healthz", get(healthz))
         .route("/metrics", get(metrics))
         .with_state(state)
@@ -224,6 +248,95 @@ async fn audit<B: ApiBackend>(
         Err(e) => auth_failure(e),
     }
 }
+async fn aggregates<B: ApiBackend>(
+    State(s): State<Arc<ApiState<B>>>,
+    headers: HeaderMap,
+) -> Response {
+    match s.authenticate(&headers).await {
+        Ok(id)=>match s.backend.aggregates(&id).await {
+            Some(value)=>Json(value).into_response(),
+            None=>(StatusCode::SERVICE_UNAVAILABLE,Json(json!({"schema":"spc.aggregate-status/1","error":"status_unknown","keep_watches":true}))).into_response(),
+        },
+        Err(e)=>auth_failure(e),
+    }
+}
+async fn aggregate_receipt<B: ApiBackend>(
+    State(s): State<Arc<ApiState<B>>>,
+    headers: HeaderMap,
+    Path(order_id): Path<String>,
+) -> Response {
+    let identity = match s.authenticate(&headers).await {
+        Ok(id) => id,
+        Err(e) => return auth_failure(e),
+    };
+    let Some(order) = decode_hex(&order_id).and_then(|v| v.try_into().ok()) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"invalid_order_id"})),
+        )
+            .into_response();
+    };
+    match s.backend.aggregate_receipt(&identity, &order).await {
+        Some(bytes) if bytes.len() <= 4 * 1024 * 1024 => (
+            [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
+            bytes,
+        )
+            .into_response(),
+        _ => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error":"delivery_proof_unknown","keep_watches":true})),
+        )
+            .into_response(),
+    }
+}
+async fn aggregate_order<B: ApiBackend>(
+    State(s): State<Arc<ApiState<B>>>,
+    headers: HeaderMap,
+    Path(order_id): Path<String>,
+) -> Response {
+    let identity = match s.authenticate(&headers).await {
+        Ok(id) => id,
+        Err(e) => return auth_failure(e),
+    };
+    let order: Option<[u8; 16]> = if order_id.len() == 32 {
+        decode_hex(&order_id).and_then(|v| v.try_into().ok())
+    } else {
+        None
+    };
+    let Some(order) = order else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"invalid_order_id","keep_watches":true})),
+        )
+            .into_response();
+    };
+    match s.backend.aggregate_order(&identity, &order).await {
+        Ok(Some(bytes))
+            if (spc_ext::ArkSendOrder::MIN_ENCODED_LEN
+                ..=spc_ext::ArkSendOrder::MAX_ENCODED_LEN)
+                .contains(&bytes.len()) =>
+        {
+            (
+                [
+                    (axum::http::header::CONTENT_TYPE, "application/octet-stream"),
+                    (axum::http::header::CACHE_CONTROL, "no-store"),
+                ],
+                bytes,
+            )
+                .into_response()
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error":"order_unknown","keep_watches":true})),
+        )
+            .into_response(),
+        _ => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error":"order_unavailable","keep_watches":true})),
+        )
+            .into_response(),
+    }
+}
 async fn healthz() -> Json<Value> {
     Json(json!({ "ok": true }))
 }
@@ -257,13 +370,7 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 fn decode_hex(s: &str) -> Option<Vec<u8>> {
-    if !s.len().is_multiple_of(2) {
-        return None;
-    }
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
-        .collect()
+    ::hex::decode(s).ok()
 }
 
 fn getrandom(buf: &mut [u8]) -> Result<(), ()> {
@@ -317,6 +424,11 @@ mod tests {
         }
         async fn audit(&self, _sp_id: &[u8; 32], _block: &str) -> Option<Value> {
             Some(json!({"slices":[]}))
+        }
+        async fn aggregates(&self, sp_id: &[u8; 32]) -> Option<Value> {
+            Some(
+                json!({"schema":"spc.aggregate-status/1","owner":hex(sp_id),"wallet_received":null}),
+            )
         }
         async fn metrics(&self) -> String {
             crate::metrics::render(&crate::metrics::MetricsSnapshot::default())
@@ -381,6 +493,66 @@ mod tests {
             state.authenticate(&headers).await,
             Err(AuthError::Signature)
         ));
+    }
+
+    #[tokio::test]
+    async fn aggregate_status_requires_fresh_owner_proof_and_does_not_claim_wallet_receipt() {
+        use axum::body::Body;
+        use http_body_util::BodyExt;
+        use tower::ServiceExt;
+        let app = router(Arc::new(Memory::bare()), Network::Testnet);
+        let get = || {
+            axum::http::Request::builder()
+                .uri("/api/sp/me/ark-aggregates")
+                .body(Body::empty())
+                .unwrap()
+        };
+        assert_eq!(
+            app.clone().oneshot(get()).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let challenge = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/sp/challenge")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = challenge.into_body().collect().await.unwrap().to_bytes();
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        let nonce = value["nonce"].as_str().unwrap();
+        let (scan, spend) = keys(3);
+        let addr = address(3);
+        let signature = sign(&scan, nonce);
+        let auth = format!("SPc {addr} {nonce} {signature}");
+        let request = || {
+            axum::http::Request::builder()
+                .uri("/api/sp/me/ark-aggregates")
+                .header("Authorization", &auth)
+                .body(Body::empty())
+                .unwrap()
+        };
+        let response = app.clone().oneshot(request()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        let secp = Secp256k1::new();
+        let owner = spc_crypto::sp_id(
+            &bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &scan),
+            &bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &spend),
+        );
+        assert_eq!(body["owner"], hex(&owner));
+        assert!(body["wallet_received"].is_null());
+        assert_eq!(
+            app.oneshot(request()).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED,
+            "captured proof cannot authorize another private read"
+        );
     }
 
     /// Router-level: `/api/pool` serves the backend's endpoints field

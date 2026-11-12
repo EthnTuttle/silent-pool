@@ -17,6 +17,13 @@ use thiserror::Error;
 use spc_crypto::{input_hash, tier_tweaks, SharedSecret};
 
 pub mod audit;
+pub mod audit;
+// Frozen public DTOs keep Approved's receipt inline. Each exchange is bounded;
+// boxing it would change the already-shared Rust construction API.
+#[allow(clippy::large_enum_variant)]
+pub mod native_activation;
+pub mod source_audit;
+pub mod source_feed;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -30,11 +37,17 @@ pub enum Error {
     Proof,
     #[error("derivation failed")]
     Derivation,
+    #[error("duplicate, noncontiguous or excess owned output")]
+    OutputSet,
+    #[error("owned outputs do not match the bound payout entitlement")]
+    Entitlement,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Found {
     pub height: u32,
+    /// Per-identity derivation index, independent of the transaction vout.
+    pub k: u32,
     pub vout: u32,
     pub amount: u64,
     /// `ser_x(P)`.
@@ -118,35 +131,122 @@ pub fn scan_coinbase(
     if !tx.is_coinbase() {
         return Err(Error::NotCoinbase);
     }
-    let mut a_bytes = [0u8; 33];
-    a_bytes[0] = 0x02;
-    a_bytes[1..].copy_from_slice(a_x);
-    let a_send = PublicKey::from_slice(&a_bytes).map_err(|_| Error::Derivation)?;
-
+    let outputs: Vec<_> = tx
+        .output
+        .iter()
+        .map(|o| OutputView {
+            script_pubkey: o.script_pubkey.as_bytes(),
+            value: o.value.to_sat(),
+        })
+        .collect();
     let mut out = Vec::new();
     for h in [height, height.saturating_sub(1)] {
         if h == 0 {
             continue;
         }
-        let ecdh = SharedSecret::miner_side(h, b_scan, &a_send).map_err(|_| Error::Derivation)?;
-        let tweaks = tier_tweaks(&ecdh, 0).map_err(|_| Error::Derivation)?;
+        out.extend(scan_outputs(h, a_x, &outputs, b_scan, b_spend)?);
+    }
+    Ok(out)
+}
+
+pub struct OutputView<'a> {
+    pub script_pubkey: &'a [u8],
+    pub value: u64,
+}
+
+/// Recovery only: amounts are observations, never a claim of ladder compliance.
+/// Historical exact-k0 blocks remain recoverable. Audit requires an explicit
+/// payout-format binding and the independently reconstructed owed amount.
+pub fn scan_outputs(
+    height: u32,
+    a_x: &[u8; 32],
+    outputs: &[OutputView<'_>],
+    b_scan: &SecretKey,
+    b_spend: &PublicKey,
+) -> Result<Vec<Found>, Error> {
+    let mut a_bytes = [0u8; 33];
+    a_bytes[0] = 2;
+    a_bytes[1..].copy_from_slice(a_x);
+    let a_send = PublicKey::from_slice(&a_bytes).map_err(|_| Error::Derivation)?;
+    let ecdh = SharedSecret::miner_side(height, b_scan, &a_send).map_err(|_| Error::Derivation)?;
+    let mut by_key = std::collections::BTreeMap::<[u8; 32], Vec<(u32, u64)>>::new();
+    for (index, output) in outputs.iter().enumerate() {
+        let script = output.script_pubkey;
+        if script.len() == 34 && script[..2] == [0x51, 0x20] {
+            let key = script[2..].try_into().map_err(|_| Error::OutputSet)?;
+            by_key.entry(key).or_default().push((
+                u32::try_from(index).map_err(|_| Error::OutputSet)?,
+                output.value,
+            ));
+        }
+    }
+    let mut found = Vec::new();
+    let mut missed = false;
+    // Continue beyond a miss solely to reject a dropped k followed by a later
+    // owned output. Allocation and EC work are bounded, including hostile jobs.
+    for k in 0..=spc_accounting::ladder::MAX_LADDER_OUTPUTS {
+        let tweaks = tier_tweaks(&ecdh, k as u32).map_err(|_| Error::Derivation)?;
         let p = spc_crypto::spc_output_pubkey(b_spend, &tweaks.t_onchain)
             .map_err(|_| Error::Derivation)?;
-        let p_x = p.x_only_public_key().0.serialize();
-        for (i, o) in tx.output.iter().enumerate() {
-            let s = o.script_pubkey.as_bytes();
-            if s.len() == 34 && s[0] == 0x51 && s[1] == 0x20 && s[2..] == p_x {
-                out.push(Found {
-                    height: h,
-                    vout: i as u32,
-                    amount: o.value.to_sat(),
-                    output_key: p_x,
+        let output_key = p.x_only_public_key().0.serialize();
+        match by_key.get(&output_key) {
+            None => missed = true,
+            Some(matches) => {
+                if missed || matches.len() != 1 || k == spc_accounting::ladder::MAX_LADDER_OUTPUTS {
+                    return Err(Error::OutputSet);
+                }
+                let (vout, amount) = matches[0];
+                found.push(Found {
+                    height,
+                    k: k as u32,
+                    vout,
+                    amount,
+                    output_key,
                     tweak: tweaks.t_onchain.to_be_bytes(),
                 });
             }
         }
     }
-    Ok(out)
+    Ok(found)
+}
+
+/// Explicit source binding: recovery cannot infer the policy from amounts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PayoutFormat {
+    FixedLadderV1,
+    /// O11 revenue-scaled exact claim, supplied by the JD window verifier.
+    JdExactV1,
+    LegacyExactK0,
+}
+
+/// Verify the complete k->amount association and return the remainder owed.
+/// Caller obtains `owed` from its frozen window audit, never observed outputs.
+pub fn audit_outputs(found: &[Found], owed: u64, format: PayoutFormat) -> Result<u64, Error> {
+    let (expected, remainder) = match format {
+        PayoutFormat::FixedLadderV1 => {
+            let d = spc_accounting::decompose(owed, spc_accounting::ladder::MAX_LADDER_OUTPUTS)
+                .map_err(|_| Error::Entitlement)?;
+            (d.outputs, d.remainder)
+        }
+        PayoutFormat::JdExactV1 | PayoutFormat::LegacyExactK0 => {
+            (if owed == 0 { vec![] } else { vec![owed] }, 0)
+        }
+    };
+    if found.len() != expected.len() {
+        return Err(Error::Entitlement);
+    }
+    let mut vouts = std::collections::BTreeSet::new();
+    let mut keys = std::collections::BTreeSet::new();
+    for (k, (output, amount)) in found.iter().zip(expected).enumerate() {
+        if output.k != k as u32
+            || output.amount != amount
+            || !vouts.insert(output.vout)
+            || !keys.insert(output.output_key)
+        {
+            return Err(Error::Entitlement);
+        }
+    }
+    Ok(remainder)
 }
 
 /// Scan a full block.
@@ -407,6 +507,167 @@ mod tests {
     use bitcoin::transaction::Version;
     use bitcoin::{Amount, OutPoint, TxIn, TxOut, Witness};
     use spc_crypto::SendKey;
+
+    #[test]
+    fn independently_derived_k_vectors_keep_amount_association_after_script_sort() {
+        // Affine Python EC + hashlib oracle, separate from project crypto:
+        // /tmp/opencode/ladder-completion-independent-vectors.py.
+        let (scan, _, spend) = keys();
+        let a_x: [u8; 32] =
+            hex_decode("989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f")
+                .unwrap()
+                .try_into()
+                .unwrap();
+        let vectors = [
+            (
+                "7e79de60970e7ed20601f6dd6e305f640af7a9db0f3610c85fdb43050f0c6e87",
+                "92588f172fa303ee89a4739e81c63897ee17a21d04db296ba7190783813ccb3d",
+                5_000_000,
+            ),
+            (
+                "89b2e99c2e84b209a7575e64c1b903a468bb101abefba1c84effa6e463faff55",
+                "3684aaee21eb4fe3467c1c7212e4779e28bed4046dec8da9c75f35892fff2c16",
+                3_000_000,
+            ),
+            (
+                "f1777aa6a932bef3c69a95bcac6ded73a9ef9e13a6d4a54029701e962ac03165",
+                "d250adbd47e2e52efe5c985f83c3d1e29f21a57c730f57d02a10b1925b277db4",
+                1_000_000,
+            ),
+            (
+                "38b2e5b0122254cbc6ad5e25ffca1c0ccd3acd8563ee6cfba551baa945139de9",
+                "cc566a1e011e81395227d1ee4ddc00784a0f8cac6c6757b3999c3c4cfb35e8a3",
+                500_000,
+            ),
+        ];
+        let mut outputs: Vec<_> = vectors
+            .iter()
+            .map(|(key, _, amount)| {
+                let mut script = vec![0x51, 0x20];
+                script.extend(hex_decode(key).unwrap());
+                (script, *amount)
+            })
+            .collect();
+        outputs.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut tx = coinbase(800_000, &a_x, outputs, false);
+        let found = scan_coinbase(800_000, &a_x, &tx, &scan, &spend).unwrap();
+        assert_eq!(found.len(), 4);
+        let mut compressed = vec![2];
+        compressed.extend_from_slice(&a_x);
+        let shared =
+            SharedSecret::miner_side(800_000, &scan, &PublicKey::from_slice(&compressed).unwrap())
+                .unwrap();
+        let last = tier_tweaks(&shared, 989).unwrap();
+        assert_eq!(
+            hex(&last.t_onchain.to_be_bytes()),
+            "b6953302a005579d2611ee22d7aa94042d6f07062c9827d8fe09bba3079428a4"
+        );
+        assert_eq!(
+            hex(&spc_crypto::spc_output_pubkey(&spend, &last.t_onchain)
+                .unwrap()
+                .x_only_public_key()
+                .0
+                .serialize()),
+            "7e953c205bad96cf40b0dbb1883f1f7c4d61045277dbcd41dd2115ea81c2d9f2"
+        );
+        assert_eq!(
+            found.iter().map(|f| f.vout).collect::<Vec<_>>(),
+            vec![1, 2, 3, 0]
+        );
+        for (f, (_, tweak, _)) in found.iter().zip(vectors) {
+            assert_eq!(hex(&f.tweak), tweak);
+        }
+        assert_eq!(
+            audit_outputs(&found, 9_500_123, PayoutFormat::FixedLadderV1).unwrap(),
+            123
+        );
+        tx.output.swap(0, 1); // vout ordering is immaterial to k association.
+        assert!(scan_coinbase(800_000, &a_x, &tx, &scan, &spend).is_ok());
+        let amount = tx.output[0].value;
+        tx.output[0].value = tx.output[1].value;
+        tx.output[1].value = amount;
+        let swapped = scan_coinbase(800_000, &a_x, &tx, &scan, &spend).unwrap();
+        assert!(audit_outputs(&swapped, 9_500_123, PayoutFormat::FixedLadderV1).is_err());
+        tx.output.remove(0); // remove k0, leaving k1/k2/k3: rejected, not partial success.
+        assert!(matches!(
+            scan_coinbase(800_000, &a_x, &tx, &scan, &spend),
+            Err(Error::OutputSet)
+        ));
+    }
+
+    #[test]
+    fn recovery_finds_all_990_outputs_and_exports_every_tweak() {
+        let (scan, scan_pub, spend) = keys();
+        let send = SendKey::generate(800_000).unwrap();
+        let shared = send.derive_pool_side(&scan_pub).unwrap();
+        let mut outputs = Vec::new();
+        for k in 0..990 {
+            let tweak = tier_tweaks(&shared, k).unwrap();
+            let key = spc_crypto::spc_output_pubkey(&spend, &tweak.t_onchain)
+                .unwrap()
+                .x_only_public_key()
+                .0
+                .serialize();
+            outputs.push((spc_accounting::p2tr_script(&key), 5_000_000));
+        }
+        outputs.sort_by(|a, b| a.0.cmp(&b.0));
+        let tx = coinbase(800_000, send.x_only(), outputs, false);
+        let found = scan_coinbase(800_000, send.x_only(), &tx, &scan, &spend).unwrap();
+        assert_eq!(found.len(), 990);
+        assert_eq!(found.iter().map(|f| f.amount).sum::<u64>(), 4_950_000_000);
+        // Unit proof fixture, not a mined/native acceptance block.
+        let header = Header {
+            version: bitcoin::block::Version::from_consensus(0x2000_0000),
+            prev_blockhash: bitcoin::BlockHash::all_zeros(),
+            merkle_root: bitcoin::TxMerkleNode::from_raw_hash(tx.compute_txid().to_raw_hash()),
+            time: 1,
+            bits: bitcoin::CompactTarget::from_consensus(0x207f_ffff),
+            nonce: 0,
+        };
+        let block = Block {
+            header,
+            txdata: vec![tx.clone()],
+        };
+        assert_eq!(scan_block(&block, &scan, &spend).unwrap().found, found);
+        let proof = LightProof {
+            header,
+            branch: vec![],
+            coinbase: tx.clone(),
+        };
+        assert_eq!(scan_light(&proof, &scan, &spend).unwrap().found, found);
+        assert_eq!(
+            audit_outputs(&found, 4_950_000_000, PayoutFormat::FixedLadderV1).unwrap(),
+            0
+        );
+        let exported: Vec<serde_json::Value> = serde_json::from_str(&export_tweaks(
+            &found,
+            &tx.compute_txid(),
+            TweakFormat::Json,
+        ))
+        .unwrap();
+        assert_eq!(exported.len(), 990);
+        let secp = bitcoin::secp256k1::Secp256k1::new();
+        let base = SecretKey::from_slice(&[0x12; 32]).unwrap();
+        let message = bitcoin::secp256k1::Message::from_digest([0x42; 32]);
+        for output in &found {
+            let tweak = Scalar::from_be_bytes(output.tweak).unwrap();
+            let secret = spc_crypto::spc_output_secret(&base, &tweak).unwrap();
+            let signer = bitcoin::secp256k1::Keypair::from_secret_key(&secp, &secret);
+            let sig = secp.sign_schnorr_no_aux_rand(&message, &signer);
+            let public =
+                bitcoin::secp256k1::XOnlyPublicKey::from_slice(&output.output_key).unwrap();
+            assert!(secp.verify_schnorr(&sig, &message, &public).is_ok());
+        }
+        let mut missing = found.clone();
+        missing.pop();
+        assert!(audit_outputs(&missing, 4_950_000_000, PayoutFormat::FixedLadderV1).is_err());
+        let mut duplicate = tx.clone();
+        duplicate.output.push(tx.output[0].clone());
+        assert!(matches!(
+            scan_coinbase(800_000, send.x_only(), &duplicate, &scan, &spend),
+            Err(Error::OutputSet)
+        ));
+    }
 
     fn keys() -> (SecretKey, PublicKey, PublicKey) {
         let secp = bitcoin::secp256k1::Secp256k1::new();

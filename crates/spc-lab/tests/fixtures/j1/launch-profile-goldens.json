@@ -1,0 +1,32 @@
+{
+  "namespace": {
+    "profile_version": 1,
+    "binary_sha256": "abababababababababababababababababababababababababababababababab",
+    "argv": ["--network", "regtest", "--datadir", "/run/lab/private/node-a", "--rpc", "--rpc-listen", "10.231.0.2:18443", "--rpc-cookie-file", "/run/lab/private/a.cookie", "--regtest-pow-bits", "200fffff", "--no-seeds", "--no-discover", "--max-outbound", "1", "--api-log", "/run/lab/private/a.jsonl", "--log-level", "info", "--max-run-secs", "300", "--listen", "10.231.0.2:18444", "--connect", "10.231.0.3:18444", "--config", "/policy/node.conf"],
+    "env": {"SPC_LAB_RUN_TOKEN": "golden_public_fixture_token", "RBITCOIN_RPC_PACKAGE_DIALECT": "1"},
+    "config_files": [{"argv_index": 26, "sha256": "97d0b33aa1795ae46b51aafafbcfb4e004d32576fd7061a149c424ce0d9e36be"}],
+    "substitutions": [{"class": "datadir", "argv_index": 3}, {"class": "rpc-listen", "argv_index": 6}, {"class": "cookie-file", "argv_index": 8}, {"class": "p2p-isolation", "span": [11, 15]}, {"class": "api-log", "span": [15, 19]}, {"class": "max-run-secs", "argv_index": 20}, {"class": "p2p-isolation", "span": [21, 25]}]
+  },
+  "isolated": {
+    "profile_version": 1,
+    "binary_sha256": "abababababababababababababababababababababababababababababababab",
+    "argv": ["--network", "regtest", "--datadir", "/private/probe/datadir", "--rpc", "--rpc-listen", "127.0.0.1:19443", "--rpc-cookie-file", "/private/probe/rpc.cookie", "--regtest-pow-bits", "200fffff", "--api-log", "/private/probe/api.jsonl", "--log-level", "info", "--max-run-secs", "300", "--config", "/policy/node.conf", "--no-listen", "--no-seeds", "--no-discover", "--max-outbound", "1"],
+    "env": {"SPC_LAB_RUN_TOKEN": "golden_public_fixture_token", "RBITCOIN_RPC_PACKAGE_DIALECT": "1"},
+    "config_files": [{"argv_index": 18, "sha256": "97d0b33aa1795ae46b51aafafbcfb4e004d32576fd7061a149c424ce0d9e36be"}],
+    "substitutions": [{"class": "datadir", "argv_index": 3}, {"class": "rpc-listen", "argv_index": 6}, {"class": "cookie-file", "argv_index": 8}, {"class": "api-log", "span": [11, 15]}, {"class": "max-run-secs", "argv_index": 16}, {"class": "p2p-isolation", "span": [19, 24]}]
+  },
+  "comparison": {
+    "profile_version": 1,
+    "binary_sha256": "abababababababababababababababababababababababababababababababab",
+    "argv": [{"literal": "--network"}, {"literal": "regtest"}, {"literal": "--datadir"}, {"class": "datadir"}, {"literal": "--rpc"}, {"literal": "--rpc-listen"}, {"class": "rpc-listen"}, {"literal": "--rpc-cookie-file"}, {"class": "cookie-file"}, {"literal": "--regtest-pow-bits"}, {"literal": "200fffff"}, {"class": "api-log"}, {"literal": "--max-run-secs"}, {"class": "max-run-secs"}, {"literal": "--config"}, {"literal": "/policy/node.conf"}],
+    "env": {"SPC_LAB_RUN_TOKEN": "golden_public_fixture_token", "RBITCOIN_RPC_PACKAGE_DIALECT": "1"},
+    "config_files": [{"argv_index": 15, "sha256": "97d0b33aa1795ae46b51aafafbcfb4e004d32576fd7061a149c424ce0d9e36be"}],
+    "p2p_isolation": "validated_lab_transport"
+  },
+  "comparison_sha256": "626ecf7558b9696a6ce1e6891eb0a06f22287fe1350a9804128bb8df24b31f89",
+  "canonical_utf8": "{\"argv\":[{\"literal\":\"--network\"},{\"literal\":\"regtest\"},{\"literal\":\"--datadir\"},{\"class\":\"datadir\"},{\"literal\":\"--rpc\"},{\"literal\":\"--rpc-listen\"},{\"class\":\"rpc-listen\"},{\"literal\":\"--rpc-cookie-file\"},{\"class\":\"cookie-file\"},{\"literal\":\"--regtest-pow-bits\"},{\"literal\":\"200fffff\"},{\"class\":\"api-log\"},{\"literal\":\"--max-run-secs\"},{\"class\":\"max-run-secs\"},{\"literal\":\"--config\"},{\"literal\":\"/policy/node.conf\"}],\"binary_sha256\":\"abababababababababababababababababababababababababababababababab\",\"config_files\":[{\"argv_index\":15,\"sha256\":\"97d0b33aa1795ae46b51aafafbcfb4e004d32576fd7061a149c424ce0d9e36be\"}],\"env\":{\"RBITCOIN_RPC_PACKAGE_DIALECT\":\"1\",\"SPC_LAB_RUN_TOKEN\":\"golden_public_fixture_token\"},\"p2p_isolation\":\"validated_lab_transport\",\"profile_version\":1}",
+  "policy_change": {"raw_argv_index": 10, "value": "207fffff", "comparison_sha256": "ec11fee39c1ba97662f36c8621138248f02a1e2a37a764ebf8d0c32c2cc785f7"},
+  "duplicate_flags": {"append_argv": ["--datadir", "/other"], "result": "traffic_launch_profile_unsupported"},
+  "config_bytes_utf8": "minrelaytxfee=0.00001000\n",
+  "owned_endpoints": ["10.231.0.2:18444", "10.231.0.3:18444", "10.231.0.2:18443"]
+}

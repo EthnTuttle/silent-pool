@@ -1,0 +1,28 @@
+{
+  "name": "traffic_selected_consumer",
+  "description": "Synthetic J1 route fixture, not live evidence: the size-only consumer passes while the frozen corepc full-model maxdatacarriersize null failure remains; explicit raw getblock and default verbose getblock are distinct, block-bound transaction lookup stays unfunded/unknown.",
+  "overrides": [
+    {"op": "add_entry", "method": "getblockheader", "response": {
+      "params": ["0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"],
+      "result": {"height": 0, "confirmations": 1}
+    }},
+    {"op": "add_entry", "method": "getrawtransaction", "response": {
+      "params": ["4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b", 0, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"],
+      "error": {"code": -5, "message": "genesis coinbase unavailable"}
+    }}
+  ],
+  "expect": {
+    "verdict_status": "incompatible",
+    "reasons": ["fail-version-gate", "funded-unproven"],
+    "funded_state": "unproven",
+    "checks": {
+      "getmempoolinfo": {"availability": "passed", "behavior": "failed"},
+      "getmempoolinfo.traffic-consumer": {"availability": "passed", "behavior": "passed"},
+      "getblockheader.traffic-consumer": {"availability": "passed", "behavior": "passed"},
+      "getrawtransaction.blockhash.traffic-consumer": {"availability": "passed", "behavior": "unknown"},
+      "getblock.verbosity0": {"availability": "passed", "behavior": "passed"},
+      "getblock.singleparam": {"availability": "passed", "behavior": "passed"},
+      "sendrawtransaction.recognized": {"availability": "passed", "behavior": "not_run"}
+    }
+  }
+}

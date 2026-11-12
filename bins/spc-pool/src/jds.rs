@@ -270,7 +270,7 @@ pub fn distribution_from_weights(
                 .entries
                 .iter()
                 .find(|entry| entry.sp_id == *id && entry.rail == Rail::Coinbase)
-                .and_then(|entry| entry.p_x)
+                .and_then(|entry| entry.p_x.first().copied())
         });
         let p_x = p_x.ok_or(JdError::Invalid)?;
         payouts.push(TxOut {
@@ -490,22 +490,25 @@ mod tests {
             entries: vec![
                 spc_accounting::Entry {
                     sp_id: id_a,
+                    owed_sats: 300,
                     rail: Rail::Coinbase,
-                    p_x: None,
+                    p_x: vec![],
                     dest_id: None,
                     sats: 300,
                 },
                 spc_accounting::Entry {
                     sp_id: id_b,
+                    owed_sats: 200,
                     rail: Rail::Coinbase,
-                    p_x: None,
+                    p_x: vec![],
                     dest_id: None,
                     sats: 200,
                 },
                 spc_accounting::Entry {
                     sp_id: [0x0c; 32],
+                    owed_sats: 90,
                     rail: Rail::Pending,
-                    p_x: None,
+                    p_x: vec![],
                     dest_id: None,
                     sats: 90,
                 },
@@ -548,7 +551,7 @@ mod tests {
     #[test]
     fn weights_accept_a_p_x_carried_in_the_entries() {
         let mut w = weights_fixture();
-        w.entries[0].p_x = Some([0x77; 32]);
+        w.entries[0].p_x = vec![[0x77; 32]];
         let dist = distribution_from_weights(
             &w,
             &BTreeMap::from([([0x0b; 32], [0x22; 32])]),

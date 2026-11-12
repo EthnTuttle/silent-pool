@@ -1,0 +1,329 @@
+{
+  "run_token": "AP1a-58e665e4c9d9",
+  "exchanges": {
+    "getnetworkinfo []": {
+      "method": "getnetworkinfo",
+      "params": [],
+      "result": {
+        "connections": 0,
+        "connections_in": 0,
+        "connections_out": 0,
+        "incrementalfee": 1e-06,
+        "localaddresses": [],
+        "localrelay": false,
+        "localservices": "0000000000000809",
+        "localservicesnames": [
+          "NETWORK",
+          "WITNESS",
+          "P2P_V2"
+        ],
+        "networkactive": true,
+        "networks": [
+          {
+            "limited": false,
+            "name": "ipv4",
+            "proxy": "",
+            "proxy_randomize_credentials": false,
+            "reachable": true
+          },
+          {
+            "limited": false,
+            "name": "ipv6",
+            "proxy": "",
+            "proxy_randomize_credentials": false,
+            "reachable": true
+          },
+          {
+            "limited": true,
+            "name": "onion",
+            "proxy": "",
+            "proxy_randomize_credentials": false,
+            "reachable": false
+          },
+          {
+            "limited": true,
+            "name": "i2p",
+            "proxy": "",
+            "proxy_randomize_credentials": false,
+            "reachable": false
+          },
+          {
+            "limited": true,
+            "name": "cjdns",
+            "proxy": "",
+            "proxy_randomize_credentials": false,
+            "reachable": false
+          }
+        ],
+        "protocolversion": 70016,
+        "relayfee": 1e-06,
+        "subversion": "/rbitcoin:0.9.0/",
+        "timeoffset": 0,
+        "version": 190000,
+        "warnings": []
+      },
+      "error": null
+    },
+    "getblockchaininfo []": {
+      "method": "getblockchaininfo",
+      "params": [],
+      "result": {
+        "bestblockhash": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+        "bits": "207fffff",
+        "blocks": 0,
+        "chain": "regtest",
+        "chainwork": "0000000000000000000000000000000000000000000000000000000000000002",
+        "consensus": {
+          "activation_heights": {
+            "bip34": 1,
+            "bip65": 1,
+            "bip66": 1,
+            "csv": 1,
+            "segwit": 0,
+            "taproot": 0
+          },
+          "allow_min_difficulty_blocks": true,
+          "coinbase_maturity": 100,
+          "difficulty_adjustment_interval": 2016,
+          "enforce_bip94": false,
+          "genesis_hash": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+          "network": "regtest",
+          "no_pow_retargeting": true,
+          "pow_limit_bits": "207fffff",
+          "pow_limit_target": "7fffff0000000000000000000000000000000000000000000000000000000000",
+          "pow_target_spacing": 600,
+          "pow_target_timespan": 1209600,
+          "regtest_pow_bits_overlay": null,
+          "retarget_floor_bits": "207fffff",
+          "retarget_floor_target": "7fffff0000000000000000000000000000000000000000000000000000000000",
+          "subsidy_halving_interval": 150
+        },
+        "difficulty": 4.656542373906925e-10,
+        "headers": 0,
+        "initialblockdownload": true,
+        "mediantime": 1296688602,
+        "pruned": false,
+        "size_on_disk": 1044449687,
+        "target": "7fffff0000000000000000000000000000000000000000000000000000000000",
+        "time": 1296688602,
+        "verificationprogress": 1.0,
+        "warnings": []
+      },
+      "error": null
+    },
+    "getindexinfo []": {
+      "method": "getindexinfo",
+      "params": [],
+      "result": {
+        "txindex": {
+          "best_block_height": 0,
+          "synced": true
+        }
+      },
+      "error": null
+    },
+    "getblockcount []": {
+      "method": "getblockcount",
+      "params": [],
+      "result": 0,
+      "error": null
+    },
+    "getblockhash [0]": {
+      "method": "getblockhash",
+      "params": [
+        0
+      ],
+      "result": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+      "error": null
+    },
+    "getblock [\"0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206\", 0]": {
+      "method": "getblock",
+      "params": [
+        "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+        0
+      ],
+      "result": "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff7f20020000000101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff4d04ffff001d0104455468652054696d65732030332f4a616e2f32303039204368616e63656c6c6f72206f6e206272696e6b206f66207365636f6e64206261696c6f757420666f722062616e6b73ffffffff0100f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5fac00000000",
+      "error": null
+    },
+    "getblockheader [\"0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206\", true]": {
+      "method": "getblockheader",
+      "params": [
+        "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+        true
+      ],
+      "result": {
+        "bits": "207fffff",
+        "chainwork": "0000000000000000000000000000000000000000000000000000000000000002",
+        "confirmations": 1,
+        "difficulty": 4.656542373906925e-10,
+        "hash": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+        "height": 0,
+        "mediantime": 1296688602,
+        "merkleroot": "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
+        "nTx": 1,
+        "nonce": 2,
+        "target": "7fffff0000000000000000000000000000000000000000000000000000000000",
+        "time": 1296688602,
+        "version": 1,
+        "versionHex": "00000001"
+      },
+      "error": null
+    },
+    "getrawtransaction [\"4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b\", 0]": {
+      "method": "getrawtransaction",
+      "params": [
+        "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
+        0
+      ],
+      "result": null,
+      "error": {
+        "category": "server_error_-5",
+        "detail": "The genesis block coinbase is not considered an ordinary transaction and cannot be retrieved",
+        "code": -5
+      }
+    },
+    "getrawtransaction [\"4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b\", 1]": {
+      "method": "getrawtransaction",
+      "params": [
+        "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
+        1
+      ],
+      "result": null,
+      "error": {
+        "category": "server_error_-5",
+        "detail": "The genesis block coinbase is not considered an ordinary transaction and cannot be retrieved",
+        "code": -5
+      }
+    },
+    "gettxout [\"4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b\", 0, true]": {
+      "method": "gettxout",
+      "params": [
+        "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
+        0,
+        true
+      ],
+      "result": null,
+      "error": null
+    },
+    "gettxout [\"4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b\", 0, false]": {
+      "method": "gettxout",
+      "params": [
+        "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
+        0,
+        false
+      ],
+      "result": null,
+      "error": null
+    },
+    "getrawmempool []": {
+      "method": "getrawmempool",
+      "params": [],
+      "result": [],
+      "error": null
+    },
+    "getmempoolentry [\"4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b\"]": {
+      "method": "getmempoolentry",
+      "params": [
+        "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"
+      ],
+      "result": null,
+      "error": {
+        "category": "server_error_-5",
+        "detail": "Transaction not in mempool",
+        "code": -5
+      }
+    },
+    "estimatesmartfee [1, \"economical\"]": {
+      "method": "estimatesmartfee",
+      "params": [
+        1,
+        "economical"
+      ],
+      "result": {
+        "blocks": 1,
+        "errors": [
+          "Insufficient data or no feerate found"
+        ]
+      },
+      "error": null
+    },
+    "estimatesmartfee [3, \"economical\"]": {
+      "method": "estimatesmartfee",
+      "params": [
+        3,
+        "economical"
+      ],
+      "result": {
+        "blocks": 3,
+        "errors": [
+          "Insufficient data or no feerate found"
+        ]
+      },
+      "error": null
+    },
+    "estimatesmartfee [6, \"economical\"]": {
+      "method": "estimatesmartfee",
+      "params": [
+        6,
+        "economical"
+      ],
+      "result": {
+        "blocks": 6,
+        "errors": [
+          "Insufficient data or no feerate found"
+        ]
+      },
+      "error": null
+    },
+    "testmempoolaccept [[\"00\"]]": {
+      "method": "testmempoolaccept",
+      "params": [
+        [
+          "00"
+        ]
+      ],
+      "result": null,
+      "error": {
+        "category": "server_error_-22",
+        "detail": "TX decode failed: 00 Make sure the tx has at least one input.",
+        "code": -22
+      }
+    },
+    "submitpackage [[\"00\"]]": {
+      "method": "submitpackage",
+      "params": [
+        [
+          "00"
+        ]
+      ],
+      "result": null,
+      "error": {
+        "category": "server_error_-22",
+        "detail": "TX decode failed: 00 Make sure the tx has at least one input.",
+        "code": -22
+      }
+    },
+    "sendrawtransaction [\"00\"]": {
+      "method": "sendrawtransaction",
+      "params": [
+        "00"
+      ],
+      "result": null,
+      "error": {
+        "category": "server_error_-22",
+        "detail": "TX decode failed. Make sure the tx has at least one input.",
+        "code": -22
+      }
+    },
+    "getzmqnotifications []": {
+      "method": "getzmqnotifications",
+      "params": [],
+      "result": null,
+      "error": {
+        "category": "method_missing",
+        "detail": "Method not found",
+        "code": -32601
+      }
+    }
+  }
+}

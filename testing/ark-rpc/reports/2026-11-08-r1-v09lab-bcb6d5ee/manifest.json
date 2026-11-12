@@ -1,0 +1,112 @@
+{
+  "manifest_version": 2,
+  "generated_utc": "2026-11-08T07:37:12Z",
+  "run_token": "AP1a-b1aeb688e017",
+  "probe": "ap1a-ark-rpc-probe",
+  "probe_version": "1.0.0",
+  "report_schema_version": 2,
+  "contract_hash": "11bdb1007e130a749720f87482f287c1fb65d1e743c142fc4b1ca15a782d89e7",
+  "base_commit": "b0ab4ca34fda07c61a6335d05f598eaacc69678c",
+  "base_commit_note": "worktree HEAD at probe time; the probe files themselves are uncommitted changes in this packet, hashed below",
+  "freeze_recipe": {
+    "description": "sha256 of every source file under testing/ark-rpc at probe time (reports/, devcheck/, __pycache__ and caches excluded). To reproduce: re-run the probe from a tree whose file hashes match this map and the same pinned node binary.",
+    "files": {
+      ".gitignore": "862263fa1f46c20f0d1e4dac5ffcc75abd55c08211b2c3864c5f8764b9d87793",
+      "README.md": "cacddd33439721b5654787deead3fe69ad0f0f9dc198937b2befad417c2e1d70",
+      "arkrpc/__init__.py": "f1eb4050ffa8b21124df93d2b6cf2839b7f1118eb3c216a43285ddeb24587cce",
+      "arkrpc/cli.py": "debb9e454e5ee2f0d17912f55567c24e2a41e8e1da036838abc857aae842b008",
+      "arkrpc/client.py": "9baddf6576773b7ef11c4332de1186af2fd04305125d550c91ae2fdd939c010a",
+      "arkrpc/contracts.py": "69b468322158a54c03ba6b11b6c3d6b2cd8c38a12719289366f09ceef4cef792",
+      "arkrpc/nodeproc.py": "604c0451277fdbcfb799a91ac9eb24c3f231bc63c8686a3af0eb9a2b322c6df8",
+      "arkrpc/probe.py": "f8911a33464dbc0284331839f640e956abc52bf343e027e1ea4db2a7e131b06b",
+      "arkrpc/reporting.py": "a9882ac135ebe67dfaa58576b7f3f53dbaaaf84b7268254475649793a64accbe",
+      "arkrpc/schemadef.py": "3356a6f6224432ade627cbb48f38f283f9a68e97a87035499317cd22d3f31aa8",
+      "arkrpc/selftest.py": "675073ced585cecc6dd2921b09172dd7e977934fe8504843358b52e72e6cb787",
+      "fixtures/base_responses.json": "853ba393dbdf858e2c2cd68fbdc022eae6a53f2cb936935c7df21666f54325ba",
+      "fixtures/scenarios/anchor_verbose_tx.json": "51f247b5e85ceb91a94bf4fbcc98c14fb1d19b69e0bb5290f0c8a165b15ff90b",
+      "fixtures/scenarios/auth_fail.json": "8bbc96c425cc65c6d39bdcf8c042373d56f4fef423390a96bbf2a0226f424b7a",
+      "fixtures/scenarios/baseline_190000.json": "6169f46563c2de9bfe19c61062c83d0f1446f6b81d7016dacb4e1dc6469298a2",
+      "fixtures/scenarios/gettxout_anchor_rejected.json": "6c98c65d278cfa9b357c2f1843d531c8ff50251fbed033fec4ad5fcbf76b65fd",
+      "fixtures/scenarios/id_string_echo.json": "46160522c9c6f4933aecb4bdfcc11ac0d9bb99e9f188e6bb5c0d6584212e2e9c",
+      "fixtures/scenarios/method_not_found.json": "1c4758c65f84012039520ea14e0349c6912be233fd8f39903fea2524d67c0687",
+      "fixtures/scenarios/no_txindex.json": "8d3dc58cf600b5730731be658deb4fdb5d935c233767076feec41fb47894a788",
+      "fixtures/scenarios/protocol_error_parse.json": "f44250c6c189fe8b12812699a734c3fdc2b9f6d653db884b38727319a90543e7",
+      "fixtures/scenarios/shape_mismatch.json": "0cb405a22cbcd2d97b3bdd4e5a915156cd5a510044ecfb4d766da97cdbd80e37",
+      "fixtures/scenarios/traffic_mempoolinfo_ok.json": "a8ece75acfc5aba22a5260852a365a90af8e872cbc94282f3bf3eb99382a26df",
+      "fixtures/scenarios/version_310000_only.json": "9afdcf4b0393191ce6c5755813b3c48f291b2c532f8fbda3b0137f35a5b4d5a1",
+      "fixtures/scenarios/version_missing.json": "a76615a0958fe07a16d31f60a8494ceaf9ca84ed8ec9b7bfeb36c9cb1c241a29",
+      "fixtures/scenarios/version_wrong_type.json": "2be8944bc3c03ea292dcfb3cb4b0b3331d91b1a59e271d5239cdbad887bf35a9",
+      "fixtures/scenarios/wrong_genesis.json": "fd6532c69fadbded42e77881e6844d902d0ef3243b13b7ebdd0df70b294297a3",
+      "fixtures/scenarios/wrong_network.json": "49bc58b7faec1689885d18d68e581815791dcbe2c990b6554885d637d9ba3c3b",
+      "probe.py": "833288d7b4a9491ff9cfa4d7186328f38f04e7fe7e5ef1c135496b5f9a62754a",
+      "report.schema.json": "f21aab661c77714dc5765feda8f570eb408e42dffb8820e06deb0cd669df110e",
+      "run_two_nodes.sh": "f994f2c9ede1ddab98d741fc997b0c04ce412e1b23f9c1747e3f991712790ff7",
+      "tests/test_contracts.py": "45c55064eaded4a1a95a50a6bee20ab2ba24a8e7eec129c12e7b218d6a00ee1c",
+      "tests/test_reporting.py": "552ceb84f5deeae7ca569cee9eb7623b9f2bedb7bc474bd2bfab12bea8be288d",
+      "tests/test_selftest.py": "f37bb2c6da6b2f784f32788ed4f5040fc82839c4fad57f793ab772caf3566f1b"
+    }
+  },
+  "node": {
+    "description": {
+      "label": "rbitcoin-v0.9-lab-r1",
+      "source_name": "rbitcoin-v0.9-lab",
+      "binary": "/tmp/opencode/rbitcoin-v0.9-lab/target/dev/debug/rbitcoin-node",
+      "binary_sha256": "bcb6d5eefe0dd0bd96e2ac79e173b4b99a91f67f7717dae6620c30786378a171",
+      "argv": [
+        "/tmp/opencode/rbitcoin-v0.9-lab/target/dev/debug/rbitcoin-node",
+        "--network",
+        "regtest",
+        "--datadir",
+        "/tmp/opencode/AP1a-b1aeb688e017/rbitcoin-v0.9-lab-r1/datadir",
+        "--rpc",
+        "--rpc-listen",
+        "127.0.0.1:39857",
+        "--rpc-cookie-file",
+        "/tmp/opencode/AP1a-b1aeb688e017/rbitcoin-v0.9-lab-r1/rpc.cookie",
+        "--no-listen",
+        "--no-seeds",
+        "--no-discover",
+        "--max-run-secs",
+        "240"
+      ],
+      "env": {
+        "RBITCOIN_RPC_PACKAGE_DIALECT": "1"
+      },
+      "rpc_url": "http://127.0.0.1:39857",
+      "cookie_file": "rpc.cookie",
+      "cookie_note": "written by the launcher before start (user:pass, mode 0600, no trailing newline); private at rest for the node's lifetime; contents never recorded; removed with the scratch dir unless --keep-scratch",
+      "network": "regtest",
+      "isolation": [
+        "--no-listen",
+        "--no-seeds",
+        "--no-discover",
+        "loopback rpc only"
+      ],
+      "max_run_secs": 240,
+      "dialect_env": {
+        "RBITCOIN_RPC_PACKAGE_DIALECT": "1"
+      }
+    },
+    "exit": {
+      "returncode": 0,
+      "signal": null,
+      "uptime_s": 0.873
+    }
+  },
+  "dialect_provenance": {
+    "RBITCOIN_RPC_PACKAGE_DIALECT": "1",
+    "note": "set in the node environment by the probe launcher. The package-topology dialect is an RPC-surface knob in the rbitcoin source (mempool submitpackage gates on Core IsChildWithParents topology only when this is set), not a consensus parameter. Source-inspected at crates/rbitcoin-rpc/src/methods/mempool.rs (PACKAGE_TOPOLOGY_DISALLOWED)."
+  },
+  "upstream_source_pins": [
+    {
+      "name": "bark (pinned)",
+      "commit": "c419159",
+      "role": "RPC contract source of truth (see UPSTREAM_DEPS.md)"
+    },
+    {
+      "name": "rbitcoin-v0.9-lab",
+      "binary_sha256": "bcb6d5eefe0dd0bd96e2ac79e173b4b99a91f67f7717dae6620c30786378a171",
+      "role": "probed node binary (pin name given via --source-name; distinct from the run label)"
+    }
+  ]
+}

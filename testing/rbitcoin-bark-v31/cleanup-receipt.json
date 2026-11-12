@@ -1,0 +1,26 @@
+{
+ "packet": "rbitcoin-bark-v31 (AP-1b node compat profile candidate, r1)",
+ "date": "2026-11-08",
+ "what": "r1 external-run scratch cleanup (two runs: default and profile-on, both launched by the packet-owned r1-external-run.py harness with explicit CLI argv)",
+ "runs": [
+  {
+   "label": "ap1b-r1-default",
+   "scratch_root": "/tmp/opencode/AP1b-r1-ap1b-r1-default-<hex token> (harness-generated)",
+   "contents": "rpc.cookie (0600 single-run credential), datadir (regtest store), node.log",
+   "action": "harness rm -rf of the whole scratch after node stop and node.log extraction",
+   "verified": true,
+   "binding": "probe-default/external-node-binding.json (cleanup field)"
+  },
+  {
+   "label": "ap1b-r1-bark-v31",
+   "scratch_root": "/tmp/opencode/AP1b-r1-ap1b-r1-bark-v31-<hex token> (harness-generated)",
+   "contents": "rpc.cookie (0600 single-run credential), datadir (regtest store), node.log",
+   "action": "harness rm -rf of the whole scratch after node stop and node.log extraction",
+   "verified": true,
+   "binding": "probe-profile-on/external-node-binding.json (cleanup field)"
+  }
+ ],
+ "harness_guarantee": "r1-external-run.py refuses to start if RBITCOIN_RPC_COMPAT_PROFILE is set in its own environment, so no run can depend on the removed env knob",
+ "prior_r0_cleanup": "the r0 node-probe runs' cleanup receipt is archived unchanged at r0/cleanup-receipt.json",
+ "final_state": "no probe scratch, cookie, or token from either r1 run survives; r0 scratch was already verified destroyed"
+}

@@ -26,6 +26,10 @@ use bitcoin::hashes::Hash;
 use bitcoin::pow::{CompactTarget, Target};
 use bitcoin::BlockHash;
 use serde_json::{json, Value};
+use spc_accounting::work_unit::{
+    decode_compact_target, window_target_network_work, Target as WorkTarget, WindowRule,
+    WorkUnitError, WorkUnitProfile, WorkUnitVersion,
+};
 use spc_crypto::{parse_sp_address, Network};
 use thiserror::Error;
 
@@ -168,6 +172,123 @@ fn div_be_u256_by_u64(bytes: [u8; 32], divisor: u64) -> [u8; 32] {
     out
 }
 
+/// The pool's active work-unit policy. Legacy integer difficulty is frozen;
+/// the exact reference profile is opt-in and uses no float anywhere.
+#[derive(Clone, Debug)]
+pub enum SharePolicy {
+    V1 {
+        share_difficulty: u64,
+    },
+    V2 {
+        profile: WorkUnitProfile,
+        j_cfg: u32,
+        max_window_target_units: u128,
+    },
+}
+
+impl SharePolicy {
+    pub fn v1(share_difficulty: u64) -> Self {
+        Self::V1 { share_difficulty }
+    }
+
+    pub fn version(&self) -> WorkUnitVersion {
+        match self {
+            Self::V1 { .. } => WorkUnitVersion::V1,
+            Self::V2 { .. } => WorkUnitVersion::V2,
+        }
+    }
+
+    pub fn window_rule(&self) -> WindowRule {
+        match self {
+            Self::V1 { .. } => WindowRule::ShareWorkLegacy,
+            Self::V2 { .. } => WindowRule::NetworkBlockWork,
+        }
+    }
+
+    pub fn fingerprint(&self) -> Option<[u8; 32]> {
+        match self {
+            Self::V1 { .. } => None,
+            Self::V2 { profile, .. } => Some(profile.fingerprint()),
+        }
+    }
+
+    pub fn job_work(&self, bits: u32, generation: u64) -> Result<JobWork, WorkUnitError> {
+        match self {
+            Self::V1 { share_difficulty } => {
+                Ok(JobWork::legacy(*share_difficulty, bits, generation))
+            }
+            Self::V2 { profile, j_cfg, .. } => {
+                let network_target = decode_compact_target(bits)?;
+                let issuance = profile.issuance(*j_cfg, network_target)?;
+                Ok(JobWork {
+                    work_unit_version: WorkUnitVersion::V2,
+                    work_unit_fingerprint: Some(profile.fingerprint()),
+                    generation,
+                    nbits: bits,
+                    m_issue: issuance.m_issue,
+                    share_target: issuance.share_target,
+                    stepped_down: issuance.stepped_down,
+                })
+            }
+        }
+    }
+
+    pub fn window_target(&self, bits: u32, n: u32) -> Result<u128, WorkUnitError> {
+        match self {
+            Self::V1 { share_difficulty } => Ok(u128::from(n)
+                .saturating_mul(u128::from(credited_difficulty(*share_difficulty, bits)))),
+            Self::V2 {
+                profile,
+                j_cfg,
+                max_window_target_units,
+            } => {
+                let _ = profile.validate_multiplier(
+                    1u64.checked_shl(*j_cfg).ok_or(WorkUnitError::Overflow)?,
+                )?;
+                let network_target = decode_compact_target(bits)?;
+                window_target_network_work(
+                    profile,
+                    network_target,
+                    u64::from(n),
+                    *max_window_target_units,
+                )
+            }
+        }
+    }
+}
+
+/// Immutable per-generation target and credit metadata. This is shared by
+/// SV1/SV2 jobs and never recomputed at share submission.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JobWork {
+    pub work_unit_version: WorkUnitVersion,
+    pub work_unit_fingerprint: Option<[u8; 32]>,
+    pub generation: u64,
+    pub nbits: u32,
+    pub m_issue: u64,
+    pub share_target: WorkTarget,
+    pub stepped_down: bool,
+}
+
+impl JobWork {
+    pub fn legacy(share_difficulty: u64, bits: u32, generation: u64) -> Self {
+        let share_target = effective_share_target(share_difficulty, bits);
+        Self {
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            generation,
+            nbits: bits,
+            m_issue: credited_difficulty(share_difficulty, bits),
+            share_target: WorkTarget::from_be_bytes(share_target.to_be_bytes()),
+            stepped_down: false,
+        }
+    }
+
+    pub fn bitcoin_share_target(&self) -> Target {
+        Target::from_be_bytes(self.share_target.to_be_bytes())
+    }
+}
+
 /// A job as the pool sends it to an SV1 miner. `coinb1` ends just after the
 /// SPc `push32`, so the miner's extranonce (extranonce1 ‖ extranonce2) follows
 /// it exactly as required by SPEC §2.4.1.
@@ -183,6 +304,7 @@ pub struct Job {
     pub coinb2: Vec<u8>,
     pub merkle_branches: Vec<[u8; 32]>,
     pub clean_jobs: bool,
+    pub work: JobWork,
 }
 
 /// One accepted share, in the shape the slice engine consumes.
@@ -440,7 +562,7 @@ impl Session {
         coinbase.extend_from_slice(&job.coinb2);
 
         let mut merkle_root = double_sha256(&coinbase);
-        for branch in job.merkle_branches.iter().rev() {
+        for branch in &job.merkle_branches {
             let mut buf = Vec::with_capacity(64);
             buf.extend_from_slice(&merkle_root);
             buf.extend_from_slice(branch);
@@ -597,6 +719,7 @@ mod tests {
             coinb2: vec![0xff; 8],
             merkle_branches: vec![],
             clean_jobs: true,
+            work: crate::sv1::JobWork::legacy(1, 0x207f_ffff, 1),
         }
     }
 
@@ -698,6 +821,59 @@ mod tests {
         }));
         let v: Value = serde_json::from_str(&line.unwrap()).unwrap();
         assert_eq!(v["error"][1], "duplicate share");
+    }
+
+    #[test]
+    fn deep_merkle_path_is_deepest_first_for_sv1_miners() {
+        let mut session = session();
+        let good = address(Network::Testnet, 3);
+        session.handle_request(json!({"id":1,"method":"mining.authorize","params":[good,"x"]}));
+        let mut job = job();
+        let deepest = [0x11; 32];
+        let second = double_sha256(&[&[0x22; 32][..], &[0x33; 32][..]].concat());
+        job.merkle_branches = vec![deepest, second];
+        session.set_job(job.clone());
+
+        let mut found = None;
+        for nonce in 0..64u32 {
+            let extranonce2 = [0u8; 4];
+            let mut coinbase = job.coinb1.clone();
+            coinbase.extend_from_slice(&session.extranonce1);
+            coinbase.extend_from_slice(&extranonce2);
+            coinbase.extend_from_slice(&job.coinb2);
+            let mut root = double_sha256(&coinbase);
+            for sibling in [deepest, second] {
+                let mut pair = Vec::with_capacity(64);
+                pair.extend_from_slice(&root);
+                pair.extend_from_slice(&sibling);
+                root = double_sha256(&pair);
+            }
+            let mut header = Vec::with_capacity(80);
+            header.extend_from_slice(&job.version.to_le_bytes());
+            header.extend_from_slice(&job.prev_hash);
+            header.extend_from_slice(&root);
+            header.extend_from_slice(&job.ntime.to_le_bytes());
+            header.extend_from_slice(&job.nbits.to_le_bytes());
+            header.extend_from_slice(&nonce.to_le_bytes());
+            let expected_hash = double_sha256(&header);
+            if !meets_target(expected_hash, network_target(job.nbits)) {
+                continue;
+            }
+            let request = json!({
+                "id": 2,
+                "method": "mining.submit",
+                "params": ["w", &job.job_id, "00000000", format!("{:08x}", job.ntime), format!("{nonce:08x}")]
+            });
+            session.handle_request(request);
+            let share = session
+                .take_share()
+                .expect("valid multi-level header accepted");
+            assert_eq!(share.merkle_root, root);
+            assert_eq!(share.share_hash, expected_hash);
+            found = Some(());
+            break;
+        }
+        assert!(found.is_some(), "no regtest nonce in 64 attempts");
     }
 
     #[test]

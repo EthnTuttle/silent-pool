@@ -7,11 +7,17 @@ use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
 use serde::Deserialize;
 use spc_crypto::{parse_sp_address, Network};
 use spc_pool::net::{Net, Target};
+use stratum_apps::key_utils::Secp256k1PublicKey;
 use thiserror::Error;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentConfig {
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub loaded_from: Option<(PathBuf, [u8; 32])>,
+    #[serde(default)]
+    pub source_audit: Option<crate::source_feed::Config>,
     pub upstream: Upstream,
     #[serde(default)]
     pub net: Net,
@@ -90,8 +96,143 @@ pub struct Ark {
     pub refresh_on_receive_above_sats: u64,
     #[serde(default)]
     pub offboard_on_exit: String,
+    /// BIP 85 child seed file (64-byte hex, 0600) for the embedded
+    /// stock bark wallet (wallet role only).
     #[serde(default)]
     pub seed_child: Option<PathBuf>,
+    /// Scan branch account xprv file `m/352'/0'/0'/1'` (0600).
+    #[serde(default)]
+    pub scan_xprv: Option<PathBuf>,
+    /// Ark branch account xprv file `m/352'/0'/0'/2'` (0600).
+    #[serde(default)]
+    pub ark_xprv: Option<PathBuf>,
+    /// Wallet-role state directory (sqlite store; created 0700).
+    #[serde(default)]
+    pub datadir: Option<PathBuf>,
+    /// Loopback status JSON listener (plan 4.7). Loopback only.
+    #[serde(default = "default_status_listen")]
+    pub status_listen: String,
+    /// Chain network when it cannot be derived from the `sp_address`
+    /// HRP (`tsp` covers testnet/signet/regtest). The wallet role
+    /// needs `regtest` to be explicit.
+    #[serde(default)]
+    pub network: Option<String>,
+    /// Target Ark server id (8 hex chars), for registration.
+    #[serde(default)]
+    pub ark_id: Option<String>,
+    /// Standard stock Ark endpoint; direct connection, no mining proxy.
+    #[serde(default)]
+    pub server_address: Option<String>,
+    /// Public compressed ArkInfo keys, pinned before the first connection.
+    #[serde(default)]
+    pub server_pubkey: Option<String>,
+    #[serde(default)]
+    pub mailbox_pubkey: Option<String>,
+    /// Read-only chain RPC endpoint and private cookie path; no inline password.
+    #[serde(default)]
+    pub chain_rpc_url: Option<String>,
+    #[serde(default)]
+    pub chain_cookie: Option<PathBuf>,
+    /// Owner-authenticated SPc-side API. Absent means obligations remain unknown.
+    #[serde(default)]
+    pub aggregate_api: Option<AggregateApi>,
+    #[serde(default)]
+    pub native_audit: Option<NativeAudit>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeAudit {
+    pub run_id: String,
+    pub identity_id: String,
+    pub pool_id: String,
+    pub front_id: String,
+    pub collector_socket: PathBuf,
+    pub pool_pubkey: String,
+    pub collector_pubkey: String,
+}
+impl NativeAudit {
+    pub fn validate(&self, address: &str, network: Network) -> Result<(), ConfigError> {
+        let valid = |s: &str| {
+            !s.is_empty()
+                && s.len() <= 128
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"._:/-".contains(&b))
+        };
+        if network != Network::Regtest
+            || ![
+                &self.run_id,
+                &self.identity_id,
+                &self.pool_id,
+                &self.front_id,
+            ]
+            .iter()
+            .all(|s| valid(s))
+            || !self.collector_socket.is_absolute()
+            || self
+                .collector_socket
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(ConfigError::NativeAudit);
+        }
+        let keys = spc_scan::native_activation::VerificationKeys::for_regtest_identity(
+            address,
+            &self.collector_pubkey,
+            &self.pool_pubkey,
+        )
+        .map_err(|_| ConfigError::NativeAudit)?;
+        if keys.pool.to_string() != self.pool_pubkey
+            || keys.collector.to_string() != self.collector_pubkey
+        {
+            return Err(ConfigError::NativeAudit);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AggregateApi {
+    /// HTTPS origin, or an explicitly configured loopback HTTP origin on regtest.
+    pub origin: String,
+    /// Pool's BIP340 Ark order/authorization public key, not the Ark server key.
+    pub order_pubkey: String,
+}
+
+impl AggregateApi {
+    /// Shared by config loading in every build and the live owner transport.
+    pub(crate) fn validated(
+        &self,
+        network: Network,
+    ) -> Result<(url::Url, bitcoin::secp256k1::XOnlyPublicKey), ConfigError> {
+        let origin = url::Url::parse(&self.origin).map_err(|_| ConfigError::AggregateApi)?;
+        let loopback = origin
+            .host_str()
+            .and_then(|h| h.trim_matches(['[', ']']).parse::<std::net::IpAddr>().ok())
+            .is_some_and(|ip| ip.is_loopback());
+        if self.origin != origin.as_str()
+            || !origin.username().is_empty()
+            || origin.password().is_some()
+            || origin.query().is_some()
+            || origin.fragment().is_some()
+            || origin.path() != "/"
+            || origin.host_str().is_none()
+            || origin.port() == Some(0)
+            || !(origin.scheme() == "https"
+                || (origin.scheme() == "http" && network == Network::Regtest && loopback))
+        {
+            return Err(ConfigError::AggregateApi);
+        }
+        let key: bitcoin::secp256k1::XOnlyPublicKey = self
+            .order_pubkey
+            .parse()
+            .map_err(|_| ConfigError::AggregateApi)?;
+        if self.order_pubkey != key.to_string() {
+            return Err(ConfigError::AggregateApi);
+        }
+        Ok((origin, key))
+    }
 }
 
 fn default_require() -> String {
@@ -129,6 +270,21 @@ fn default_fallback() -> String {
 fn default_signer() -> String {
     "local".into()
 }
+fn default_status_listen() -> String {
+    "127.0.0.1:34256".into()
+}
+
+/// Local network-name matcher (the wallet module's copy is
+/// feature-gated; config must validate in every build).
+fn parse_network(s: &str) -> Option<Network> {
+    match s {
+        "mainnet" => Some(Network::Mainnet),
+        "testnet" => Some(Network::Testnet),
+        "signet" => Some(Network::Signet),
+        "regtest" => Some(Network::Regtest),
+        _ => None,
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OwnPayoutPolicy {
@@ -162,6 +318,8 @@ pub enum ConfigError {
     Listen(String),
     #[error("invalid upstream address: {0} (expected host:port or IP:port)")]
     UpstreamAddress(String),
+    #[error("invalid upstream Noise authority key: {0}")]
+    Authority(String),
     #[error("invalid [net] proxy: {0}")]
     Proxy(String),
     #[error("[{0}] resolves to a .onion host but [net] proxy is not set; there is no direct route (SPEC §3.8)")]
@@ -178,6 +336,20 @@ pub enum ConfigError {
     JdTemplate,
     #[error("[jd] declare_timeout_secs must be at least 1 (fail-closed minimum, SPEC §3.5)")]
     DeclareTimeout,
+    #[error("invalid [ark] status_listen: {0}")]
+    StatusListen(String),
+    #[error(
+        "[ark] status_listen {0} is not loopback; the status JSON is loopback-only (plan 4.7)"
+    )]
+    StatusNotLoopback(String),
+    #[error("unknown [ark] network '{0}' (expected mainnet, testnet, signet or regtest)")]
+    Network(String),
+    #[error("[ark] ark_id must be 8 hex chars: {0}")]
+    ArkId(String),
+    #[error("invalid [ark.aggregate_api] origin or public order verification key")]
+    AggregateApi,
+    #[error("invalid [ark.native_audit] public scope or collector binding")]
+    NativeAudit,
 }
 
 impl Jd {
@@ -207,11 +379,25 @@ impl Jd {
     }
 }
 
+impl Ark {
+    /// The parsed loopback status listener.
+    pub fn status_socket_addr(&self) -> Result<std::net::SocketAddr, ConfigError> {
+        self.status_listen
+            .parse()
+            .map_err(|_| ConfigError::StatusListen(self.status_listen.clone()))
+    }
+}
+
 impl AgentConfig {
     pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
         let text = std::fs::read_to_string(path)?;
-        let cfg: Self = toml::from_str(&text)?;
+        let mut cfg: Self = toml::from_str(&text)?;
         cfg.validate()?;
+        use bitcoin::hashes::{sha256, Hash};
+        cfg.loaded_from = Some((
+            path.canonicalize()?,
+            sha256::Hash::hash(text.as_bytes()).to_byte_array(),
+        ));
         Ok(cfg)
     }
 
@@ -225,6 +411,20 @@ impl AgentConfig {
         }
     }
 
+    /// The chain network for the wallet role: `[ark] network` when
+    /// explicit (regtest must be), otherwise derived from the
+    /// `sp_address` HRP.
+    pub fn ark_network(&self) -> Network {
+        if let Some(ark) = &self.ark {
+            if let Some(name) = &ark.network {
+                if let Some(network) = parse_network(name) {
+                    return network;
+                }
+            }
+        }
+        self.network()
+    }
+
     pub fn own_payout_policy(&self) -> Result<OwnPayoutPolicy, ConfigError> {
         OwnPayoutPolicy::parse(&self.upstream.require_own_payout).ok_or(ConfigError::Policy)
     }
@@ -236,10 +436,18 @@ impl AgentConfig {
             .ok_or_else(|| ConfigError::UpstreamAddress(self.upstream.address.clone()))
     }
 
+    pub fn upstream_authority(&self) -> Result<Secp256k1PublicKey, ConfigError> {
+        self.upstream
+            .authority_public_key
+            .parse()
+            .map_err(|_| ConfigError::Authority(self.upstream.authority_public_key.clone()))
+    }
+
     pub fn validate(&self) -> Result<(), ConfigError> {
         let network = self.network();
         let parsed = parse_sp_address(&self.upstream.sp_address, network)
             .map_err(|_| ConfigError::InvalidAddress)?;
+        let _ = self.upstream_authority()?;
         let _ = self.own_payout_policy()?;
         let egress = self
             .net
@@ -280,6 +488,12 @@ impl AgentConfig {
             }
         }
         if let Some(ark) = &self.ark {
+            if let Some(api) = &ark.aggregate_api {
+                api.validated(self.ark_network())?;
+            }
+            if let Some(audit) = &ark.native_audit {
+                audit.validate(&self.upstream.sp_address, self.ark_network())?;
+            }
             if ark.enabled {
                 match ark.mailbox_mode.as_str() {
                     "none" | "static" | "epoch_derived" | "epoch_registered" => {}
@@ -292,6 +506,26 @@ impl AgentConfig {
                 match ark.signer.as_str() {
                     "local" | "external" => {}
                     other => return Err(ConfigError::Signer(other.to_string())),
+                }
+                // Wallet-role settings validate in every build so a
+                // bad config fails at load, not at role start.
+                let status_addr = ark.status_socket_addr()?;
+                if !status_addr.ip().is_loopback() {
+                    return Err(ConfigError::StatusNotLoopback(ark.status_listen.clone()));
+                }
+                if let Some(name) = &ark.network {
+                    if parse_network(name).is_none() {
+                        return Err(ConfigError::Network(name.clone()));
+                    }
+                }
+                if let Some(id) = &ark.ark_id {
+                    let ok = id.trim().len() == 8
+                        && hex::decode(id.trim())
+                            .map(|b| b.len() == 4)
+                            .unwrap_or(false);
+                    if !ok {
+                        return Err(ConfigError::ArkId(id.clone()));
+                    }
                 }
             }
         }
@@ -321,7 +555,7 @@ mod tests {
             r#"
 [upstream]
 address = "127.0.0.1:34254"
-authority_public_key = "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+authority_public_key = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72"
 sp_address = "{}"
 require_own_payout = "refuse"
 
@@ -342,6 +576,59 @@ mailbox_mode = "epoch_derived"
         let cfg = sample();
         cfg.validate().unwrap();
         assert_eq!(cfg.own_payout_policy().unwrap(), OwnPayoutPolicy::Refuse);
+    }
+
+    #[test]
+    fn aggregate_api_fields_validate_in_default_and_ark_builds() {
+        let mut cfg = sample();
+        assert!(cfg.ark.as_ref().unwrap().aggregate_api.is_none());
+        let key = PublicKey::from_secret_key(
+            &Secp256k1::new(),
+            &SecretKey::from_slice(&[8; 32]).unwrap(),
+        )
+        .x_only_public_key()
+        .0
+        .to_string();
+        cfg.ark.as_mut().unwrap().network = Some("regtest".into());
+        cfg.ark.as_mut().unwrap().aggregate_api = Some(AggregateApi {
+            origin: "http://127.0.0.1:38001/".into(),
+            order_pubkey: key.clone(),
+        });
+        cfg.validate().unwrap();
+        for origin in [
+            "http://127.0.0.1:0/",
+            "http://localhost:38001/",
+            "http://10.0.0.1:38001/",
+            "https://user:pass@example.com/",
+            "https://example.com/path/",
+            "https://example.com/?x=1",
+            " https://example.com/",
+            "https://example.com",
+        ] {
+            cfg.ark
+                .as_mut()
+                .unwrap()
+                .aggregate_api
+                .as_mut()
+                .unwrap()
+                .origin = origin.into();
+            assert_eq!(cfg.validate(), Err(ConfigError::AggregateApi));
+        }
+        cfg.ark.as_mut().unwrap().aggregate_api = Some(AggregateApi {
+            origin: "http://127.0.0.1:38001/".into(),
+            order_pubkey: key,
+        });
+        cfg.ark.as_mut().unwrap().network = Some("mainnet".into());
+        assert_eq!(cfg.validate(), Err(ConfigError::AggregateApi));
+        cfg.ark.as_mut().unwrap().network = Some("regtest".into());
+        cfg.ark
+            .as_mut()
+            .unwrap()
+            .aggregate_api
+            .as_mut()
+            .unwrap()
+            .order_pubkey = "00".repeat(32);
+        assert_eq!(cfg.validate(), Err(ConfigError::AggregateApi));
     }
 
     #[test]
@@ -496,5 +783,70 @@ mailbox_mode = "epoch_derived"
         cfg.net.stream_isolation = Some(false);
         cfg.validate().unwrap();
         assert_eq!(cfg.net.stream_isolation, Some(false));
+    }
+
+    #[test]
+    fn wallet_role_settings_validate() {
+        // Defaults: loopback status listener.
+        let cfg = sample();
+        cfg.validate().unwrap();
+        let ark = cfg.ark.as_ref().unwrap();
+        assert_eq!(
+            ark.status_socket_addr().unwrap(),
+            "127.0.0.1:34256".parse::<std::net::SocketAddr>().unwrap()
+        );
+        // HRP-derived default network.
+        assert_eq!(cfg.ark_network(), Network::Testnet);
+
+        // Explicit wallet settings, all valid.
+        let mut cfg = sample();
+        {
+            let ark = cfg.ark.as_mut().unwrap();
+            ark.status_listen = "127.0.0.1:39999".into();
+            ark.network = Some("regtest".into());
+            ark.ark_id = Some("a1b2c3d4".into());
+        }
+        cfg.validate().unwrap();
+        assert_eq!(cfg.ark_network(), Network::Regtest);
+    }
+
+    #[test]
+    fn non_loopback_status_listener_is_rejected() {
+        for bad in ["0.0.0.0:34256", "192.168.1.4:34256", "[::]:34256"] {
+            let mut cfg = sample();
+            cfg.ark.as_mut().unwrap().status_listen = bad.into();
+            assert_eq!(
+                cfg.validate(),
+                Err(ConfigError::StatusNotLoopback(bad.into())),
+                "{bad}"
+            );
+        }
+        // A name that does not parse at all is a parse error.
+        let mut cfg = sample();
+        cfg.ark.as_mut().unwrap().status_listen = "not-an-address".into();
+        assert_eq!(
+            cfg.validate(),
+            Err(ConfigError::StatusListen("not-an-address".into()))
+        );
+        // IPv6 loopback is fine.
+        let mut cfg = sample();
+        cfg.ark.as_mut().unwrap().status_listen = "[::1]:34256".into();
+        cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn unknown_ark_network_and_bad_ark_id_are_rejected() {
+        let mut cfg = sample();
+        cfg.ark.as_mut().unwrap().network = Some("dogenet".into());
+        assert_eq!(cfg.validate(), Err(ConfigError::Network("dogenet".into())));
+
+        for bad in ["a1b2c3", "a1b2c3d4e5", "zzzzzzzz", ""] {
+            let mut cfg = sample();
+            cfg.ark.as_mut().unwrap().ark_id = Some(bad.into());
+            assert!(
+                matches!(cfg.validate(), Err(ConfigError::ArkId(_))),
+                "{bad} must be rejected"
+            );
+        }
     }
 }

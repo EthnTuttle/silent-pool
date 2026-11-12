@@ -77,6 +77,7 @@ fn ark_identity_signs_and_verifies() {
         mailbox_dh: vec![],
         epoch_fallback: EpochFallback::Static,
         sig: [0; 64],
+        request_id: 1,
     };
     m.sign(&sp_id, &kp).unwrap();
     m.verify(&sp_id, &kp.x_only_public_key().0).unwrap();
@@ -101,6 +102,7 @@ fn ark_identity_error_matrix() {
         mailbox_dh: vec![],
         epoch_fallback: EpochFallback::Static,
         sig: [0; 64],
+        request_id: 1,
     };
     m.sign(&sp_id, &kp).unwrap();
     let x = kp.x_only_public_key().0;
@@ -165,6 +167,7 @@ fn epoch_mailboxes_sign_and_verify() {
     let mut m = RegisterEpochMailboxes {
         entries: vec![[1u8; 37], [2u8; 37]],
         sig: [0; 64],
+        request_id: 1,
     };
     m.sign(&[3u8; 32], &kp).unwrap();
     m.verify(&[3u8; 32], &kp.x_only_public_key().0).unwrap();

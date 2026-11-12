@@ -1,0 +1,19 @@
+{
+  "base_fixture": "launch-profile-goldens.json",
+  "base_fixture_sha256": "4613f329a2455807afc39e82487dbd7541798740e53d6a2d2807328e76d83c9a",
+  "default_comparison_sha256": "626ecf7558b9696a6ce1e6891eb0a06f22287fe1350a9804128bb8df24b31f89",
+  "cases": [
+    {
+      "name": "split",
+      "append_argv": ["--rpc-compat-profile", "bark-v31"],
+      "comparison_sha256": "ce22700b1e71f41fcf8100825ff04b33a929870d3f84c47afd6d14c512974b96",
+      "canonical_utf8": "{\"argv\":[{\"literal\":\"--network\"},{\"literal\":\"regtest\"},{\"literal\":\"--datadir\"},{\"class\":\"datadir\"},{\"literal\":\"--rpc\"},{\"literal\":\"--rpc-listen\"},{\"class\":\"rpc-listen\"},{\"literal\":\"--rpc-cookie-file\"},{\"class\":\"cookie-file\"},{\"literal\":\"--regtest-pow-bits\"},{\"literal\":\"200fffff\"},{\"class\":\"api-log\"},{\"literal\":\"--max-run-secs\"},{\"class\":\"max-run-secs\"},{\"literal\":\"--config\"},{\"literal\":\"/policy/node.conf\"},{\"literal\":\"--rpc-compat-profile\"},{\"literal\":\"bark-v31\"}],\"binary_sha256\":\"abababababababababababababababababababababababababababababababab\",\"config_files\":[{\"argv_index\":15,\"sha256\":\"97d0b33aa1795ae46b51aafafbcfb4e004d32576fd7061a149c424ce0d9e36be\"}],\"env\":{\"RBITCOIN_RPC_PACKAGE_DIALECT\":\"1\",\"SPC_LAB_RUN_TOKEN\":\"golden_public_fixture_token\"},\"p2p_isolation\":\"validated_lab_transport\",\"profile_version\":1}"
+    },
+    {
+      "name": "equals",
+      "append_argv": ["--rpc-compat-profile=bark-v31"],
+      "comparison_sha256": "2277d7cc0aa0e0f0715ad38954cbb0d5fe6d2c3f509bdb5a85b8e36c9764aa37",
+      "canonical_utf8": "{\"argv\":[{\"literal\":\"--network\"},{\"literal\":\"regtest\"},{\"literal\":\"--datadir\"},{\"class\":\"datadir\"},{\"literal\":\"--rpc\"},{\"literal\":\"--rpc-listen\"},{\"class\":\"rpc-listen\"},{\"literal\":\"--rpc-cookie-file\"},{\"class\":\"cookie-file\"},{\"literal\":\"--regtest-pow-bits\"},{\"literal\":\"200fffff\"},{\"class\":\"api-log\"},{\"literal\":\"--max-run-secs\"},{\"class\":\"max-run-secs\"},{\"literal\":\"--config\"},{\"literal\":\"/policy/node.conf\"},{\"literal\":\"--rpc-compat-profile=bark-v31\"}],\"binary_sha256\":\"abababababababababababababababababababababababababababababababab\",\"config_files\":[{\"argv_index\":15,\"sha256\":\"97d0b33aa1795ae46b51aafafbcfb4e004d32576fd7061a149c424ce0d9e36be\"}],\"env\":{\"RBITCOIN_RPC_PACKAGE_DIALECT\":\"1\",\"SPC_LAB_RUN_TOKEN\":\"golden_public_fixture_token\"},\"p2p_isolation\":\"validated_lab_transport\",\"profile_version\":1}"
+    }
+  ]
+}

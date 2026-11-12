@@ -33,6 +33,7 @@ use super::ArkError;
 /// One VTXO the wallet tracks, as the send and board paths need it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TrackedVtxo {
+    pub proof: Vec<u8>,
     /// 36-byte VTXO id (`ark::VtxoId::to_bytes`).
     pub id: [u8; 36],
     pub sats: u64,
@@ -63,6 +64,37 @@ pub struct ArkPayment {
 /// stream cannot reach them at all (decision record, clause 3).
 #[async_trait::async_trait]
 pub trait BarkClient: Send + Sync {
+    /// Pending stock boards/refresh rounds reserve capacity until spendable.
+    async fn board_capacity_available(&self) -> Result<bool, String> {
+        Ok(true)
+    }
+    async fn check_send_readiness(
+        &self,
+        _payment: &ArkPayment,
+        _permit: &super::send_fence::WalletOperationPermit,
+    ) -> Result<(), super::send_fence::CapacityError> {
+        Err(super::send_fence::CapacityError::Unsupported)
+    }
+    async fn acquire_send_capacity(
+        &self,
+    ) -> Result<super::send_fence::WalletOperationPermit, super::send_fence::CapacityError> {
+        Err(super::send_fence::CapacityError::Unsupported)
+    }
+    async fn send_arkoor_authorized(
+        &self,
+        _payment: &ArkPayment,
+        _authorization: &super::send_fence::SendAuthorization,
+    ) -> Result<Vec<TrackedVtxo>, String> {
+        Err("wallet does not implement the post-lock grant fence".into())
+    }
+    async fn send_arkoor_guarded(
+        &self,
+        _payment: &ArkPayment,
+        _permit: &super::send_fence::WalletOperationPermit,
+        _authorization: Option<&super::send_fence::SendAuthorization>,
+    ) -> Result<Vec<TrackedVtxo>, String> {
+        Err("wallet does not implement guarded send".into())
+    }
     /// Every VTXO the wallet currently tracks.
     async fn list_vtxos(&self) -> Result<Vec<TrackedVtxo>, String>;
     /// Out-of-round payment to `payment.address`; returns once the send
@@ -153,7 +185,14 @@ fn delivered_receipt(
                 .to_string(),
         );
     }
-    let sum: u64 = delivered.iter().map(|v| v.sats).sum();
+    let sum = delivered
+        .iter()
+        .try_fold(0u64, |sum, v| sum.checked_add(v.sats))
+        .ok_or("delivered amount overflow")?;
+    let ids: std::collections::BTreeSet<_> = delivered.iter().map(|v| v.id).collect();
+    if ids.len() != delivered.len() {
+        return Err("duplicate delivered VTXO".into());
+    }
     if sum != sats {
         return Err(format!(
             "delivered VTXOs sum to {sum} sats but the order was {sats} sats; refusing to fabricate a receipt"
@@ -198,6 +237,62 @@ impl<C: BarkClient> BarkTransport<C> {
 
 #[async_trait::async_trait]
 impl<C: BarkClient + 'static> ArkTransport for BarkTransport<C> {
+    async fn check_send_readiness(
+        &self,
+        address: &str,
+        sats: u64,
+        permit: Option<&super::send_fence::WalletOperationPermit>,
+    ) -> Result<(), super::send_fence::CapacityError> {
+        let payment = map_payment(address, sats, self.ark_id, self.testnet)
+            .map_err(|_| super::send_fence::CapacityError::ReadinessUnavailable)?;
+        self.client
+            .check_send_readiness(
+                &payment,
+                permit.ok_or(super::send_fence::CapacityError::ForeignPermit)?,
+            )
+            .await
+    }
+    async fn reserve_send_capacity(
+        &self,
+    ) -> Result<Option<super::send_fence::WalletOperationPermit>, super::send_fence::CapacityError>
+    {
+        Ok(Some(self.client.acquire_send_capacity().await?))
+    }
+    async fn send_authorized(
+        &self,
+        address: &str,
+        sats: u64,
+        authorization: &super::send_fence::SendAuthorization,
+        permit: Option<&super::send_fence::WalletOperationPermit>,
+    ) -> Result<Vec<Vec<u8>>, String> {
+        let payment =
+            map_payment(address, sats, self.ark_id, self.testnet).map_err(|e| e.to_string())?;
+        let mut delivered = self
+            .client
+            .send_arkoor_guarded(
+                &payment,
+                permit.ok_or("wallet permit missing")?,
+                Some(authorization),
+            )
+            .await?;
+        delivered_receipt(delivered.clone(), &payment, sats)?;
+        if delivered.iter().any(|v| v.proof.is_empty()) {
+            return Err("sender did not retain complete VTXO proof".into());
+        }
+        delivered.sort_by_key(|v| v.id);
+        Ok(delivered.into_iter().map(|v| v.proof).collect())
+    }
+    async fn send_proven(&self, address: &str, sats: u64) -> Result<Vec<Vec<u8>>, String> {
+        let payment =
+            map_payment(address, sats, self.ark_id, self.testnet).map_err(|e| e.to_string())?;
+        let mut delivered = self.client.send_arkoor_payment(&payment).await?;
+        delivered_receipt(delivered.clone(), &payment, sats)?;
+        if delivered.iter().any(|v| v.proof.is_empty()) {
+            return Err("sender did not retain complete VTXO proof".into());
+        }
+        delivered.sort_by_key(|v| v.id);
+        Ok(delivered.into_iter().map(|v| v.proof).collect())
+    }
     async fn send(&self, address: &str, sats: u64) -> Result<(Vec<u8>, u32), String> {
         // Fail closed on any parse or binding error: the transport never
         // pays an address it cannot fully re-verify (SPEC §11.3).
@@ -269,6 +364,7 @@ mod tests {
         let mut vid = [0u8; 36];
         vid[0] = id;
         TrackedVtxo {
+            proof: vec![], // explicit mock metadata, never funded proof
             id: vid,
             sats,
             expiry_height: expiry,

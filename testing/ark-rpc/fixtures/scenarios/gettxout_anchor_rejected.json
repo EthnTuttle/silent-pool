@@ -1,0 +1,23 @@
+{
+  "name": "gettxout_anchor_rejected",
+  "description": "gettxout serving a scriptPubKey of type anchor: the 0.19 GetTxOutResult contract (ScriptPubkeyType WITHOUT Anchor) rejects it -- the two-enum split is load-bearing",
+  "overrides": [
+    {"op": "patch", "method": "getnetworkinfo", "field": "version", "value": 310000},
+    {"op": "set_response", "method": "gettxout", "params": ["4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b", 0, true],
+     "response": {"result": {
+       "bestblock": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+       "confirmations": 1,
+       "value": 1.0,
+       "scriptPubKey": {"asm": "", "hex": "51024c53", "type": "anchor"},
+       "coinbase": false}}}
+  ],
+  "expect": {
+    "verdict_status": "incompatible",
+    "reasons": ["fail-shape", "funded-unproven"],
+    "funded_state": "unproven",
+    "checks": {
+      "gettxout.mempool-true": "failed",
+      "gettxout.mempool-false": "passed"
+    }
+  }
+}

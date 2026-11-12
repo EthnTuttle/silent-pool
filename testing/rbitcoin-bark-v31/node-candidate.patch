@@ -1,0 +1,939 @@
+--- a/COMPAT.md
++++ b/COMPAT.md
+@@ -155,6 +155,18 @@
+ Per-method notes, auth, and the shindex matrix live in
+ **[`docs/rpc.md`](./docs/rpc.md)**. Group status (intentional scope):
+ 
++`getnetworkinfo.version` stays the fixed Core 0.19 client integer
++**190000**. Regtest only, the opt-in named profile
++`--rpc-compat-profile bark-v31` (see [`docs/rpc.md`](./docs/rpc.md))
++reports **310000** as an explicit, machine-readable claim
++(`rbitcoin_compat` object + startup log) while `subversion` keeps the real
++rbitcoin identity, and selects Core's `IsChildWithParents`
++`submitpackage` dialect. That is a read-only-surface claim for probed lab
++clients, not Core v31 parity: funded behavior stays unproven by read-only
++probes and known mismatches (for example `getmempoolinfo`'s null
++`maxdatacarriersize` against the selected modelling consumer) stay
++mismatched. Default off; no env form.
++
+ | Method group | Status |
+ |--------------|--------|
+ | Control (`help`, `uptime`, `stop`, `getrpcinfo`, `echo`) | done (`syncwithvalidationinterfacequeue` omitted; functional proxy no-op for Core `sync_mempools`) |
+--- a/changelog.d/rpc-compat-profile-bark-v31.md
++++ b/changelog.d/rpc-compat-profile-bark-v31.md
+@@ -0,0 +1,3 @@
++Added
++
++- **`--rpc-compat-profile bark-v31`: opt-in named RPC compat claim (regtest only).** `--rpc-compat-profile bark-v31` (conf `rpc_compat_profile=`, the only accepted value; there is deliberately no env form and no free-form version integer) makes `getnetworkinfo.version` report **310000** — the floor the ark/bark server at `c419159` gates on — while `subversion` keeps the real `/rbitcoin:<semver>/` identity, `protocolversion` stays 70016, and every other `getnetworkinfo` field is unchanged. The response appends a structured `rbitcoin_compat` object (`profile`, `claimed_version`, `package_dialect: "core-is-child-with-parents"`) and startup logs `rpc_compat_profile=bark-v31 claimed_version=310000 software=rbitcoin software_version=<real>`, so the claim is explicit and auditable, never a disguise. The profile selects the existing Core `IsChildWithParents` `submitpackage` dialect (the `RBITCOIN_RPC_PACKAGE_DIALECT=1` behavior); an explicitly-off `RBITCOIN_RPC_PACKAGE_DIALECT=0` together with the profile is a startup config error, and any network other than regtest fails config validation before the datadir or store opens. Default is off: `version` stays 190000 and no `rbitcoin_compat` key appears. The claim is deliberately narrow — read-only RPC surface shape for probed lab clients, not Core v31 parity: funded broadcast/mempool behavior stays unproven by read-only probes, and known surface mismatches stay mismatched (`getmempoolinfo.maxdatacarriersize` is null where the selected modelling consumer expects an integer). `docs/rpc.md` owns the surface contract (see "Opt-in named compat profile"); `COMPAT.md` owns the intentional-difference statement.
+--- a/crates/rbitcoin-node/src/cli.rs
++++ b/crates/rbitcoin-node/src/cli.rs
+@@ -198,8 +198,11 @@
+         config.bq_assign_stop_bytes = stop;
+     }
+     config.sh_force_rebuild |= env.sh_force_rebuild;
+-    config.rpc.package_dialect |= env.rpc_package_dialect;
+     config.rpc.wait_tip_idle |= env.rpc_wait_tip_idle;
++    if let Err(e) = config.resolve_rpc_env(env) {
++        eprintln!("error: {e}");
++        return Err(ExitCode::from(2));
++    }
+     config.resolve_listen_defaults();
+     if let Err(e) = config.seal_trust_peer() {
+         eprintln!("error: {e}");
+@@ -344,7 +347,7 @@
+     [--electrum-listen ADDR] [--esplora-listen ADDR] [--esplora-onion[=0|1]] [--health-listen [ADDR]] [--metrics] \\\n\
+     [--sv2-tp-listen ADDR] [--sv2-tp-authority-sec KEY] [--sv2-tp-authority-sec-file PATH] [--sv2-tp-cert-validity SECS] [--sv2-tp-stale-grace SECS] [--sv2-tp-idle-timeout SECS] [--sv2-tp-fee-delta SATS] [--sv2-tp-template-interval SECS] \\\n\
+     [--sh-index] [--block-filter-index] [--prune-seqsigwit] [--prune-seqsigwit-ram-threshold-bytes N] [--datadir-hdd] [--store-read-budget N] [--sp-tweaks] [--sp-tweaks-dust SATS] [--max-sh-creates N] [--heavy-sh-creates N] [--electrum-max-subs N] [--esplora-max-inflight N] [--esplora-block-template] \\\n\
+-    [--rpc] [--rpc-listen [ADDR]] [--rest] [--rpc-socket PATH] [--rpc-token-file PATH] [--rpc-cookie-file PATH] [--rpc-cookie-perms owner|group|all] [--rpc-work-queue N] \\\n\
++    [--rpc] [--rpc-listen [ADDR]] [--rest] [--rpc-socket PATH] [--rpc-token-file PATH] [--rpc-cookie-file PATH] [--rpc-cookie-perms owner|group|all] [--rpc-work-queue N] [--rpc-compat-profile bark-v31] \\\n\
+     [--milestone HEIGHT] \\\n\
+     [--max-outbound N] [--max-inbound N] \\\n\
+     [--mempool-size-mb N] [--mempool-expiry HOURS] \\\n\
+@@ -427,7 +430,7 @@
+     at most 86400 (default 0: never; SRI pools and JDCs stay silent between shares).\n\
+   --sv2-tp-fee-delta SATS pushes a same-tip template once its fees gain SATS over the last one sent (default 1000).\n\
+   --sv2-tp-template-interval SECS checks for that gain every SECS, 1 to 86400 (default 5).\n\
+-RPC: --rpc unix socket {{datadir}}/rpc.sock; --rpc-listen [ADDR] adds TCP (default 127.0.0.1 and Core-matching port). Token {{datadir}}/rpc.token (Bearer), created mode 0600; an existing token must be owner-only on Unix. Delete a wider file and start again so the node mints a new token (Windows has no mode bits). --rpc-cookie-file opts TCP into Core cookie HTTP Basic. --rpc-cookie-perms owner|group|all (default owner) is the widest Unix mode that file may have (owner 0600, group 0640, all 0644); the node never creates or chmods it. Windows has no mode bits. No --rpcuser. --rest turns on unauthenticated /rest/ on those listeners (off unless set).\n\
++RPC: --rpc unix socket {{datadir}}/rpc.sock; --rpc-listen [ADDR] adds TCP (default 127.0.0.1 and Core-matching port). Token {{datadir}}/rpc.token (Bearer), created mode 0600; an existing token must be owner-only on Unix. Delete a wider file and start again so the node mints a new token (Windows has no mode bits). --rpc-cookie-file opts TCP into Core cookie HTTP Basic. --rpc-cookie-perms owner|group|all (default owner) is the widest Unix mode that file may have (owner 0600, group 0640, all 0644); the node never creates or chmods it. Windows has no mode bits. No --rpcuser. --rest turns on unauthenticated /rest/ on those listeners (off unless set). --rpc-compat-profile bark-v31 (regtest only) reports getnetworkinfo.version 310000 and appends an rbitcoin_compat object while subversion keeps the real rbitcoin identity; it also selects the Core IsChildWithParents submitpackage dialect (RBITCOIN_RPC_PACKAGE_DIALECT=0 with it is a config error).\n\
+ Cold files: --datadir-cold PATH puts append-only IBD files under PATH/store\n\
+   (seqsigwit, txstat, input, and blockfilter / sp_tweaks once enabled).\n\
+   Default (flag omitted): those files live under --datadir. --prune-seqsigwit\n\
+--- a/crates/rbitcoin-node/src/config.rs
++++ b/crates/rbitcoin-node/src/config.rs
+@@ -280,6 +280,10 @@
+     /// `submitpackage` uses Core `IsChildWithParents`. Set only from
+     /// [`NodeEnv::rpc_package_dialect`].
+     pub package_dialect: bool,
++    /// `--rpc-compat-profile` (conf key `rpc_compat_profile`). See
++    /// [`NodeConfig::resolve_rpc_env`] for the one policy path that fills
++    /// this and `package_dialect` together.
++    pub compat_profile: Option<rbitcoin_rpc::methods::RpcCompatProfile>,
+     /// RPC tip waits drain the tip-accept lane. Set only from
+     /// [`NodeEnv::rpc_wait_tip_idle`].
+     pub wait_tip_idle: bool,
+@@ -298,6 +302,7 @@
+             work_queue: Some(rbitcoin_rpc::DEFAULT_RPC_WORK_QUEUE),
+             rest: false,
+             package_dialect: false,
++            compat_profile: None,
+             wait_tip_idle: false,
+         }
+     }
+@@ -322,8 +327,9 @@
+     /// recollects all of Class A, on every start while it stays set.
+     pub sh_force_rebuild: bool,
+     /// `RBITCOIN_RPC_PACKAGE_DIALECT` is on: `submitpackage` uses Core
+-    /// `IsChildWithParents`.
+-    pub rpc_package_dialect: bool,
++    /// `IsChildWithParents`. `Some(false)` is an explicit off, which a
++    /// `--rpc-compat-profile` that selects a dialect conflicts with.
++    pub rpc_package_dialect: Option<bool>,
+     /// `RBITCOIN_RPC_WAIT_TIP_IDLE` is on: `getblockcount`, `getbestblockhash`,
+     /// and `wait_height` wait until the tip-accept lane is empty.
+     pub rpc_wait_tip_idle: bool,
+@@ -349,7 +355,7 @@
+                 .map(|n| if n == 0 { u64::MAX } else { n }),
+             test_drop_store: env_flag(var("RBITCOIN_TEST_DROP_STORE"))?,
+             sh_force_rebuild: env_flag(var("RBITCOIN_SH_FORCE_REBUILD"))?,
+-            rpc_package_dialect: env_flag(var("RBITCOIN_RPC_PACKAGE_DIALECT"))?,
++            rpc_package_dialect: env_flag_opt(var("RBITCOIN_RPC_PACKAGE_DIALECT"))?,
+             rpc_wait_tip_idle: env_flag(var("RBITCOIN_RPC_WAIT_TIP_IDLE"))?,
+         })
+     }
+@@ -375,10 +381,16 @@
+ }
+ 
+ fn env_flag((key, val): (&str, Option<OsString>)) -> Result<bool, NodeError> {
++    Ok(env_flag_opt((key, val))?.unwrap_or(false))
++}
++
++/// Like [`env_flag`] but keeps an explicit off distinct from unset, so a
++/// conflicting explicit setting can fail closed instead of being lost.
++fn env_flag_opt((key, val): (&str, Option<OsString>)) -> Result<Option<bool>, NodeError> {
+     match env_value(key, val.as_deref())? {
+-        None => Ok(false),
+-        Some(v) if v == "1" || v.eq_ignore_ascii_case("true") => Ok(true),
+-        Some(v) if v == "0" || v.eq_ignore_ascii_case("false") => Ok(false),
++        None => Ok(None),
++        Some(v) if v == "1" || v.eq_ignore_ascii_case("true") => Ok(Some(true)),
++        Some(v) if v == "0" || v.eq_ignore_ascii_case("false") => Ok(Some(false)),
+         Some(v) => Err(NodeError::Config(format!(
+             "{key}={v:?}: expected 1, true, 0, or false"
+         ))),
+@@ -851,6 +863,14 @@
+                 "--rest needs --rpc or --rpc-listen".into(),
+             ));
+         }
++        if let Some(profile) = self.rpc.compat_profile {
++            if self.network != Network::Regtest {
++                return Err(NodeError::Config(format!(
++                    "--rpc-compat-profile {} requires network=regtest",
++                    profile.name()
++                )));
++            }
++        }
+         if self.sv2_tp_listen.is_some() && self.sv2_tp_authority_sec.is_none() {
+             return Err(NodeError::Config(
+                 "--sv2-tp-listen requires --sv2-tp-authority-sec or --sv2-tp-authority-sec-file"
+@@ -1174,6 +1194,40 @@
+         }
+     }
+ 
++    /// The one policy path that resolves the RPC compat profile and the
++    /// package dialect into [`RpcOpts`]. Called once from
++    /// [`crate::finish_operator_config`] after CLI/conf/env are all in, so a
++    /// conflict fails closed at startup instead of silently resolving later.
++    ///
++    /// - The profile is CLI/conf only (`--rpc-compat-profile` /
++    ///   `rpc_compat_profile=`); there is deliberately no
++    ///   `RBITCOIN_RPC_COMPAT_PROFILE` env knob (a new `RBITCOIN_*` surface
++    ///   needs the node repo's ask-first approval).
++    /// - A profile selects its own package dialect (its whole point), so
++    ///   `RBITCOIN_RPC_PACKAGE_DIALECT=0` (explicit off) plus a profile is a
++    ///   config error.
++    /// - An unset or on dialect env just ORs in, preserving the existing
++    ///   behavior for the dialect alone.
++    /// - CLI and conf parse the same small set of profile names, so both
++    ///   parse or both fail; they cannot disagree on *which* profile. A
++    ///   second profile would need an explicit conflict rule here.
++    pub fn resolve_rpc_env(&mut self, env: &NodeEnv) -> Result<(), NodeError> {
++        if let Some(profile) = self.rpc.compat_profile {
++            if env.rpc_package_dialect == Some(false) {
++                return Err(NodeError::Config(format!(
++                    "rpc-compat-profile {} selects package dialect {}, but \
++                     RBITCOIN_RPC_PACKAGE_DIALECT is explicitly off",
++                    profile.name(),
++                    profile.package_dialect()
++                )));
++            }
++            self.rpc.package_dialect = true;
++        } else if env.rpc_package_dialect == Some(true) {
++            self.rpc.package_dialect = true;
++        }
++        Ok(())
++    }
++
+     /// Load a simple `key=value` conf (`#` comments). Hyphens and underscores match.
+     ///
+     /// Operator keys are snake_case (`max_inbound=`). Hyphens match underscores.
+@@ -1631,6 +1685,12 @@
+                 self.rpc.cookie_perms =
+                     rbitcoin_rpc::RpcCookiePerms::parse(val).map_err(NodeError::Config)?;
+             }
++            "rpc_compat_profile" => {
++                self.rpc.compat_profile = Some(
++                    rbitcoin_rpc::methods::RpcCompatProfile::parse(val)
++                        .map_err(|e| NodeError::Config(format!("conf rpc_compat_profile: {e}")))?,
++                );
++            }
+             "ua_comment" => self.uacomments.push(val.to_string()),
+             "test_activation_height" => {
+                 let (name, height) = ChainParams::parse_test_activation_height(val)
+--- a/crates/rbitcoin-node/src/run.rs
++++ b/crates/rbitcoin-node/src/run.rs
+@@ -222,6 +222,7 @@
+         alert_notify: config.alert_notify.clone(),
+         blocksonly: config.mempool.blocksonly,
+         package_dialect: config.rpc.package_dialect,
++        compat_profile: config.rpc.compat_profile,
+     };
+     let op_true_signet = config.network == Network::Signet
+         && config
+@@ -254,6 +255,14 @@
+         h.socket_path,
+         h.token_path.display()
+     );
++    if let Some(profile) = config.rpc.compat_profile {
++        info!(
++            "rpc_compat_profile={} claimed_version={} software=rbitcoin software_version={}",
++            profile.name(),
++            profile.claimed_version(),
++            env!("CARGO_PKG_VERSION")
++        );
++    }
+     if let Some(addr) = h.local_addr {
+         publish_listener_addr(config.datadir.path(), "rpc", addr);
+     }
+@@ -2534,6 +2543,7 @@
+                 alert_fired: Arc::new(AtomicBool::new(false)),
+                 blocksonly,
+                 package_dialect: false,
++                compat_profile: None,
+             };
+             gbt_template(&ctx).map_err(|v| {
+                 v.get("message")
+--- a/crates/rbitcoin-node/tests/cli.rs
++++ b/crates/rbitcoin-node/tests/cli.rs
+@@ -797,16 +797,17 @@
+     assert_eq!(stop(&[(GB, "")]), BQ_ASSIGN_STOP_BYTES);
+ }
+ 
+-/// `RBITCOIN_TEST_DROP_STORE`, `RBITCOIN_SH_FORCE_REBUILD`,
+-/// `RBITCOIN_RPC_PACKAGE_DIALECT`, and `RBITCOIN_RPC_WAIT_TIP_IDLE` are on for
+-/// `1` or `true` and off for `0`, `false`, or empty (`true`/`false` in any
+-/// case). All but the first reach `NodeConfig`.
++/// `RBITCOIN_TEST_DROP_STORE`, `RBITCOIN_SH_FORCE_REBUILD`, and
++/// `RBITCOIN_RPC_WAIT_TIP_IDLE` are on for `1` or `true` and off for `0`,
++/// `false`, or empty (`true`/`false` in any case). `RBITCOIN_RPC_PACKAGE_DIALECT`
++/// is tri-state (`None` unset, `Some(false)` explicitly off) because the
++/// compat profile must tell an explicitly-off dialect from an unset one.
++/// All but the first reach `NodeConfig`.
+ #[test]
+ fn env_flags_take_one_true_zero_or_false() {
+-    const KEYS: [&str; 4] = [
++    const KEYS: [&str; 3] = [
+         "RBITCOIN_TEST_DROP_STORE",
+         "RBITCOIN_SH_FORCE_REBUILD",
+-        "RBITCOIN_RPC_PACKAGE_DIALECT",
+         "RBITCOIN_RPC_WAIT_TIP_IDLE",
+     ];
+     let flags = |key: &str, val: &str| {
+@@ -814,22 +815,46 @@
+         [
+             env.test_drop_store,
+             env.sh_force_rebuild,
+-            env.rpc_package_dialect,
+             env.rpc_wait_tip_idle,
+         ]
+     };
+     for on in ["1", "true", "TRUE", "True"] {
+         for (i, key) in KEYS.iter().enumerate() {
+-            let mut want = [false; 4];
++            let mut want = [false; 3];
+             want[i] = true;
+             assert_eq!(flags(key, on), want, "{key}={on:?}");
+         }
+     }
+     for off in ["", "0", "false", "FALSE"] {
+         for key in KEYS {
+-            assert_eq!(flags(key, off), [false; 4], "{key}={off:?}");
++            assert_eq!(flags(key, off), [false; 3], "{key}={off:?}");
+         }
+     }
++    for on in ["1", "true", "TRUE"] {
++        assert_eq!(
++            env_of(&[("RBITCOIN_RPC_PACKAGE_DIALECT", on)])
++                .unwrap()
++                .rpc_package_dialect,
++            Some(true),
++            "RBITCOIN_RPC_PACKAGE_DIALECT={on:?}"
++        );
++    }
++    for off in ["0", "false", "FALSE"] {
++        assert_eq!(
++            env_of(&[("RBITCOIN_RPC_PACKAGE_DIALECT", off)])
++                .unwrap()
++                .rpc_package_dialect,
++            Some(false),
++            "RBITCOIN_RPC_PACKAGE_DIALECT={off:?}"
++        );
++    }
++    assert_eq!(
++        env_of(&[("RBITCOIN_RPC_PACKAGE_DIALECT", "")])
++            .unwrap()
++            .rpc_package_dialect,
++        None,
++        "an empty value is unset"
++    );
+     assert_eq!(env_of(&[]).unwrap(), NodeEnv::default());
+ 
+     let env = env_of(&[
+@@ -846,6 +871,145 @@
+         }
+         other => panic!("expected assembled config, got {other:?}"),
+     }
++}
++
++/// `--rpc-compat-profile` accepts exactly `bark-v31`, defaults off, turns
++/// on the Core package dialect, and is regtest-only. CLI and conf are the
++/// only selectors: there is deliberately no `RBITCOIN_RPC_COMPAT_PROFILE`
++/// env knob (a new `RBITCOIN_*` surface needs the node repo's ask-first
++/// approval; the plan's env form stays proposed and unimplemented). An
++/// explicitly-off package dialect contradicts the profile's Core dialect
++/// claim and fails before the node starts, not silently.
++#[test]
++fn rpc_compat_profile_is_bark_v31_regtest_cli_only() {
++    use rbitcoin_rpc::methods::RpcCompatProfile;
++    let ready = |args: &[&str], env: &NodeEnv| operator_config_from_args(args, env);
++
++    match ready(
++        &["rbitcoin-node", "--network", "regtest"],
++        &NodeEnv::default(),
++    ) {
++        Ok(OperatorArgs::Ready { config, .. }) => {
++            assert_eq!(config.rpc.compat_profile, None);
++            assert!(!config.rpc.package_dialect);
++        }
++        other => panic!("default off: expected assembled config, got {other:?}"),
++    }
++    for args in [
++        vec![
++            "rbitcoin-node",
++            "--network",
++            "regtest",
++            "--rpc-compat-profile",
++            "bark-v31",
++        ],
++        vec![
++            "rbitcoin-node",
++            "--network",
++            "regtest",
++            "--rpc-compat-profile=bark-v31",
++        ],
++    ] {
++        match ready(&args, &NodeEnv::default()) {
++            Ok(OperatorArgs::Ready { config, .. }) => {
++                assert_eq!(config.rpc.compat_profile, Some(RpcCompatProfile::BarkV31));
++                assert!(config.rpc.package_dialect);
++            }
++            other => panic!(
++                "{}: expected assembled config, got {other:?}",
++                args.join(" ")
++            ),
++        }
++    }
++    for bad in ["core-v31", "bark-v32", "310000", ""] {
++        let got = ready(
++            &[
++                "rbitcoin-node",
++                "--network",
++                "regtest",
++                "--rpc-compat-profile",
++                bad,
++            ],
++            &NodeEnv::default(),
++        );
++        assert_exit(got.unwrap_err(), ExitCode::from(2));
++    }
++    match ready(
++        &[
++            "rbitcoin-node",
++            "--network",
++            "signet",
++            "--rpc-compat-profile",
++            "bark-v31",
++        ],
++        &NodeEnv::default(),
++    ) {
++        Ok(OperatorArgs::Ready { config, .. }) => {
++            let err = config.validate().unwrap_err().to_string();
++            assert!(err.contains("regtest"), "regtest-only: {err}");
++        }
++        other => panic!("expected assembled config, got {other:?}"),
++    }
++    // The conf key `rpc_compat_profile=bark-v31` is the same reviewed
++    // selector as the CLI flag.
++    {
++        let dir = tmp_datadir();
++        std::fs::create_dir_all(&dir).unwrap();
++        let conf = dir.join("profile.conf");
++        std::fs::write(&conf, "regtest\nrpc_compat_profile=bark-v31\n").unwrap();
++        let cfg = ready_config(["rbitcoin-node", "--conf", conf.to_str().unwrap()]);
++        assert_eq!(cfg.rpc.compat_profile, Some(RpcCompatProfile::BarkV31));
++        assert!(cfg.rpc.package_dialect);
++        let _ = std::fs::remove_dir_all(&dir);
++    }
++    // CLI profile + explicitly-off dialect env fails closed at startup.
++    let env = env_of(&[("RBITCOIN_RPC_PACKAGE_DIALECT", "0")]).unwrap();
++    let got = ready(
++        &[
++            "rbitcoin-node",
++            "--network",
++            "regtest",
++            "--rpc-compat-profile",
++            "bark-v31",
++        ],
++        &env,
++    );
++    assert_exit(got.unwrap_err(), ExitCode::from(2));
++
++    let mut config = NodeConfig::default();
++    config.network = Network::Regtest;
++    config.rpc.compat_profile = Some(RpcCompatProfile::BarkV31);
++    let err = config
++        .resolve_rpc_env(&env_of(&[("RBITCOIN_RPC_PACKAGE_DIALECT", "0")]).unwrap())
++        .unwrap_err()
++        .to_string();
++    assert!(
++        err.contains("RBITCOIN_RPC_PACKAGE_DIALECT") && err.contains("bark-v31"),
++        "conflict message names the knob and the profile: {err}"
++    );
++}
++
++/// `RBITCOIN_RPC_COMPAT_PROFILE` is not a knob: the profile is CLI/conf
++/// only, and an unrecognized `RBITCOIN_*` name is ignored, so the env var
++/// can neither activate nor mis-configure the claim.
++#[test]
++fn rpc_compat_profile_env_is_not_a_knob() {
++    let env = env_of(&[("RBITCOIN_RPC_COMPAT_PROFILE", "bark-v31")]).unwrap();
++    match operator_config_from_args(["rbitcoin-node", "--network", "regtest"], &env) {
++        Ok(OperatorArgs::Ready { config, .. }) => {
++            assert_eq!(config.rpc.compat_profile, None, "env must not activate");
++            assert!(!config.rpc.package_dialect);
++        }
++        other => panic!("expected assembled config, got {other:?}"),
++    }
++    // Even a would-be-unknown value stays inert (no new parse surface).
++    let env = env_of(&[("RBITCOIN_RPC_COMPAT_PROFILE", "bark-v32")]).unwrap();
++    match operator_config_from_args(["rbitcoin-node", "--network", "regtest"], &env) {
++        Ok(OperatorArgs::Ready { config, .. }) => {
++            assert_eq!(config.rpc.compat_profile, None);
++        }
++        other => panic!("expected assembled config, got {other:?}"),
++    }
+ }
+ 
+ /// `NodeEnv` asks its lookup for each knob by name and leaves the name match to
+--- a/crates/rbitcoin-node/tests/health/metrics.rs
++++ b/crates/rbitcoin-node/tests/health/metrics.rs
+@@ -22,6 +22,7 @@
+         alert_fired: Default::default(),
+         blocksonly: false,
+         package_dialect: false,
++        compat_profile: None,
+         active: Default::default(),
+     };
+     let info = dispatch(&ctx, "getblockchaininfo", vec![]).unwrap();
+--- a/crates/rbitcoin-rpc/src/methods/mod.rs
++++ b/crates/rbitcoin-rpc/src/methods/mod.rs
+@@ -13,6 +13,7 @@
+ 
+ pub use chain::difficulty_rpc_f64;
+ pub use chain::{tip_hash_height, wait_timeout_ms};
++pub use net::RpcCompatProfile;
+ 
+ /// Cap for `waitfor*` and `getblocktemplate` long-poll. Not a knob.
+ pub const RPC_WAIT_TIMEOUT_MS: u64 = 120_000;
+@@ -304,6 +305,10 @@
+     /// `submitpackage` uses Core `IsChildWithParents` (the node's
+     /// `RBITCOIN_RPC_PACKAGE_DIALECT`). Off by default.
+     pub package_dialect: bool,
++    /// RPC compat profile (`--rpc-compat-profile bark-v31`). When set,
++    /// `getnetworkinfo` reports the profile's claimed version instead of
++    /// [`RPC_COMPAT_VERSION`] and appends an `rbitcoin_compat` object.
++    pub compat_profile: Option<RpcCompatProfile>,
+     /// In-flight RPC methods for `getrpcinfo.active_commands`.
+     pub active: Arc<std::sync::Mutex<RpcActive>>,
+ }
+--- a/crates/rbitcoin-rpc/src/methods/net.rs
++++ b/crates/rbitcoin-rpc/src/methods/net.rs
+@@ -364,6 +364,50 @@
+ /// `subversion`.
+ pub const RPC_COMPAT_VERSION: u64 = 190_000;
+ 
++/// A named RPC compatibility claim (`--rpc-compat-profile`). The node stays
++/// rbitcoin: `subversion` keeps the real software identity and consensus,
++/// P2P, and the default RPC outputs are untouched. The profile only changes
++/// what `getnetworkinfo` reports to version-gated clients and selects the
++/// package dialect those clients submit. Regtest only (the node config
++/// rejects other networks before the store opens).
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum RpcCompatProfile {
++    /// Reports `getnetworkinfo.version = 310000` (the bark `c419159`
++    /// server floor) and the Core `IsChildWithParents` package dialect.
++    BarkV31,
++}
++
++impl RpcCompatProfile {
++    /// The one `--rpc-compat-profile` / conf `rpc_compat_profile` value
++    /// that names this profile.
++    pub fn name(self) -> &'static str {
++        "bark-v31"
++    }
++
++    /// The `getnetworkinfo.version` this profile claims.
++    pub fn claimed_version(self) -> u64 {
++        310_000
++    }
++
++    /// The `submitpackage` package dialect this profile selects; also the
++    /// `rbitcoin_compat.package_dialect` value.
++    pub fn package_dialect(self) -> &'static str {
++        "core-is-child-with-parents"
++    }
++
++    /// Parse the one accepted profile name. There is no free-form version
++    /// knob: any other value is an error naming the accepted value.
++    pub fn parse(value: &str) -> Result<Self, String> {
++        if value == "bark-v31" {
++            Ok(Self::BarkV31)
++        } else {
++            Err(format!(
++                "unknown rpc-compat-profile {value:?}: expected bark-v31"
++            ))
++        }
++    }
++}
++
+ fn networks_json(ctx: &RpcContext) -> Value {
+     let nets = rbitcoin_net::OnlyNet::ALL;
+     let reach = match ctx.addrman.as_ref() {
+@@ -402,8 +446,10 @@
+     let flags =
+         rbitcoin_net::local_service_flags(ctx.query.prune_seqsigwit(), ctx.peers.as_deref());
+     let svc_bits = flags.to_u64();
+-    json!({
+-        "version": RPC_COMPAT_VERSION,
++    let mut info = json!({
++        "version": ctx
++            .compat_profile
++            .map_or(RPC_COMPAT_VERSION, RpcCompatProfile::claimed_version),
+         "subversion": ctx.subversion,
+         "protocolversion": 70016,
+         "localservices": format!("{svc_bits:016x}"),
+@@ -419,5 +465,13 @@
+         "incrementalfee": relay_fee_json(),
+         "localaddresses": localaddresses_json(ctx),
+         "warnings": rpc_warnings(ctx),
+-    })
++    });
++    if let Some(profile) = ctx.compat_profile {
++        info["rbitcoin_compat"] = json!({
++            "profile": profile.name(),
++            "claimed_version": profile.claimed_version(),
++            "package_dialect": profile.package_dialect(),
++        });
++    }
++    info
+ }
+--- a/crates/rbitcoin-rpc/src/server.rs
++++ b/crates/rbitcoin-rpc/src/server.rs
+@@ -127,6 +127,8 @@
+     pub blocksonly: bool,
+     /// See [`crate::methods::RpcContext::package_dialect`].
+     pub package_dialect: bool,
++    /// See [`crate::methods::RpcContext::compat_profile`].
++    pub compat_profile: Option<crate::methods::RpcCompatProfile>,
+ }
+ 
+ /// Live RPC server handle.
+@@ -231,6 +233,7 @@
+         alert_fired: Arc::new(AtomicBool::new(false)),
+         blocksonly: config.blocksonly,
+         package_dialect: config.package_dialect,
++        compat_profile: config.compat_profile,
+     });
+ 
+     let n = work_queue_permits(config.work_queue);
+--- a/crates/rbitcoin-rpc/tests/methods/mod.rs
++++ b/crates/rbitcoin-rpc/tests/methods/mod.rs
+@@ -57,6 +57,7 @@
+         alert_fired: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+         blocksonly: false,
+         package_dialect: false,
++        compat_profile: None,
+     }
+ }
+ 
+@@ -790,6 +791,41 @@
+     let _ = std::fs::remove_dir_all(&dir);
+ }
+ 
++/// `--rpc-compat-profile bark-v31` is an explicit RPC compatibility claim:
++/// `getnetworkinfo.version` reports the claimed 310000 (the bark server
++/// floor) instead of the node's own 190000, `subversion` keeps the real
++/// rbitcoin identity, every other field is unchanged, and the response
++/// carries the `rbitcoin_compat` object naming the profile, the claim, and
++/// the Core package dialect the profile selected. Default off reports
++/// 190000 and no compat object.
++#[test]
++fn getnetworkinfo_compat_profile_reports_claim_not_identity() {
++    let (mut ctx, dir) = ctx_empty();
++    let plain = dispatch(&ctx, "getnetworkinfo", vec![]).unwrap();
++    assert_eq!(plain["version"].as_u64(), Some(190_000), "{plain}");
++    assert!(plain.get("rbitcoin_compat").is_none(), "{plain}");
++
++    ctx.compat_profile = Some(RpcCompatProfile::BarkV31);
++    ctx.package_dialect = true;
++    let claimed = dispatch(&ctx, "getnetworkinfo", vec![]).unwrap();
++    assert_eq!(claimed["version"].as_u64(), Some(310_000), "{claimed}");
++    assert_eq!(claimed["subversion"], plain["subversion"]);
++    assert_eq!(
++        claimed["rbitcoin_compat"],
++        json!({
++            "profile": "bark-v31",
++            "claimed_version": 310_000,
++            "package_dialect": "core-is-child-with-parents",
++        })
++    );
++    for (key, val) in plain.as_object().unwrap() {
++        if key != "version" {
++            assert_eq!(&claimed[key], val, "profile must not change {key}");
++        }
++    }
++    let _ = std::fs::remove_dir_all(&dir);
++}
++
+ #[test]
+ fn trust_peer_warning_line() {
+     let (mut ctx, dir, _hub) = ctx_from_mature_pad(300_000_000);
+@@ -1392,6 +1428,7 @@
+         alert_fired: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+         blocksonly: false,
+         package_dialect: false,
++        compat_profile: None,
+     };
+     let mem2 = dispatch(&ctx2, "getmempoolinfo", vec![]).unwrap();
+     assert_eq!(mem2["loaded"], true);
+@@ -1871,6 +1908,7 @@
+         alert_fired: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+         blocksonly: false,
+         package_dialect: false,
++        compat_profile: None,
+     };
+     (ctx, dir, hub)
+ }
+@@ -7581,6 +7619,7 @@
+         alert_fired: Arc::clone(&src.alert_fired),
+         blocksonly: src.blocksonly,
+         package_dialect: src.package_dialect,
++        compat_profile: src.compat_profile,
+     }
+ }
+ 
+--- a/crates/rbitcoin-rpc/tests/regtest_chain_ops_journey.rs
++++ b/crates/rbitcoin-rpc/tests/regtest_chain_ops_journey.rs
+@@ -732,6 +732,46 @@
+     );
+ }
+ 
++/// `--rpc-compat-profile bark-v31` on regtest: the version floor a bark
++/// server enforces (310000) passes on the claimed version while the real
++/// rbitcoin identity stays in `subversion`, and the claimed Core package
++/// dialect is the one the node actually enforces for `submitpackage` - the
++/// same `IsChildWithParents` gate `RBITCOIN_RPC_PACKAGE_DIALECT=1` selects.
++#[test]
++fn chain_ops_compat_profile_bark_v31_claim_and_dialect() {
++    let (mut ctx, dir, _hub) = ctx_regtest_hub();
++    ctx.compat_profile = Some(RpcCompatProfile::BarkV31);
++    ctx.package_dialect = true;
++    let net = dispatch(&ctx, "getnetworkinfo", vec![]).unwrap();
++    assert_eq!(net["version"].as_u64(), Some(310_000), "{net}");
++    assert_eq!(
++        net["subversion"].as_str().unwrap(),
++        rbitcoin_primitives::rbitcoin_subversion(env!("CARGO_PKG_VERSION"), &[] as &[&str])
++            .unwrap()
++    );
++    assert_eq!(net["rbitcoin_compat"]["profile"], json!("bark-v31"));
++    assert_eq!(net["rbitcoin_compat"]["claimed_version"], json!(310_000));
++    assert_eq!(
++        net["rbitcoin_compat"]["package_dialect"],
++        json!("core-is-child-with-parents")
++    );
++
++    let txid = |n: u8| bitcoin::Txid::from_byte_array([n; 32]);
++    let p1 = spend_outpoints(&[(txid(1), 0)], 1_000);
++    let p2 = spend_outpoints(&[(txid(2), 0)], 1_000);
++    let pkg = json!([&p1, &p2]
++        .iter()
++        .map(|t| rbitcoin_primitives::hex_encode(bitcoin::consensus::encode::serialize(*t)))
++        .collect::<Vec<_>>());
++    let err = dispatch(&ctx, "submitpackage", vec![pkg]).unwrap_err();
++    assert_eq!(err["code"], ERR_VERIFY_ERROR, "{err}");
++    assert_eq!(
++        rpc_message(&err),
++        "package topology disallowed. not child-with-parents or parents depend on each other."
++    );
++    let _ = std::fs::remove_dir_all(&dir);
++}
++
+ /// A second genesis hub. Tip age, the mining-info template latch, and the
+ /// header-tip cap are visible here before this chain has assembled a template
+ /// or left IBD. The long regtest journey has already done both.
+--- a/crates/rbitcoin-rpc/tests/server.rs
++++ b/crates/rbitcoin-rpc/tests/server.rs
+@@ -109,6 +109,7 @@
+ 
+         blocksonly: false,
+         package_dialect: false,
++        compat_profile: None,
+     };
+     let handle = run_rpc(cfg, q, None, None, None, None, None)
+         .await
+@@ -152,6 +153,7 @@
+ 
+         blocksonly: false,
+         package_dialect: false,
++        compat_profile: None,
+     };
+     let handle = run_rpc(cfg, q, Some(mp), None, None, None, None)
+         .await
+@@ -253,6 +255,7 @@
+ 
+         blocksonly: false,
+         package_dialect: false,
++        compat_profile: None,
+     };
+     let handle = run_rpc(cfg, q, None, None, None, None, None).await.unwrap();
+     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+@@ -363,6 +366,7 @@
+         alert_notify: None,
+         blocksonly: false,
+         package_dialect: false,
++        compat_profile: None,
+     };
+     let handle = run_rpc(cfg, q, None, None, None, None, None).await.unwrap();
+     tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+@@ -465,6 +469,7 @@
+ 
+         blocksonly: false,
+         package_dialect: false,
++        compat_profile: None,
+     };
+     let handle = run_rpc(cfg, q, Some(mp), None, None, None, None)
+         .await
+@@ -549,6 +554,7 @@
+ 
+         blocksonly: false,
+         package_dialect: false,
++        compat_profile: None,
+     };
+     let handle = run_rpc(cfg, q, None, None, None, None, None).await.unwrap();
+     let mut stream = tokio::net::TcpStream::connect(tcp_addr(&handle))
+@@ -593,6 +599,7 @@
+ 
+         blocksonly: false,
+         package_dialect: false,
++        compat_profile: None,
+     };
+     let handle = run_rpc(cfg, q, None, None, None, None, None).await.unwrap();
+     let (st, body) = post_raw(
+@@ -860,6 +867,7 @@
+         alert_notify: None,
+         blocksonly: false,
+         package_dialect: false,
++        compat_profile: None,
+     };
+     let handle = run_rpc(cfg, query, None, None, None, Some(Arc::new(hub)), None)
+         .await
+@@ -1050,6 +1058,7 @@
+ 
+         blocksonly: false,
+         package_dialect: false,
++        compat_profile: None,
+     };
+     let handle = run_rpc(cfg, query, None, None, None, Some(Arc::clone(&hub)), None)
+         .await
+@@ -1187,6 +1196,7 @@
+ 
+         blocksonly: false,
+         package_dialect: false,
++        compat_profile: None,
+     };
+     let handle = run_rpc(cfg, query, None, None, None, Some(Arc::clone(&hub)), None)
+         .await
+@@ -1339,6 +1349,7 @@
+ 
+         blocksonly: false,
+         package_dialect: false,
++        compat_profile: None,
+     };
+     let handle = run_rpc(cfg, query, None, None, None, Some(Arc::new(hub)), None)
+         .await
+@@ -1456,6 +1467,7 @@
+ 
+         blocksonly: false,
+         package_dialect: false,
++        compat_profile: None,
+ };
+         let handle = run_rpc(cfg, query, None, None, None, Some(Arc::new(hub)), None)
+             .await
+@@ -1546,6 +1558,7 @@
+ 
+         blocksonly: false,
+         package_dialect: false,
++        compat_profile: None,
+     };
+     let handle = run_rpc(cfg, query, None, None, None, Some(Arc::new(hub)), None)
+         .await
+@@ -1666,6 +1679,7 @@
+ 
+         blocksonly: false,
+         package_dialect: false,
++        compat_profile: None,
+     };
+     let handle = run_rpc(cfg, q, Some(mp), None, None, None, None)
+         .await
+@@ -2032,6 +2046,7 @@
+         alert_notify: None,
+         blocksonly: false,
+         package_dialect: false,
++        compat_profile: None,
+     };
+     let handle = run_rpc(cfg, query, None, None, None, Some(Arc::new(hub)), None)
+         .await
+@@ -2093,6 +2108,7 @@
+         alert_notify: None,
+         blocksonly: false,
+         package_dialect: false,
++        compat_profile: None,
+     };
+     let handle = run_rpc(cfg, query, None, None, None, Some(Arc::new(hub)), None)
+         .await
+@@ -2221,6 +2237,7 @@
+         alert_fired: Arc::new(AtomicBool::new(false)),
+         blocksonly: false,
+         package_dialect: false,
++        compat_profile: None,
+     });
+     (ctx, dir, mp)
+ }
+@@ -2567,6 +2584,7 @@
+ 
+         blocksonly: false,
+         package_dialect: false,
++        compat_profile: None,
+     };
+     let handle = run_rpc(cfg, q, Some(mp), None, None, None, None)
+         .await
+@@ -2750,6 +2768,7 @@
+ 
+         blocksonly: false,
+         package_dialect: false,
++        compat_profile: None,
+     };
+     let handle = run_rpc(
+         without_cookie,
+@@ -2795,6 +2814,7 @@
+ 
+         blocksonly: false,
+         package_dialect: false,
++        compat_profile: None,
+     };
+     // The cookie is TCP-only: a socket-only listener must not silently ignore it.
+     std::fs::write(&cookie_path, "mempool:secret").unwrap();
+@@ -2961,6 +2981,7 @@
+ 
+         blocksonly: false,
+         package_dialect: false,
++        compat_profile: None,
+     };
+     let err = run_rpc(cfg, q, None, None, None, None, None)
+         .await
+@@ -2993,6 +3014,7 @@
+ 
+         blocksonly: false,
+         package_dialect: false,
++        compat_profile: None,
+     };
+     let handle = run_rpc(cfg, q, None, None, None, None, None).await.unwrap();
+     assert!(sock.exists(), "socket file");
+@@ -3062,6 +3084,7 @@
+ 
+         blocksonly: false,
+         package_dialect: false,
++        compat_profile: None,
+     });
+     (ctx, dir)
+ }
+--- a/docs/rpc.md
++++ b/docs/rpc.md
+@@ -42,6 +42,40 @@
+ later Core RPC is present, including descriptor-wallet calls from 0.21
+ (`210000`). It would not change what peers accept.
+ 
++### Opt-in named compat profile `bark-v31` (regtest only)
++
++`--rpc-compat-profile bark-v31` (conf `rpc_compat_profile=bark-v31`) is an
++opt-in, **named** RPC compatibility claim for version-gated lab clients
++(the ark/bark server at `c419159` requires `getnetworkinfo.version >=
++310000`). Valid only on regtest: any other network fails config validation
++before the datadir or store opens. There is no free-form version integer
++and no env form: `bark-v31` is the only accepted value, the CLI flag and
++the conf key are the only selectors (a `RBITCOIN_RPC_COMPAT_PROFILE`
++variable is not a knob and does nothing), and an explicitly-off
++`RBITCOIN_RPC_PACKAGE_DIALECT=0` together with the profile is a startup
++config error, never a silent resolution.
++
++While the profile is on:
++
++- `getnetworkinfo.version` reports **310000** as an explicit claim. Every
++  other `getnetworkinfo` field is unchanged; `subversion` keeps the real
++  `/rbitcoin:<semver>/` identity (plus any `--ua-comment`) and
++  `protocolversion` stays 70016.
++- `getnetworkinfo` appends a `rbitcoin_compat` object naming the claim:
++  `{"profile":"bark-v31","claimed_version":310000,"package_dialect":"core-is-child-with-parents"}`.
++- `submitpackage` uses Core `IsChildWithParents` — the same dialect
++  `RBITCOIN_RPC_PACKAGE_DIALECT=1` selects; the profile turns that existing
++  behavior on.
++- Startup logs
++  `rpc_compat_profile=bark-v31 claimed_version=310000 software=rbitcoin software_version=<real>`.
++
++The claim is deliberately narrow: read-only RPC surface shape for probed
++clients, not "is Bitcoin Core v31". Funded broadcast/mempool behavior stays
++unproven by read-only probes, and known surface mismatches stay mismatched
++(`getmempoolinfo.maxdatacarriersize` is null where the selected modelling
++consumer expects an integer). Default is **off**: `version` stays 190000
++and no `rbitcoin_compat` key appears.
++
+ ## Operator knobs
+ 
+ | Knob | Default | Meaning |
+@@ -55,6 +89,7 @@
+ | `--sh-index` | **off** | Class B scripthash for Electrum/Esplora address history. RPC by height/hash/txid does not need it |
+ | `--block-filter-index` | **off** | BIP158 basic. IBD seals them when the flag is on from the start. A later enable still materializes after catch-up. `NODE_COMPACT_FILTERS` is advertised once filters first reach the tip (`getnetworkinfo` lists `COMPACT_FILTERS`), then for the life of the process. `getblockfilter` serves a sealed height, one block whose parent filter is already sealed, and a stale branch back to that sealed fork point. An unsealed best-chain gap is refused. `/rest/blockfilter/` and P2P still serve only heights the watermark covers. Independent of `--sh-index` |
+ | `--rpc-work-queue N` | **16** | In-flight HTTP RPC (Core `-rpcworkqueue`). One POST is one slot (a JSON-RPC array is still one slot). Full permit is HTTP **503** `Work queue depth exceeded`. **0** is the default queue of 16. The call holds that slot while it waits for a `--store-read-budget` permit. A call that does not read the store, including `getblockcount`, does not take that permit. `waitforblock`, `waitforblockheight`, `waitfornewblock`, and a `getblocktemplate` long-poll (a non-null `longpollid` in template mode; proposal mode does not wait) do not hold the work-queue slot or the disk permit while they wait. A `getblocktemplate` with no `longpollid` keeps the slot and takes it before any store read. The template build reads the tip with no disk permit, takes one permit, and reads the tip again without waiting on connect. It keeps that permit for the header reads only when both reads match, then drops it before transaction selection, so a block connect does not pin that permit and a store read can run during selection. After a long-poll, the next call in that POST waits for a work-queue slot. A POST that has not run a call is still HTTP 503, including a long-poll, and that 503 is before the tip poll. `--store-read-budget N` (`store_read_budget=`) overrides `--datadir-hdd`. Omitted or `0` is 1 on `--datadir-hdd`, otherwise one less than the core count, minimum 1 |
++| `--rpc-compat-profile bark-v31` / conf `rpc_compat_profile=` | **off** | Regtest-only named RPC compat claim: `getnetworkinfo.version` reports 310000 with an `rbitcoin_compat` object while `subversion` keeps the real identity, and `submitpackage` uses Core `IsChildWithParents`. Only value `bark-v31`; no env form; `RBITCOIN_RPC_PACKAGE_DIALECT=0` with it refuses startup. See [Opt-in named compat profile](#opt-in-named-compat-profile-bark-v31-regtest-only) |
+ | `--rest` / conf `rest=` | **off** | Unauthenticated `/rest/` on the RPC listener. Own queue, same depth as `--rpc-work-queue`'s default. The body is read before that permit is taken. Without the flag those paths are 404. |
+ 
+ TLS is external (reverse proxy). Unix socket needs no HTTP header. TCP is

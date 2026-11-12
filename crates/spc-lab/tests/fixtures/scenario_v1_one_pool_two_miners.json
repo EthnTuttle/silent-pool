@@ -1,0 +1,123 @@
+{
+  "scenario_version": 1,
+  "run": {
+    "id": "run-fixture-a",
+    "seed": 12345,
+    "time_policy": {
+      "chain_time": "node_header",
+      "miner_ntime": "hold",
+      "mock_node_time": null
+    },
+    "warmup": {
+      "blocks": 0,
+      "window_fills": 1,
+      "exclude_from_statistics": true
+    }
+  },
+  "network": {
+    "id": "net-a",
+    "consensus_profile": {
+      "required_capability": "fixture.scripted",
+      "profile_fingerprint": null,
+      "requirements": {
+        "pow_limit_bits": "207fffff",
+        "retarget_floor_bits": "1e7fffff",
+        "initial_target_bits": "1e7fffff",
+        "target_spacing_secs": 10,
+        "target_timespan_secs": 240,
+        "retarget_interval_blocks": 24,
+        "no_pow_retargeting": false,
+        "allow_min_difficulty_blocks": false,
+        "coinbase_maturity_blocks": 100,
+        "subsidy_halving_interval_blocks": 150,
+        "witness_commitment_supported": true,
+        "tdp_session_cap": 8
+      }
+    }
+  },
+  "nodes": [
+    {
+      "id": "node-a",
+      "network_id": "net-a",
+      "implementation": "fixture-node",
+      "p2p": { "listen": "127.0.0.1:0" },
+      "rpc": { "listen": "127.0.0.1:0" },
+      "tdp": { "listen": "127.0.0.1:0", "session_cap": 8 }
+    }
+  ],
+  "pools": [
+    {
+      "id": "pool-a",
+      "network_id": "net-a",
+      "node_ids": ["node-a"],
+      "implementation": "fixture-pool",
+      "work_profile": {
+        "work_unit_version": 2,
+        "reference_target": "0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "share_work_multiplier": 2,
+        "max_work_multiplier": 4294967296,
+        "max_window_target_units": "18446744073709551616",
+        "window_rule": "network_block_work",
+        "window_n": 8,
+        "max_slice_shares": 65000
+      },
+      "storage": {
+        "redis_instance_id": "redis-pool-a",
+        "postgres_database_id": "pg-pool-a"
+      }
+    }
+  ],
+  "fronts": [
+    {
+      "id": "front-a1",
+      "pool_id": "pool-a",
+      "roles": ["front", "payout", "api"],
+      "listen": { "sv2": "127.0.0.1:0", "sv1": null, "jd": null }
+    }
+  ],
+  "identities": [
+    { "id": "id-alice", "address_source": { "fixture": "alice" } },
+    { "id": "id-bob", "address_source": { "fixture": "bob" } }
+  ],
+  "miners": [
+    {
+      "id": "miner-1",
+      "implementation": "fixture-miner",
+      "connections": [
+        { "id": "conn-alice", "front_id": "front-a1", "identity_id": "id-alice" }
+      ],
+      "workers": [
+        { "id": "w-alice-1", "identity_id": "id-alice", "connection_id": "conn-alice", "budget": { "hashes_per_second": "100000" }, "nonce_start": 0, "nonce_len": 4294967296 }
+      ]
+    },
+    {
+      "id": "miner-2",
+      "implementation": "fixture-miner",
+      "connections": [
+        { "id": "conn-bob", "front_id": "front-a1", "identity_id": "id-bob" }
+      ],
+      "workers": [
+        { "id": "w-bob-1", "identity_id": "id-bob", "connection_id": "conn-bob", "budget": { "hashes_per_second": "100000" }, "nonce_start": 0, "nonce_len": 4294967296 }
+      ]
+    }
+  ],
+  "ark_backends": [],
+  "resources": {
+    "redis_instances": [
+      { "id": "redis-pool-a", "owner_pool_id": "pool-a", "port": 0, "dir": "redis/pool-a" }
+    ],
+    "postgres_databases": [
+      { "id": "pg-pool-a", "owner_pool_id": "pool-a", "database": "spc_pool_a", "role": "spc_pool_a", "port": 0 }
+    ]
+  },
+  "links": [
+    { "id": "link-alice", "from": { "kind": "miner", "id": "miner-1" }, "to": { "kind": "front", "id": "front-a1" }, "policy": "normal" },
+    { "id": "link-bob", "from": { "kind": "miner", "id": "miner-2" }, "to": { "kind": "front", "id": "front-a1" }, "policy": "normal" },
+    { "id": "link-pool-node", "from": { "kind": "pool", "id": "pool-a" }, "to": { "kind": "node", "id": "node-a" }, "policy": "normal" }
+  ],
+  "phases": [],
+  "assertions": [
+    { "id": "assert-started", "kind": "evidence", "predicate": "exists(run_state)", "deadline_secs": 30 }
+  ],
+  "statistics": []
+}

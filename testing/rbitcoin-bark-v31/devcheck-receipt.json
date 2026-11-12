@@ -1,0 +1,5 @@
+{
+ "exit_code": 0,
+ "vectors": 12,
+ "output": "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.05s\n     Running `target/debug/arkrpc-devcheck`\narkrpc-devcheck: 12 golden vectors vs pinned crate types\n[PASS] amount_over_supply_accepted\n[PASS] amount_u64_overflow_rejected\n[PASS] empty_hex_serde_hex\n[PASS] scriptsig_empty_hex\n[PASS] bark_enum_accepts_anchor\n[PASS] core_019_enum_rejects_anchor\n[PASS] txinwitness_empty_items\n[PASS] null_reject_vin\n[PASS] null_reject_versionhex\n[PASS] null_reject_addresses\n[PASS] blockchaininfo_shapes\n[PASS] getmempoolinfo_shapes\nall 12 vectors match the Python #devcheck twins\n"
+}

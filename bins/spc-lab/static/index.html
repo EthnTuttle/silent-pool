@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>spc-lab - regtest lab</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>spc-lab</h1>
+    <a href="/lab">Lab live hub & role guide</a>
+    <span id="connection" class="pill">connecting...</span>
+    <span id="view-mode" class="pill"></span>
+    <span id="run-id" class="mono"></span>
+  </header>
+  <section class="auth" aria-label="Session access">
+    <form id="auth-form">
+      <label for="auth-token">Operator or user run token</label>
+      <input id="auth-token" type="password" autocomplete="off" spellcheck="false" maxlength="64" required>
+      <button type="submit">Sign in</button>
+    </form>
+    <p id="auth-message" role="status">Checking access...</p>
+    <button id="logout" hidden>Clear token / sign out</button>
+  </section>
+  <main id="private-view" hidden>
+    <section>
+      <h2>Run</h2>
+      <div id="run-state" class="card"></div>
+      <p class="hint">The browser is an observer. Closing this tab does not stop the run; reattach resumes from the snapshot cursor.</p>
+      <p id="recorded-banner" class="hint" hidden>This is recorded-run serve: review is read-only and miner controls are disabled.</p>
+    </section>
+    <section>
+      <h2>Miner controls</h2>
+      <div id="miners" class="card"></div>
+      <div id="add-miner" class="card"></div>
+      <p id="control-error" class="gap" role="alert"></p>
+      <p id="command-state" role="status"></p>
+      <button id="retry-command" hidden>Check same command again</button>
+      <p class="hint">Adding a miner and switching pools use the same durable command log as pause/resume and budgets.</p>
+      <p class="hint">Commands go through the durable command log. Duplicate command IDs do not duplicate effects.</p>
+    </section>
+    <section>
+      <h2>My wallet</h2>
+      <div id="wallet" class="card"></div>
+    </section>
+    <section>
+      <h2>Entities</h2>
+      <div id="entities" class="card"></div>
+    </section>
+    <section>
+      <h2>Evidence timeline</h2>
+      <div id="watermarks" class="card"></div>
+      <ol id="timeline" class="timeline"></ol>
+      <p id="gaps" class="gap"></p>
+    </section>
+  </main>
+  <script src="/access.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

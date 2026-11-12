@@ -1,0 +1,17 @@
+{
+  "name": "id_echo_wrong_int",
+  "description": "responses echo a wrong integer id (request id + 1000): numeric but not the exact echo; a protocol failure on every exchange, never method evidence",
+  "overrides": [
+    {"op": "id_echo", "mode": "wrong-int"}
+  ],
+  "expect": {
+    "verdict_status": "incompatible",
+    "reasons": ["fail-protocol", "funded-unproven"],
+    "funded_state": "unproven",
+    "checks": {
+      "protocol.id-echo": "failed",
+      "getmempoolentry.recognized": {"availability": "unknown", "behavior": "unknown"},
+      "testmempoolaccept.recognized": {"availability": "unknown", "behavior": "not_run"}
+    }
+  }
+}

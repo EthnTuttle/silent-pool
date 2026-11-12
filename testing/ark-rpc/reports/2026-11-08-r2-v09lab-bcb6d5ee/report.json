@@ -1,0 +1,468 @@
+{
+  "probe": "ap1a-ark-rpc-probe",
+  "probe_version": "1.0.0",
+  "schema_version": 2,
+  "generated_utc": "2026-11-08T09:08:17Z",
+  "run_token": "AP1a-1fd3d1813c33",
+  "target": {
+    "label": "rbitcoin-v0.9-lab-r2",
+    "kind": "owned-fresh-regtest-node"
+  },
+  "profile": {
+    "name": "bark-c419159",
+    "server_min_rpc_version": 310000,
+    "wallet_min_rpc_version": 290000,
+    "expected_network": "regtest",
+    "expected_genesis": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+    "fee_targets": [
+      1,
+      3,
+      6
+    ],
+    "fee_estimate_mode": "ECONOMICAL",
+    "source_citations": [
+      "bark c419159 server/src/bitcoind.rs:30-31 (MIN_BITCOIND_VERSION = 31_00_00)",
+      "bark c419159 bark/src/chain.rs:334-348 (estimatesmartfee [target, EstimateMode::Economical]); 36-38,51 (fee targets 1/3/6; MIN 290000)",
+      "bitcoincore-rpc-json 0.19.0 src/lib.rs:1828-1834 (EstimateMode rename_all UPPERCASE -> wire literal \"ECONOMICAL\")"
+    ]
+  },
+  "contract_hash": "f4fc3e043f420870675095ab24144ba14e0afba6cb9ad69d818d99b1bccb2f62",
+  "checks": [
+    {
+      "id": "getnetworkinfo.version-shape",
+      "method": "getnetworkinfo",
+      "availability": "passed",
+      "behavior": "passed",
+      "detail": "parsed against getnetworkinfo.required (bark c419159 server/src/bitcoind.rs:236-244 (require_version, Response{version}))",
+      "fail_kind": "shape"
+    },
+    {
+      "id": "getnetworkinfo.observe",
+      "method": "getnetworkinfo",
+      "availability": "passed",
+      "behavior": "passed",
+      "detail": "observation set parsed (not a bark requirement; never gates the verdict)"
+    },
+    {
+      "id": "getnetworkinfo.gate.server",
+      "method": "getnetworkinfo",
+      "availability": "passed",
+      "behavior": "failed",
+      "detail": "version 190000 < server minimum 310000: the server gate fails honestly (bark refuses to start against this node)",
+      "fail_kind": "version-gate",
+      "evidence": {
+        "observed": 190000,
+        "minimum": 310000
+      }
+    },
+    {
+      "id": "getnetworkinfo.gate.wallet",
+      "method": "getnetworkinfo",
+      "availability": "passed",
+      "behavior": "failed",
+      "detail": "version 190000 < wallet minimum 290000: the wallet gate fails honestly (bark refuses to start against this node)",
+      "fail_kind": "version-gate",
+      "evidence": {
+        "observed": 190000,
+        "minimum": 290000
+      }
+    },
+    {
+      "id": "protocol.envelope20.getnetworkinfo",
+      "method": "getnetworkinfo",
+      "availability": "passed",
+      "behavior": "passed",
+      "detail": "sync-client form accepted (envelope 2.0, numeric id 1 echoed exactly, HTTP 200)",
+      "fail_kind": "encoding",
+      "evidence": {
+        "receipt": {
+          "http_status": 200,
+          "request_id": 1,
+          "response_id": 1,
+          "response_envelope": "2.0",
+          "id_match": true
+        }
+      }
+    },
+    {
+      "id": "getblockchaininfo.network",
+      "method": "getblockchaininfo",
+      "availability": "passed",
+      "behavior": "passed",
+      "detail": "chain 'regtest' matches expected network",
+      "fail_kind": "network"
+    },
+    {
+      "id": "getblockchaininfo.shape.async",
+      "method": "getblockchaininfo",
+      "availability": "passed",
+      "behavior": "passed",
+      "detail": "parsed against getblockchaininfo.async (bitcoind-async-client 0.15.0 src/client/v30.rs:182-188 (network(): call::<GetBlockchainInfo>(\"getblockchaininfo\") -> .chain))",
+      "fail_kind": "shape"
+    },
+    {
+      "id": "getblockchaininfo.shape.sync",
+      "method": "getblockchaininfo",
+      "availability": "passed",
+      "behavior": "passed",
+      "detail": "parsed against getblockchaininfo.sync (bitcoincore-rpc-json 0.19.0 src/lib.rs:1017-1057 (GetBlockchainInfoResult))",
+      "fail_kind": "shape"
+    },
+    {
+      "id": "getindexinfo.txindex",
+      "method": "getindexinfo",
+      "availability": "passed",
+      "behavior": "passed",
+      "detail": "txindex present and synced (best_block_height=0; the same field name Bitcoin Core and corepc emit)",
+      "fail_kind": "shape"
+    },
+    {
+      "id": "getblockcount",
+      "method": "getblockcount",
+      "availability": "passed",
+      "behavior": "passed",
+      "detail": "integer tip height 0",
+      "fail_kind": "shape"
+    },
+    {
+      "id": "getbestblockhash",
+      "method": "getbestblockhash",
+      "availability": "passed",
+      "behavior": "passed",
+      "detail": "hash32 tip (async client get_current_timestamp form; observational: bark c419159 never calls it)",
+      "fail_kind": "shape"
+    },
+    {
+      "id": "getblockhash.genesis",
+      "method": "getblockhash",
+      "availability": "passed",
+      "behavior": "passed",
+      "detail": "genesis hash matches the Core regtest genesis",
+      "fail_kind": "genesis"
+    },
+    {
+      "id": "getblock.verbosity0",
+      "method": "getblock",
+      "availability": "passed",
+      "behavior": "passed",
+      "detail": "genesis block served as hex (verbosity 0, async form [hash, 0])",
+      "fail_kind": "shape"
+    },
+    {
+      "id": "getblock.verbosity0.rehash",
+      "method": "getblock",
+      "availability": "passed",
+      "behavior": "passed",
+      "detail": "double-SHA256 of the 80-byte header equals the requested block hash (integrity proven)",
+      "fail_kind": "shape"
+    },
+    {
+      "id": "getblock.verbosity1",
+      "method": "getblock",
+      "availability": "passed",
+      "behavior": "passed",
+      "detail": "parsed against getblock.verbosity1 (bitcoincore-rpc-json 0.19.0 src/lib.rs:195-219 (GetBlockResult))",
+      "fail_kind": "shape"
+    },
+    {
+      "id": "getblock.singleparam",
+      "method": "getblock",
+      "availability": "passed",
+      "behavior": "passed",
+      "detail": "single-param form accepted ([hash]; verbosity defaults to 1 server-side, async get_block_height form)",
+      "fail_kind": "encoding"
+    },
+    {
+      "id": "getblockheader.verbose",
+      "method": "getblockheader",
+      "availability": "passed",
+      "behavior": "passed",
+      "detail": "parsed against bitcoincore-rpc-json 0.19 GetBlockHeaderResult (bark server tx_status type; async form [hash, true])",
+      "fail_kind": "shape"
+    },
+    {
+      "id": "getblockheader.verbose.genesis",
+      "method": "getblockheader",
+      "availability": "passed",
+      "behavior": "passed",
+      "detail": "genesis header: hash/height/nTx consistent (nTx=1, confirmations=1)",
+      "fail_kind": "genesis"
+    },
+    {
+      "id": "getblockheader.encoding.sync20",
+      "method": "getblockheader",
+      "availability": "passed",
+      "behavior": "passed",
+      "detail": "sync form accepted ([hash, true], envelope 2.0, numeric id 3 echoed)",
+      "fail_kind": "encoding"
+    },
+    {
+      "id": "getblockheader.nonverbose",
+      "method": "getblockheader",
+      "availability": "passed",
+      "behavior": "passed",
+      "detail": "sync hex form accepted ([hash, false], envelope 2.0); 80-byte header re-hash matches",
+      "fail_kind": "encoding"
+    },
+    {
+      "id": "getrawtransaction.verbosity0",
+      "method": "getrawtransaction",
+      "availability": "passed",
+      "behavior": "unknown",
+      "detail": "node does not serve the genesis coinbase via getrawtransaction (code -5) -- Bitcoin Core behaves identically; async form [txid, 0] routed and reached the domain layer; shape unverified without a funded fixture",
+      "fail_kind": "shape"
+    },
+    {
+      "id": "getrawtransaction.verbosity1",
+      "method": "getrawtransaction",
+      "availability": "passed",
+      "behavior": "unknown",
+      "detail": "node does not serve the genesis coinbase via getrawtransaction (code -5) -- Bitcoin Core behaves identically; async form [txid, 1] routed and reached the domain layer; shape unverified without a funded fixture",
+      "fail_kind": "shape"
+    },
+    {
+      "id": "getrawtransaction.bool-verbose",
+      "method": "getrawtransaction",
+      "availability": "passed",
+      "behavior": "unknown",
+      "detail": "node does not serve the genesis coinbase via getrawtransaction (code -5) -- Bitcoin Core behaves identically; sync form [txid, true] (bitcoincore-rpc 0.19 get_raw_transaction_info and bitcoin-ext custom_get_raw_transaction_info: handle_defaults strips the trailing null, so the wire form is two params, envelope 2.0) routed and reached the domain layer; shape unverified without a funded fixture",
+      "fail_kind": "encoding"
+    },
+    {
+      "id": "getrawtransaction.bool-verbose.async",
+      "method": "getrawtransaction",
+      "availability": "passed",
+      "behavior": "unknown",
+      "detail": "node does not serve the genesis coinbase via getrawtransaction (code -5) -- Bitcoin Core behaves identically; bark call_raw form [txid, true] routed and reached the domain layer; shape unverified without a funded fixture",
+      "fail_kind": "encoding"
+    },
+    {
+      "id": "gettxout.mempool-true",
+      "method": "gettxout",
+      "availability": "passed",
+      "behavior": "passed",
+      "detail": "null for the genesis coinbase -- Core-identical (the genesis coinbase output is not in the UTXO set on Bitcoin Core either; bark try_get_tx_out maps this to None). Note: the non-null GetTxOutResult shape remains unverified without a funded fixture",
+      "fail_kind": "shape"
+    },
+    {
+      "id": "gettxout.mempool-false",
+      "method": "gettxout",
+      "availability": "passed",
+      "behavior": "passed",
+      "detail": "null for the genesis coinbase -- Core-identical (the genesis coinbase output is not in the UTXO set on Bitcoin Core either; bark try_get_tx_out maps this to None). Note: the non-null GetTxOutResult shape remains unverified without a funded fixture",
+      "fail_kind": "shape"
+    },
+    {
+      "id": "getrawmempool",
+      "method": "getrawmempool",
+      "availability": "passed",
+      "behavior": "passed",
+      "detail": "array of txids (0 entries; async form [])",
+      "fail_kind": "shape"
+    },
+    {
+      "id": "getrawmempool.bool-form",
+      "method": "getrawmempool",
+      "availability": "passed",
+      "behavior": "passed",
+      "detail": "sync form accepted ([false], envelope 2.0; bitcoin-ext get_mempool_spending_tx)",
+      "fail_kind": "encoding"
+    },
+    {
+      "id": "getmempoolentry.recognized",
+      "method": "getmempoolentry",
+      "availability": "passed",
+      "behavior": "unknown",
+      "detail": "txid not in mempool (expected on an unfunded node): method routed and returns the Core -5 code bark maps to None; entry shape unverified without a funded fixture",
+      "fail_kind": "shape"
+    },
+    {
+      "id": "getmempoolentry.shape.server",
+      "method": "getmempoolentry",
+      "availability": "passed",
+      "behavior": "unknown",
+      "detail": "requires a funded mempool entry (separate opt-in packet); getmempoolentry.server shape unverified on an unfunded node",
+      "fail_kind": "method-surface"
+    },
+    {
+      "id": "getmempoolentry.shape.wallet",
+      "method": "getmempoolentry",
+      "availability": "passed",
+      "behavior": "unknown",
+      "detail": "requires a funded mempool entry (separate opt-in packet); getmempoolentry.wallet shape unverified on an unfunded node",
+      "fail_kind": "method-surface"
+    },
+    {
+      "id": "estimatesmartfee.t1.shape",
+      "method": "estimatesmartfee",
+      "availability": "passed",
+      "behavior": "passed",
+      "detail": "parsed (blocks=1, feerate=None; mode literal \"ECONOMICAL\" as bark serializes it)",
+      "fail_kind": "shape"
+    },
+    {
+      "id": "estimatesmartfee.t3.shape",
+      "method": "estimatesmartfee",
+      "availability": "passed",
+      "behavior": "passed",
+      "detail": "parsed (blocks=3, feerate=None; mode literal \"ECONOMICAL\" as bark serializes it)",
+      "fail_kind": "shape"
+    },
+    {
+      "id": "estimatesmartfee.t6.shape",
+      "method": "estimatesmartfee",
+      "availability": "passed",
+      "behavior": "passed",
+      "detail": "parsed (blocks=6, feerate=None; mode literal \"ECONOMICAL\" as bark serializes it)",
+      "fail_kind": "shape"
+    },
+    {
+      "id": "estimatesmartfee.fee-data",
+      "method": "estimatesmartfee",
+      "availability": "passed",
+      "behavior": "unknown",
+      "detail": "no feerate for targets [1, 3, 6] (empty mempool: the node returns errors + blocks only). Missing fee data is unknown, not pass: bark falls back to its configured fallback fee"
+    },
+    {
+      "id": "getmempoolinfo",
+      "method": "getmempoolinfo",
+      "availability": "passed",
+      "behavior": "failed",
+      "detail": "shape: maxdatacarriersize: expected JSON integer, got null",
+      "fail_kind": "shape"
+    },
+    {
+      "id": "testmempoolaccept.recognized",
+      "method": "testmempoolaccept",
+      "availability": "passed",
+      "behavior": "not_run",
+      "detail": "method routed: rejected the invalid sample with server_error_-22: TX decode failed: 00 Make sure the tx has at least one input. (funded broadcast path deliberately not exercised; invalid samples prove recognition only)",
+      "fail_kind": "method-surface"
+    },
+    {
+      "id": "submitpackage.recognized",
+      "method": "submitpackage",
+      "availability": "passed",
+      "behavior": "not_run",
+      "detail": "method routed: rejected the invalid sample with server_error_-22: TX decode failed: 00 Make sure the tx has at least one input. (funded broadcast path deliberately not exercised; invalid samples prove recognition only)",
+      "fail_kind": "method-surface"
+    },
+    {
+      "id": "sendrawtransaction.recognized",
+      "method": "sendrawtransaction",
+      "availability": "passed",
+      "behavior": "not_run",
+      "detail": "method routed: rejected the invalid sample with server_error_-22: TX decode failed. Make sure the tx has at least one input. (funded broadcast path deliberately not exercised; invalid samples prove recognition only)",
+      "fail_kind": "method-surface"
+    },
+    {
+      "id": "protocol.id-echo",
+      "method": null,
+      "availability": "passed",
+      "behavior": "passed",
+      "detail": "all 30 exchanges (200 and HTTP-error paths alike) echoed the numeric request id exactly",
+      "fail_kind": "protocol"
+    }
+  ],
+  "observations": {
+    "networkinfo_observed": {
+      "subversion": "/rbitcoin:0.9.0/",
+      "protocolversion": 70016,
+      "relayfee": 100,
+      "incrementalfee": 100
+    },
+    "rpc_version": 190000,
+    "subversion": "/rbitcoin:0.9.0/",
+    "protocolversion": 70016,
+    "chain": "regtest",
+    "blockchaininfo.blocks": 0,
+    "blockchaininfo.headers": 0,
+    "blockchaininfo.bestblockhash": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+    "blockchaininfo.bits": "207fffff",
+    "blockchaininfo.target": "7fffff0000000000000000000000000000000000000000000000000000000000",
+    "blockchaininfo.initialblockdownload": true,
+    "blockchaininfo.pruned": false,
+    "txindex": {
+      "best_block_height": 0,
+      "synced": true
+    },
+    "tip_height": 0,
+    "mempool_size": 0,
+    "mempoolinfo.loaded": true,
+    "mempoolinfo.size": 0,
+    "mempoolinfo.bytes": 0,
+    "mempoolinfo.usage": 0,
+    "mempoolinfo.maxmempool": 75000000,
+    "mempoolinfo.fullrbf": true,
+    "getzmqnotifications": "method not implemented (no ZMQ support)",
+    "zmq_impact": "bark c419159 does not use ZMQ: it polls the node via getblockcount/getblockhash (server poll loop) and getrawmempool (bdk emitter), so ZMQ absence is not a compatibility gap for the pinned bark."
+  },
+  "verdict": {
+    "status": "incompatible",
+    "reasons": [
+      "fail-version-gate",
+      "funded-unproven"
+    ],
+    "funded_state": "unproven",
+    "full_acceptance": false,
+    "unproven_checks": [
+      "getrawtransaction.verbosity0",
+      "getrawtransaction.verbosity1",
+      "getrawtransaction.bool-verbose",
+      "getrawtransaction.bool-verbose.async",
+      "getmempoolentry.recognized",
+      "getmempoolentry.shape.server",
+      "getmempoolentry.shape.wallet",
+      "estimatesmartfee.fee-data",
+      "testmempoolaccept.recognized",
+      "submitpackage.recognized",
+      "sendrawtransaction.recognized"
+    ],
+    "summary": "incompatible: the RPC version gate fails honestly (bark server needs >= 310000, wallet >= 290000); funded broadcast/mempool behavior additionally remains unproven (read-only mode)"
+  },
+  "node": {
+    "label": "rbitcoin-v0.9-lab-r2",
+    "source_name": "rbitcoin-v0.9-lab",
+    "binary": "/tmp/opencode/rbitcoin-v0.9-lab/target/dev/debug/rbitcoin-node",
+    "binary_sha256": "bcb6d5eefe0dd0bd96e2ac79e173b4b99a91f67f7717dae6620c30786378a171",
+    "argv": [
+      "/tmp/opencode/rbitcoin-v0.9-lab/target/dev/debug/rbitcoin-node",
+      "--network",
+      "regtest",
+      "--datadir",
+      "/tmp/opencode/AP1a-1fd3d1813c33/rbitcoin-v0.9-lab-r2/datadir",
+      "--rpc",
+      "--rpc-listen",
+      "127.0.0.1:37957",
+      "--rpc-cookie-file",
+      "/tmp/opencode/AP1a-1fd3d1813c33/rbitcoin-v0.9-lab-r2/rpc.cookie",
+      "--no-listen",
+      "--no-seeds",
+      "--no-discover",
+      "--max-run-secs",
+      "240"
+    ],
+    "env": {
+      "RBITCOIN_RPC_PACKAGE_DIALECT": "1"
+    },
+    "rpc_url": "http://127.0.0.1:37957",
+    "cookie_file": "rpc.cookie",
+    "cookie_note": "written by the launcher before start (user:pass, mode 0600, no trailing newline); private at rest for the node's lifetime; contents never recorded; removed with the scratch dir unless --keep-scratch",
+    "network": "regtest",
+    "isolation": [
+      "--no-listen",
+      "--no-seeds",
+      "--no-discover",
+      "loopback rpc only"
+    ],
+    "max_run_secs": 240,
+    "dialect_env": {
+      "RBITCOIN_RPC_PACKAGE_DIALECT": "1"
+    },
+    "exit": {
+      "returncode": 0,
+      "signal": null,
+      "uptime_s": 0.85
+    }
+  }
+}

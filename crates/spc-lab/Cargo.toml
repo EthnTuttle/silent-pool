@@ -1,0 +1,43 @@
+[package]
+name = "spc-lab"
+description = "Versioned regtest lab scenarios, durable commands, evidence and process supervision"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+bs58.workspace = true
+hex.workspace = true
+num-bigint.workspace = true
+rand.workspace = true
+rustix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+spc-crypto.workspace = true
+spc-scan.workspace = true
+bitcoin.workspace = true
+toml.workspace = true
+secp256k1.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+spc-lab-txd = { path = "../spc-lab-txd" }
+
+[[bin]]
+name = "spc-lab-fixture"
+path = "src/bin/fixture.rs"
+required-features = []
+
+# The controller also uses the actor's typed control/config contracts.
+[dev-dependencies]
+# EXP-OP operator runtime wiring: the runtime's rendered pool TOML is
+# validated against the real pool parser, never by string matching.
+spc-pool.workspace = true
+# Installed-role ACL regression: exercise the actual worker/Streams connection.
+spc-store.workspace = true
+spc-ext.workspace = true
+tokio.workspace = true
+async-trait = "0.1"
+ark-lib = "0.7.1"
+redis = { version = "0.27", features = ["tokio-comp", "streams"] }

@@ -1,0 +1,18 @@
+{
+  "name": "shape_mismatch",
+  "description": "getblockchaininfo without bits: the async corepc v29 shape fails (it requires bits/target/time) while the sync 0.19 shape still passes",
+  "overrides": [
+    {"op": "patch", "method": "getnetworkinfo", "field": "version", "value": 310000},
+    {"op": "delete", "method": "getblockchaininfo", "field": "bits"}
+  ],
+  "expect": {
+    "verdict_status": "incompatible",
+    "reasons": ["fail-shape", "funded-unproven"],
+    "funded_state": "unproven",
+    "checks": {
+      "getblockchaininfo.shape.async": "failed",
+      "getblockchaininfo.shape.sync": "passed",
+      "getblockchaininfo.network": "passed"
+    }
+  }
+}

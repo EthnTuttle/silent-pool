@@ -18,8 +18,17 @@ pub mod bark_stock;
 pub mod bark_transport;
 /// The board / refill loop (SPEC §11.3 "Refilling (H_f + 100)").
 pub mod board;
+pub mod send_fence;
 /// The transport contract and the dev/test command transport.
 mod transport;
+/// Private, same-owner pool wallet command queue and live observations.
+#[cfg(feature = "ark")]
+pub mod wallet_control;
+#[cfg(feature = "ark")]
+mod wallet_control_io;
+/// Retained public original-board proofs and stock round-import facts.
+#[cfg(feature = "ark")]
+pub mod wallet_control_proof;
 
 pub use transport::{ArkTransport, ExternalCommandTransport};
 
@@ -270,9 +279,14 @@ pub struct ArkService<T: ArkTransport, D: OrderDedupe> {
     receipts_stream: String,
     group: String,
     consumer: String,
+    fresh_authorization: bool,
 }
 
 impl<T: ArkTransport, D: OrderDedupe> ArkService<T, D> {
+    pub fn require_fresh_authorization(mut self) -> Self {
+        self.fresh_authorization = true;
+        self
+    }
     pub fn new(
         verifier: OrderVerifier,
         dedupe: D,
@@ -290,6 +304,7 @@ impl<T: ArkTransport, D: OrderDedupe> ArkService<T, D> {
             receipts_stream: RECEIPTS_STREAM.to_string(),
             group: GROUP.to_string(),
             consumer: CONSUMER.to_string(),
+            fresh_authorization: false, // explicit library/legacy fixture constructor
         }
     }
 
@@ -359,13 +374,33 @@ impl<T: ArkTransport, D: OrderDedupe> ArkService<T, D> {
         Ok(())
     }
 
-    /// Re-read this consumer's unacknowledged entries. This is the only path
-    /// that can execute a `Hold`ed order: nothing else re-delivers it.
+    /// Re-read this consumer's unacknowledged entries with a durable fair
+    /// cursor. Held orders survive restart and cannot be starved by a pinned
+    /// prefix; exhaustion wraps to zero on the next bounded retry pass.
     pub async fn retry_pending(&mut self) -> Result<(), ArkError> {
+        let cursor_key = format!(
+            "spc:ark:pending-cursor:{}:{}:{}",
+            self.orders_stream, self.group, self.consumer
+        );
+        let cursor = self
+            .streams
+            .kv_get(&cursor_key)
+            .await?
+            .unwrap_or_else(|| "0".into());
         let pending = self
             .streams
-            .read_pending(&self.orders_stream, &self.group, &self.consumer, 64)
+            .read_pending_after(
+                &self.orders_stream,
+                &self.group,
+                &self.consumer,
+                64,
+                &cursor,
+            )
             .await?;
+        let next = pending
+            .last()
+            .map(|(id, _)| id.clone())
+            .unwrap_or_else(|| "0".into());
         for (id, payload) in pending {
             if self.on_entry(&payload).await? {
                 self.streams
@@ -373,6 +408,7 @@ impl<T: ArkTransport, D: OrderDedupe> ArkService<T, D> {
                     .await?;
             }
         }
+        self.streams.kv_set(&cursor_key, &next).await?;
         Ok(())
     }
 
@@ -394,7 +430,12 @@ impl<T: ArkTransport, D: OrderDedupe> ArkService<T, D> {
     pub async fn handle(&mut self, order: &ArkSendOrder) -> Result<bool, ArkError> {
         match self.process(order).await {
             Ok(outcome) => Ok(should_ack(outcome)),
-            Err(ArkError::Duplicate) | Err(ArkError::Ambiguous) => {
+            Err(error) if self.fresh_authorization => {
+                self.dedupe.pin(&order.order_id).await?;
+                tracing::warn!(error=%error,"authorized Ark order remains unknown; no refund or replacement send");
+                Ok(false)
+            }
+            Err(ArkError::Duplicate) | Err(ArkError::Ambiguous) | Err(ArkError::Transport(_)) => {
                 // The dedupe mark is written before the transport call, so a
                 // duplicate means an earlier attempt may have paid. We cannot
                 // know whether sats left the float: never claim `Sent` (that
@@ -429,6 +470,9 @@ impl<T: ArkTransport, D: OrderDedupe> ArkService<T, D> {
 
     pub async fn process(&mut self, order: &ArkSendOrder) -> Result<Processed, ArkError> {
         let current_tip = self.tip();
+        if self.fresh_authorization {
+            return self.process_authorized(order, current_tip).await;
+        }
         let Some((vtxo_id, expiry)) = decide_send(
             &mut self.verifier,
             &self.dedupe,
@@ -447,6 +491,119 @@ impl<T: ArkTransport, D: OrderDedupe> ArkService<T, D> {
             expiry_height: expiry,
         })
         .await;
+        Ok(Processed::Sent)
+    }
+
+    async fn process_authorized(
+        &mut self,
+        order: &ArkSendOrder,
+        tip: u32,
+    ) -> Result<Processed, ArkError> {
+        use spc_ext::authorization::{
+            order_digest, AuthorizationGrant, AuthorizationRequest, ProvedReceipt, GRANTS_KEY,
+            REQUESTS_STREAM,
+        };
+        if self.dedupe.is_pinned(&order.order_id).await? {
+            return Err(ArkError::Ambiguous);
+        }
+        if self.verifier.check(order, tip)? == Action::Hold {
+            return Ok(Processed::Held);
+        }
+        // Wallet-control may hold capacity for a long board/sync. Do not mint
+        // this attempt's fresh grant until that SAME wallet can execute it.
+        let capacity = match self.transport.reserve_send_capacity().await {
+            Ok(capacity) => capacity,
+            Err(error) if error.held_before_request() => {
+                tracing::info!(
+                    stage = "pre_authorization_request",
+                    reason = error.reason(),
+                    "same frozen order held for pending-stream retry"
+                );
+                return Ok(Processed::Held);
+            }
+            Err(error) => return Err(ArkError::Transport(error.to_string())),
+        };
+        if let Err(error) = self
+            .transport
+            .check_send_readiness(&order.ark_address, order.sats, capacity.as_ref())
+            .await
+        {
+            if error.held_before_request() {
+                tracing::info!(
+                    stage = "pre_authorization_request",
+                    reason = error.reason(),
+                    "same frozen order held until actual wallet readiness"
+                );
+                return Ok(Processed::Held);
+            }
+            return Err(ArkError::Transport(error.to_string()));
+        }
+        let request = AuthorizationRequest {
+            order_id: order.order_id,
+            order_digest: order_digest(order).map_err(|_| ArkError::Signature)?,
+            nonce: rand::random(),
+        };
+        let field = format!(
+            "{}:{}",
+            hex::encode(request.order_id),
+            hex::encode(request.nonce)
+        );
+        self.streams.add(REQUESTS_STREAM, &request.encode()).await?;
+        let response = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Some(value) = self.streams.hget(GRANTS_KEY, &field).await? {
+                    return Ok::<_, ArkError>(value);
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .map_err(|_| ArkError::Ambiguous)??;
+        let bytes = hex::decode(response).map_err(|_| ArkError::Signature)?;
+        let grant = AuthorizationGrant::decode(&bytes).map_err(|_| ArkError::Signature)?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| ArkError::Ambiguous)?
+            .as_secs();
+        grant
+            .verify_for(&request, now, &self.verifier.order_pubkey)
+            .map_err(|_| ArkError::Ambiguous)?;
+        // Durable pin precedes the transport. Unknown errors/Redis restarts
+        // cannot convert this nonce into another send: PG also retains the grant.
+        self.dedupe.pin(&order.order_id).await?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| ArkError::Ambiguous)?
+            .as_secs();
+        grant
+            .verify_for(&request, now, &self.verifier.order_pubkey)
+            .map_err(|_| ArkError::Ambiguous)?;
+        let vtxos = self
+            .transport
+            .send_authorized(
+                &order.ark_address,
+                order.sats,
+                &send_fence::SendAuthorization::new(
+                    order,
+                    &grant,
+                    &request,
+                    self.verifier.order_pubkey,
+                )
+                .map_err(ArkError::Transport)?,
+                capacity.as_ref(),
+            )
+            .await
+            .map_err(ArkError::Transport)?;
+        let receipt = ProvedReceipt {
+            grant,
+            sats: order.sats,
+            vtxos,
+        };
+        let bytes = receipt.encode().map_err(|_| ArkError::Ambiguous)?;
+        // The receipt is durable in Redis before the order is acknowledged;
+        // publication failure remains pinned, never a fabricated Failed receipt.
+        self.streams.add(&self.receipts_stream, &bytes).await?;
+        self.verifier.account(order.sats);
         Ok(Processed::Sent)
     }
 
@@ -473,13 +630,15 @@ impl<T: ArkTransport> ArkService<T, SeenOrders> {
         tip: u32,
         retry_blocks: u32,
     ) -> Self {
-        Self::new(
+        let mut service = Self::new(
             verifier,
             SeenOrders::new(streams.clone(), retry_blocks),
             transport,
             streams,
             tip,
-        )
+        );
+        service.fresh_authorization = true;
+        service
     }
 }
 

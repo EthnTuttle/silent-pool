@@ -45,9 +45,10 @@ pub enum CoinbaseError {
     },
 }
 
-/// A witness-free coinbase template. The witness commitment is the template
-/// provider's responsibility in pool-template mode; JD mode carries the JDC's
-/// own commitment.
+/// A witness-free coinbase template (the witness field is injected at block
+/// assembly, never hashed by miners). In pool-template mode the commitment
+/// output - when the transaction set carries witness data - is appended by
+/// the caller as the last output; JD mode carries the JDC's own commitment.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CoinbaseTemplate {
     pub prefix: Vec<u8>,
@@ -67,6 +68,30 @@ impl CoinbaseTemplate {
         out.extend_from_slice(&self.suffix);
         out
     }
+
+    /// Assemble the coinbase and inject the BIP 141 witness field
+    /// (`01 20 <reserved>` behind the segwit marker/flag). The result
+    /// serializes the same *stripped* transaction as [`Self::assemble`]
+    /// plus the witness, so the txid - what miners hashed - is unchanged.
+    pub fn assemble_with_witness(
+        &self,
+        extranonce: &[u8],
+        reserved: &[u8; 32],
+    ) -> Result<Vec<u8>, crate::block::BlockError> {
+        crate::block::coinbase_with_witness(&self.assemble(extranonce), reserved)
+    }
+}
+
+/// The BIP 141 witness commitment output: a zero-value `OP_RETURN` output
+/// carrying `commitment_script(commitment)` (decision
+/// 2026-11-08-pool-witness-commitment). Callers append it *last*, after
+/// every payout output, so the pool output stays index 0 (settlement's
+/// `fixed_outputs` takes it) and payout slots keep their order.
+pub fn commitment_output(commitment: &[u8; 32]) -> (ScriptBuf, u64) {
+    (
+        ScriptBuf::from_bytes(crate::witness::commitment_script(commitment)),
+        0,
+    )
 }
 
 /// Build a pool-template coinbase, enforcing the scriptSig budget.
@@ -458,6 +483,48 @@ mod tests {
         let s = p2tr_script(&[9; 32]);
         assert_eq!(s.len(), 34);
         assert_eq!(&s.as_bytes()[..2], &[0x51, 0x20]);
+    }
+
+    #[test]
+    fn commitment_output_is_a_zero_value_op_return() {
+        let (script, value) = commitment_output(&[0x42; 32]);
+        assert_eq!(value, 0);
+        assert_eq!(script.len(), 38);
+        assert_eq!(
+            &script.as_bytes()[..6],
+            &[0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed]
+        );
+        assert_eq!(
+            crate::witness::commitment_from_script(script.as_bytes()),
+            Some([0x42; 32])
+        );
+    }
+
+    #[test]
+    fn assemble_with_witness_keeps_the_stripped_txid() {
+        let a_x = [0x42; 32];
+        let outputs = vec![
+            (p2tr_script(&[0x11; 32]), 1000),
+            commitment_output(&[0x99; 32]),
+        ];
+        let t = build_pool_template(2, 800_000, &a_x, 8, &outputs, 0);
+        let stripped = t.assemble(&[0xaa; 8]);
+        let full = t.assemble_with_witness(&[0xaa; 8], &[0x42; 32]).unwrap();
+        // Marker/flag plus the 34-byte witness field.
+        assert_eq!(full.len(), stripped.len() + 36);
+        assert_eq!(&full[4..6], &[0x00, 0x01]);
+        // The txid is the hash of the stripped serialization: unchanged.
+        // (The raw-byte hash of the full serialization is the wtxid, so
+        // compare via the decoded transactions.)
+        let full_tx: bitcoin::Transaction = bitcoin::consensus::deserialize(&full).unwrap();
+        let stripped_tx: bitcoin::Transaction = bitcoin::consensus::deserialize(&stripped).unwrap();
+        assert_eq!(full_tx.compute_txid(), stripped_tx.compute_txid());
+        // A second call with a different reserved value still keeps the
+        // txid: only the commitment changes.
+        let other = t.assemble_with_witness(&[0xaa; 8], &[0x43; 32]).unwrap();
+        let other_tx: bitcoin::Transaction = bitcoin::consensus::deserialize(&other).unwrap();
+        assert_eq!(other_tx.compute_txid(), stripped_tx.compute_txid());
+        assert_ne!(other, full);
     }
 
     #[test]

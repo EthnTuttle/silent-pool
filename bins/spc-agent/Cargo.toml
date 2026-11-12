@@ -8,13 +8,29 @@ rust-version.workspace = true
 
 [features]
 default = []
-ark = ["spc-crypto/ark"]
+# Real-PostgreSQL JOINed producer+client proofs (wallet aggregate revision
+# relation). Same never-skip gate contract as spc-store's integration suite:
+# requires SPC_LADDER_TEST_DATABASE_URL at run time.
+postgres-integration = []
+ark = [
+  "spc-crypto/ark",
+  "dep:bark-wallet",
+  "dep:rusqlite",
+  "dep:axum",
+  "dep:chrono",
+  "dep:ark-lib",
+  "dep:server_rpc",
+  "dep:reqwest",
+  "dep:rustix",
+]
 
 [lib]
 name = "spc_agent"
 path = "src/lib.rs"
 
 [dependencies]
+rand.workspace = true
+async-trait = "0.1"
 spc-crypto.workspace = true
 spc-ext.workspace = true
 spc-scan.workspace = true
@@ -33,7 +49,31 @@ tokio.workspace = true
 toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+# Wallet role (SPEC 11.5, feature `ark`). The stock bark wallet lib at the
+# UPSTREAM_DEPS.md pin supplies `WalletSeed::new_from_seed` for the BIP 85
+# child wallet; same rev as the workspace `[patch.crates-io] ark-lib`
+# mapping and the pool's `ark` feature. Default features match the pool's
+# declaration (sqlite persistence, bitcoind-rpc chain backend).
+bark-wallet = { git = "https://gitlab.com/ark-bitcoin/bark.git", rev = "c419159fa54085572f8ca72d2ba1716556a9d3eb", optional = true }
+ark-lib = { version = "0.7.1", optional = true }
+server_rpc = { git = "https://gitlab.com/ark-bitcoin/bark.git", rev = "c419159fa54085572f8ca72d2ba1716556a9d3eb", package = "bark-server-rpc", default-features = false, optional = true }
+# Persistent agent wallet state (U_i -> u_i keystore, VTXO records,
+# registration counter). Same version the pinned bark tree locks.
+rusqlite = { version = "0.31", optional = true }
+# Loopback status JSON endpoint (plan 4.7).
+axum = { version = "0.8", optional = true }
+chrono = { version = "0.4", optional = true }
+zeroize.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
+url = "2"
+rustix = { workspace = true, optional = true }
 
 [dev-dependencies]
 rand.workspace = true
 spc-pool = { path = "../spc-pool" }
+# JOINed producer+client aggregate revision proof
+# (src/wallet/aggregate_join_proof_tests.rs, feature `postgres-integration`):
+# drives the real spc-store grant INSERT -> Sent transition chain.
+spc-store = { path = "../../crates/spc-store" }
+tempfile = "3"
+tokio = { workspace = true, features = ["test-util"] }

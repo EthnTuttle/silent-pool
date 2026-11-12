@@ -7,7 +7,7 @@ use std::time::Duration;
 use bitcoin::hashes::Hash;
 use spc_crypto::Network;
 use spc_pool::front::{Front, FrontConfig};
-use spc_pool::sv2_server::Sv2Server;
+use spc_pool::sv2_server::{ShareOutcome, Sv2Server};
 use spc_pool::template::{MockTemplateSource, Template, TemplateSource};
 use stratum_apps::network_helpers::connect_with_noise;
 use stratum_apps::network_helpers::noise_stream::NoiseTcpWriteHalf;
@@ -201,9 +201,11 @@ async fn sv2_miner_finds_a_block() {
                         a
                     })
                     .collect();
-                break;
             }
             _ => {}
+        }
+        if job_id != 0 && nbits != 0 {
+            break;
         }
     }
     assert_eq!(extranonce_prefix.len(), 4);
@@ -214,7 +216,7 @@ async fn sv2_miner_finds_a_block() {
     coinbase.extend_from_slice(&extranonce);
     coinbase.extend_from_slice(&coinb2);
     let mut merkle_root = bitcoin::hashes::sha256d::Hash::hash(&coinbase).to_byte_array();
-    for branch in merkle_path.iter().rev() {
+    for branch in &merkle_path {
         let mut buf = Vec::with_capacity(64);
         buf.extend_from_slice(&merkle_root);
         buf.extend_from_slice(branch);
@@ -256,9 +258,6 @@ async fn sv2_miner_finds_a_block() {
         true,
     )
     .await;
-    let f = read.read_frame().await.unwrap();
-    assert_eq!(f.header().msg_type(), 0x1c);
-
     let share = tokio::time::timeout(Duration::from_secs(2), rx.recv())
         .await
         .unwrap()
@@ -271,6 +270,14 @@ async fn sv2_miner_finds_a_block() {
     assert_eq!(share.extranonce, expected_extranonce);
     assert_eq!(share.coinbase, coinbase);
     let block = front.on_share(share).unwrap().expect("block");
+    server.resolve_share(1, 0, ShareOutcome::Accepted { credited_work: 1 });
+    let mut frame = read.read_frame().await.unwrap();
+    assert_eq!(frame.header().msg_type(), 0x1c);
+    let mut payload = frame.payload().to_vec();
+    let ack: stratum_core::mining_sv2::SubmitSharesSuccess =
+        binary_sv2::from_bytes(&mut payload).unwrap();
+    assert_eq!(ack.last_sequence_number, 0);
+    assert_eq!(ack.new_shares_sum, 1);
     source.submit_block(&block.block).await.unwrap();
     assert_eq!(source.submitted().len(), 1);
 }

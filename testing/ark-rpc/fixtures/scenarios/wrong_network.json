@@ -1,0 +1,17 @@
+{
+  "name": "wrong_network",
+  "description": "node on a different chain (chain=test): the network check fails and no fallback chain is attempted",
+  "overrides": [
+    {"op": "patch", "method": "getnetworkinfo", "field": "version", "value": 310000},
+    {"op": "patch", "method": "getblockchaininfo", "field": "chain", "value": "test"}
+  ],
+  "expect": {
+    "verdict_status": "incompatible",
+    "reasons": ["fail-network", "funded-unproven"],
+    "funded_state": "unproven",
+    "checks": {
+      "getblockchaininfo.network": "failed",
+      "getblockchaininfo.shape.async": "passed"
+    }
+  }
+}

@@ -8,6 +8,8 @@
 
 #![deny(unsafe_code)]
 
+pub mod authorization;
+
 use secp256k1::{schnorr, Keypair, Message, PublicKey, Secp256k1, XOnlyPublicKey};
 use thiserror::Error;
 
@@ -34,6 +36,12 @@ pub enum Error {
     LengthMismatch,
     #[error("invalid distribution")]
     InvalidDistribution,
+    #[error("unsupported delivery version")]
+    Version,
+    #[error("unsupported mailbox mode")]
+    UnsupportedMailboxMode,
+    #[error("request id is zero or exhausted")]
+    RequestIdExhausted,
     #[error("stale distribution")]
     StaleDistribution,
 }
@@ -355,8 +363,17 @@ pub fn validate_distribution(
 }
 
 // ---------------------------------------------------------------------------
-// 0x5350 delivery capabilities
+// 0x5350 delivery capabilities (v1)
 // ---------------------------------------------------------------------------
+
+pub const DELIVERY_VERSION: u8 = 1;
+pub const MSG_SET_ARK_IDENTITY: u8 = 0x01;
+pub const MSG_SET_ARK_IDENTITY_SUCCESS: u8 = 0x02;
+pub const MSG_SET_ARK_IDENTITY_ERROR: u8 = 0x03;
+pub const MSG_REGISTER_EPOCH_MAILBOXES: u8 = 0x04;
+pub const MSG_REGISTER_EPOCH_MAILBOXES_SUCCESS: u8 = 0x05;
+pub const MSG_REGISTER_EPOCH_MAILBOXES_ERROR: u8 = 0x06;
+pub const MSG_ARK_PAYOUT_NOTICE: u8 = 0x07;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MailboxMode {
@@ -373,7 +390,7 @@ impl MailboxMode {
             1 => Ok(Self::Static),
             2 => Ok(Self::EpochDerived),
             3 => Ok(Self::EpochRegistered),
-            _ => Err(Error::InvalidTnf),
+            _ => Err(Error::UnsupportedMailboxMode),
         }
     }
     pub fn as_u8(self) -> u8 {
@@ -406,22 +423,27 @@ pub struct SetArkIdentity {
     pub mailbox_dh: Vec<u8>,
     pub epoch_fallback: EpochFallback,
     pub sig: [u8; 64],
+    pub request_id: u32,
 }
 
 impl SetArkIdentity {
     pub fn encode(&self) -> Result<Vec<u8>, Error> {
         let mut w = Writer::default();
-        w.bytes(&self.ark_id)
+        w.u8(DELIVERY_VERSION)
+            .bytes(&self.ark_id)
             .bytes(&self.b_ark)
             .u8(self.mailbox_mode.as_u8());
         w.blob_u8(&self.mailbox_pubkey)?;
         w.blob_u8(&self.mailbox_dh)?;
-        w.u8(self.epoch_fallback as u8).bytes(&self.sig);
+        w.u8(self.epoch_fallback as u8)
+            .bytes(&self.sig)
+            .u32(self.request_id);
         Ok(w.finish())
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
         let mut r = Reader::new(bytes);
+        expect_version(&mut r)?;
         let out = Self {
             ark_id: r.array()?,
             b_ark: r.array()?,
@@ -430,28 +452,44 @@ impl SetArkIdentity {
             mailbox_dh: r.blob_u8()?.to_vec(),
             epoch_fallback: EpochFallback::from_u8(r.u8()?)?,
             sig: r.array()?,
+            request_id: r.u32()?,
         };
         r.finish()?;
-        validate_mailbox_fields(&out).map_err(|_| Error::InvalidTnf)?;
+        if out.mailbox_pubkey.len() > 33 || out.mailbox_dh.len() > 33 {
+            return Err(Error::InvalidTnf);
+        }
+        if out.request_id == 0 {
+            return Err(Error::RequestIdExhausted);
+        }
         Ok(out)
     }
 
-    /// `sp_id || ark_id || b_ark || mode || M || D || fallback`.
+    /// `sp_id || version || ark_id || b_ark || mode || M || D || fallback ||
+    /// request_id`.
+    ///
+    /// AP-2 contract amendment for Fable review: the reviewed plan left
+    /// `request_id` outside this preimage. That allowed an old signature to be
+    /// replayed with a greater counter and roll back current delivery. The
+    /// counter therefore stays last on the wire but is signed here.
     pub fn signing_payload(&self, sp_id: &[u8; 32]) -> Result<Vec<u8>, Error> {
         let mut w = Writer::default();
-        w.bytes(sp_id)
-            .bytes(&self.ark_id)
+        w.bytes(sp_id).u8(DELIVERY_VERSION);
+        w.bytes(&self.ark_id)
             .bytes(&self.b_ark)
             .u8(self.mailbox_mode.as_u8());
         w.blob_u8(&self.mailbox_pubkey)?;
         w.blob_u8(&self.mailbox_dh)?;
-        w.u8(self.epoch_fallback as u8);
+        w.u8(self.epoch_fallback as u8).u32(self.request_id);
         Ok(w.finish())
     }
 
+    pub fn signed_fields_digest(&self, sp_id: &[u8; 32]) -> Result<[u8; 32], Error> {
+        Ok(tagged("SPc/ArkIdentity", &self.signing_payload(sp_id)?))
+    }
+
     pub fn sign(&mut self, sp_id: &[u8; 32], key: &Keypair) -> Result<(), Error> {
-        let payload = self.signing_payload(sp_id)?;
-        let msg = Message::from_digest(tagged("SPc/ArkIdentity", &payload));
+        let digest = self.signed_fields_digest(sp_id)?;
+        let msg = Message::from_digest(digest);
         let sig =
             Secp256k1::signing_only().sign_schnorr_with_rng(&msg, key, &mut rand::thread_rng());
         self.sig = *sig.as_ref();
@@ -459,8 +497,8 @@ impl SetArkIdentity {
     }
 
     pub fn verify(&self, sp_id: &[u8; 32], b_scan: &XOnlyPublicKey) -> Result<(), Error> {
-        let payload = self.signing_payload(sp_id)?;
-        let msg = Message::from_digest(tagged("SPc/ArkIdentity", &payload));
+        let digest = self.signed_fields_digest(sp_id)?;
+        let msg = Message::from_digest(digest);
         let sig = schnorr::Signature::from_slice(&self.sig).map_err(|_| Error::Signature)?;
         Secp256k1::verification_only()
             .verify_schnorr(&sig, &msg, b_scan)
@@ -476,6 +514,9 @@ impl SetArkIdentity {
         b_spend: &[u8; 33],
         configured_ark: &[u8; 4],
     ) -> Option<&'static str> {
+        if self.request_id == 0 {
+            return Some("request-id-exhausted");
+        }
         if self.ark_id != *configured_ark {
             return Some("wrong-ark-server");
         }
@@ -496,6 +537,9 @@ impl SetArkIdentity {
 }
 
 fn validate_mailbox_fields(v: &SetArkIdentity) -> Result<(), &'static str> {
+    if v.mailbox_mode != MailboxMode::EpochRegistered && v.epoch_fallback == EpochFallback::Hold {
+        return Err("bad-mailbox-fields");
+    }
     match v.mailbox_mode {
         MailboxMode::None => {
             if v.mailbox_pubkey.is_empty() && v.mailbox_dh.is_empty() {
@@ -505,11 +549,7 @@ fn validate_mailbox_fields(v: &SetArkIdentity) -> Result<(), &'static str> {
             }
         }
         _ => {
-            if v.mailbox_pubkey.is_empty()
-                || v.mailbox_dh.is_empty()
-                || v.mailbox_pubkey.len() > 33
-                || v.mailbox_dh.len() > 33
-            {
+            if v.mailbox_pubkey.len() != 33 || v.mailbox_dh.len() != 33 {
                 Err("bad-mailbox-fields")
             } else if PublicKey::from_slice(&v.mailbox_pubkey).is_err()
                 || PublicKey::from_slice(&v.mailbox_dh).is_err()
@@ -526,42 +566,59 @@ fn validate_mailbox_fields(v: &SetArkIdentity) -> Result<(), &'static str> {
 pub struct RegisterEpochMailboxes {
     pub entries: Vec<[u8; 37]>,
     pub sig: [u8; 64],
+    pub request_id: u32,
 }
 
 impl RegisterEpochMailboxes {
     pub fn encode(&self) -> Result<Vec<u8>, Error> {
         let mut w = Writer::default();
+        w.u8(DELIVERY_VERSION);
         w.u16(u16::try_from(self.entries.len()).map_err(|_| Error::Length)?);
         for e in &self.entries {
             w.bytes(e);
         }
-        w.bytes(&self.sig);
+        w.bytes(&self.sig).u32(self.request_id);
         Ok(w.finish())
     }
+
     pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
         let mut r = Reader::new(bytes);
+        expect_version(&mut r)?;
         let n = r.u16()? as usize;
         let mut entries = Vec::with_capacity(n.min(4096));
         for _ in 0..n {
             entries.push(r.array()?);
         }
         let sig = r.array()?;
+        let request_id = r.u32()?;
         r.finish()?;
-        Ok(Self { entries, sig })
+        if request_id == 0 {
+            return Err(Error::RequestIdExhausted);
+        }
+        Ok(Self {
+            entries,
+            sig,
+            request_id,
+        })
     }
+
     pub fn signing_payload(&self, sp_id: &[u8; 32]) -> Result<Vec<u8>, Error> {
         let mut w = Writer::default();
-        w.bytes(sp_id);
+        w.bytes(sp_id).u8(DELIVERY_VERSION);
         w.u16(u16::try_from(self.entries.len()).map_err(|_| Error::Length)?);
         for e in &self.entries {
             w.bytes(e);
         }
+        w.u32(self.request_id);
         Ok(w.finish())
     }
 
+    pub fn signed_fields_digest(&self, sp_id: &[u8; 32]) -> Result<[u8; 32], Error> {
+        Ok(tagged("SPc/EpochMailboxes", &self.signing_payload(sp_id)?))
+    }
+
     pub fn sign(&mut self, sp_id: &[u8; 32], key: &Keypair) -> Result<(), Error> {
-        let payload = self.signing_payload(sp_id)?;
-        let msg = Message::from_digest(tagged("SPc/ArkIdentity", &payload));
+        let msg = Message::from_digest(self.signed_fields_digest(sp_id)?);
         let sig =
             Secp256k1::signing_only().sign_schnorr_with_rng(&msg, key, &mut rand::thread_rng());
         self.sig = *sig.as_ref();
@@ -569,14 +626,124 @@ impl RegisterEpochMailboxes {
     }
 
     pub fn verify(&self, sp_id: &[u8; 32], b_scan: &XOnlyPublicKey) -> Result<(), Error> {
-        let payload = self.signing_payload(sp_id)?;
-        let msg = Message::from_digest(tagged("SPc/ArkIdentity", &payload));
+        let msg = Message::from_digest(self.signed_fields_digest(sp_id)?);
         let sig = schnorr::Signature::from_slice(&self.sig).map_err(|_| Error::Signature)?;
         Secp256k1::verification_only()
             .verify_schnorr(&sig, &msg, b_scan)
             .map_err(|_| Error::Signature)
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RegistrationSuccessState {
+    Applied = 0,
+    AlreadyApplied = 1,
+    Superseded = 2,
+}
+
+impl RegistrationSuccessState {
+    fn from_u8(value: u8) -> Result<Self, Error> {
+        match value {
+            0 => Ok(Self::Applied),
+            1 => Ok(Self::AlreadyApplied),
+            2 => Ok(Self::Superseded),
+            _ => Err(Error::InvalidTnf),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SetArkIdentitySuccess {
+    pub request_id: u32,
+    pub registration_rev: u64,
+    pub ark_id: [u8; 4],
+    pub state: RegistrationSuccessState,
+}
+
+impl SetArkIdentitySuccess {
+    pub fn encode(&self) -> Result<Vec<u8>, Error> {
+        let mut w = Writer::default();
+        w.u8(DELIVERY_VERSION)
+            .u32(self.request_id)
+            .u64(self.registration_rev)
+            .bytes(&self.ark_id)
+            .u8(self.state as u8);
+        Ok(w.finish())
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
+        let mut r = Reader::new(bytes);
+        expect_version(&mut r)?;
+        let out = Self {
+            request_id: r.u32()?,
+            registration_rev: r.u64()?,
+            ark_id: r.array()?,
+            state: RegistrationSuccessState::from_u8(r.u8()?)?,
+        };
+        r.finish()?;
+        if out.request_id == 0 {
+            return Err(Error::RequestIdExhausted);
+        }
+        Ok(out)
+    }
+}
+
+pub type RegisterEpochMailboxesSuccess = SetArkIdentitySuccess;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SetArkIdentityError {
+    pub request_id: u32,
+    pub retryable: bool,
+    pub error_code: Vec<u8>,
+    pub detail: Vec<u8>,
+}
+
+impl SetArkIdentityError {
+    pub fn new(request_id: u32, retryable: bool, code: &str, detail: &str) -> Self {
+        Self {
+            request_id,
+            retryable,
+            error_code: code.as_bytes().to_vec(),
+            detail: detail.as_bytes().to_vec(),
+        }
+    }
+
+    pub fn encode(&self) -> Result<Vec<u8>, Error> {
+        if self.error_code.len() > u8::MAX as usize || self.detail.len() > u8::MAX as usize {
+            return Err(Error::Length);
+        }
+        std::str::from_utf8(&self.error_code).map_err(|_| Error::InvalidTnf)?;
+        std::str::from_utf8(&self.detail).map_err(|_| Error::InvalidTnf)?;
+        let mut w = Writer::default();
+        w.u8(DELIVERY_VERSION)
+            .u32(self.request_id)
+            .u8(u8::from(self.retryable));
+        w.blob_u8(&self.error_code)?;
+        w.blob_u8(&self.detail)?;
+        Ok(w.finish())
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
+        let mut r = Reader::new(bytes);
+        expect_version(&mut r)?;
+        let out = Self {
+            request_id: r.u32()?,
+            retryable: match r.u8()? {
+                0 => false,
+                1 => true,
+                _ => return Err(Error::InvalidTnf),
+            },
+            error_code: r.blob_u8()?.to_vec(),
+            detail: r.blob_u8()?.to_vec(),
+        };
+        r.finish()?;
+        std::str::from_utf8(&out.error_code).map_err(|_| Error::InvalidTnf)?;
+        std::str::from_utf8(&out.detail).map_err(|_| Error::InvalidTnf)?;
+        Ok(out)
+    }
+}
+
+pub type RegisterEpochMailboxesError = SetArkIdentityError;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArkPayoutNotice {
@@ -588,14 +755,21 @@ pub struct ArkPayoutNotice {
 
 impl ArkPayoutNotice {
     pub fn encode(&self) -> Result<Vec<u8>, Error> {
+        if self.vtxo_id.len() > 64 {
+            return Err(Error::Length);
+        }
         let mut w = Writer::default();
-        w.bytes(&self.block_hash).u64(self.sats);
+        w.u8(DELIVERY_VERSION)
+            .bytes(&self.block_hash)
+            .u64(self.sats);
         w.blob_u8(&self.vtxo_id)?;
         w.u32(self.expiry_height);
         Ok(w.finish())
     }
+
     pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
         let mut r = Reader::new(bytes);
+        expect_version(&mut r)?;
         let out = Self {
             block_hash: r.array()?,
             sats: r.u64()?,
@@ -603,7 +777,115 @@ impl ArkPayoutNotice {
             expiry_height: r.u32()?,
         };
         r.finish()?;
+        if out.vtxo_id.len() > 64 {
+            return Err(Error::Length);
+        }
         Ok(out)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DeliveryMessage {
+    SetArkIdentity(SetArkIdentity),
+    SetArkIdentitySuccess(SetArkIdentitySuccess),
+    SetArkIdentityError(SetArkIdentityError),
+    RegisterEpochMailboxes(RegisterEpochMailboxes),
+    RegisterEpochMailboxesSuccess(RegisterEpochMailboxesSuccess),
+    RegisterEpochMailboxesError(RegisterEpochMailboxesError),
+    ArkPayoutNotice(ArkPayoutNotice),
+}
+
+impl DeliveryMessage {
+    pub fn message_type(&self) -> u8 {
+        match self {
+            Self::SetArkIdentity(_) => MSG_SET_ARK_IDENTITY,
+            Self::SetArkIdentitySuccess(_) => MSG_SET_ARK_IDENTITY_SUCCESS,
+            Self::SetArkIdentityError(_) => MSG_SET_ARK_IDENTITY_ERROR,
+            Self::RegisterEpochMailboxes(_) => MSG_REGISTER_EPOCH_MAILBOXES,
+            Self::RegisterEpochMailboxesSuccess(_) => MSG_REGISTER_EPOCH_MAILBOXES_SUCCESS,
+            Self::RegisterEpochMailboxesError(_) => MSG_REGISTER_EPOCH_MAILBOXES_ERROR,
+            Self::ArkPayoutNotice(_) => MSG_ARK_PAYOUT_NOTICE,
+        }
+    }
+
+    pub fn encode(&self) -> Result<Vec<u8>, Error> {
+        match self {
+            Self::SetArkIdentity(v) => v.encode(),
+            Self::SetArkIdentitySuccess(v) | Self::RegisterEpochMailboxesSuccess(v) => v.encode(),
+            Self::SetArkIdentityError(v) | Self::RegisterEpochMailboxesError(v) => v.encode(),
+            Self::RegisterEpochMailboxes(v) => v.encode(),
+            Self::ArkPayoutNotice(v) => v.encode(),
+        }
+    }
+
+    pub fn decode(msg_type: u8, bytes: &[u8]) -> Result<Self, Error> {
+        match msg_type {
+            MSG_SET_ARK_IDENTITY => SetArkIdentity::decode(bytes).map(Self::SetArkIdentity),
+            MSG_SET_ARK_IDENTITY_SUCCESS => {
+                SetArkIdentitySuccess::decode(bytes).map(Self::SetArkIdentitySuccess)
+            }
+            MSG_SET_ARK_IDENTITY_ERROR => {
+                SetArkIdentityError::decode(bytes).map(Self::SetArkIdentityError)
+            }
+            MSG_REGISTER_EPOCH_MAILBOXES => {
+                RegisterEpochMailboxes::decode(bytes).map(Self::RegisterEpochMailboxes)
+            }
+            MSG_REGISTER_EPOCH_MAILBOXES_SUCCESS => {
+                SetArkIdentitySuccess::decode(bytes).map(Self::RegisterEpochMailboxesSuccess)
+            }
+            MSG_REGISTER_EPOCH_MAILBOXES_ERROR => {
+                SetArkIdentityError::decode(bytes).map(Self::RegisterEpochMailboxesError)
+            }
+            MSG_ARK_PAYOUT_NOTICE => ArkPayoutNotice::decode(bytes).map(Self::ArkPayoutNotice),
+            _ => Err(Error::InvalidTnf),
+        }
+    }
+}
+
+fn expect_version(r: &mut Reader<'_>) -> Result<(), Error> {
+    if r.u8()? == DELIVERY_VERSION {
+        Ok(())
+    } else {
+        Err(Error::Version)
+    }
+}
+
+/// Best-effort correlation for a response to a malformed request. A zero id
+/// means no trustworthy correlation could be recovered.
+pub fn correlated_request_id(msg_type: u8, bytes: &[u8]) -> u32 {
+    fn request(msg_type: u8, bytes: &[u8]) -> Result<u32, Error> {
+        let mut r = Reader::new(bytes);
+        expect_version(&mut r)?;
+        match msg_type {
+            MSG_SET_ARK_IDENTITY => {
+                r.take(4 + 33 + 1)?;
+                r.blob_u8()?;
+                r.blob_u8()?;
+                r.take(1 + 64)?;
+                r.u32()
+            }
+            MSG_REGISTER_EPOCH_MAILBOXES => {
+                let n = r.u16()? as usize;
+                r.take(n.checked_mul(37).ok_or(Error::Length)? + 64)?;
+                r.u32()
+            }
+            MSG_SET_ARK_IDENTITY_SUCCESS
+            | MSG_SET_ARK_IDENTITY_ERROR
+            | MSG_REGISTER_EPOCH_MAILBOXES_SUCCESS
+            | MSG_REGISTER_EPOCH_MAILBOXES_ERROR => r.u32(),
+            _ => Ok(0),
+        }
+    }
+    request(msg_type, bytes).unwrap_or(0)
+}
+
+/// Map an undecodable client frame to the exact terminal v1 error code.
+pub fn correspondent_error_code(msg_type: u8, bytes: &[u8]) -> &'static str {
+    match DeliveryMessage::decode(msg_type, bytes) {
+        Ok(_) => "invalid-message",
+        Err(Error::UnsupportedMailboxMode) => "unsupported-mailbox-mode",
+        Err(Error::RequestIdExhausted) => "request-id-exhausted",
+        Err(_) => "invalid-message",
     }
 }
 
@@ -621,6 +903,9 @@ pub struct ArkSendOrder {
 }
 
 impl ArkSendOrder {
+    /// WIRE §3.4: fixed fields plus a U8-length UTF-8 address (no envelope).
+    pub const MAX_ENCODED_LEN: usize = 16 + 1 + 255 + 8 + 4 + 64;
+    pub const MIN_ENCODED_LEN: usize = 16 + 1 + 8 + 4 + 64;
     pub fn encode(&self) -> Result<Vec<u8>, Error> {
         let mut w = Writer::default();
         w.bytes(&self.order_id);
@@ -724,5 +1009,6 @@ fn tagged(tag: &str, payload: &[u8]) -> [u8; 32] {
     h.finalize().into()
 }
 
+pub mod authorization;
 #[cfg(test)]
 mod tests;

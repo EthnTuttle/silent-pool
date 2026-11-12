@@ -1,0 +1,54 @@
+{
+ "packet": "rbitcoin-bark-v31 (AP-1b node compat profile candidate, r1)",
+ "date": "2026-11-08",
+ "revision": "r1 (parent-corrected: env knob removed, CLI/conf only, owner docs + changelog added, external-mode probe runs)",
+ "candidate_binary": {
+  "path": "/tmp/opencode/AP1b-bark-profile/target/dev/debug/rbitcoin-node",
+  "sha256": "b75dad84bdd6663673a29c07352d10c4f78d2dcd14e885f62ad3209d214443e4",
+  "bound_by": [
+   "testing/rbitcoin-bark-v31/probe-default/external-node-binding.json",
+   "testing/rbitcoin-bark-v31/probe-profile-on/external-node-binding.json"
+  ],
+  "source_name_recorded": "AP1b-bark-profile-r1",
+  "note": "r0 binary cc81e310... (env-knob candidate) is superseded; its probe outputs are archived under r0/"
+ },
+ "build": {
+  "toolchain": "nix-shell pinned rustc 1.95.0 (59807616e 2026-04-14, flake.lock)",
+  "command": "nix-shell --run 'CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 cargo build -p rbitcoin-node'",
+  "target_dir": "/tmp/opencode/AP1b-bark-profile/target/dev (same AP1b-scoped dir as r0; incremental)",
+  "exit": 0,
+  "log_tail": "test-receipts/green-build.log"
+ },
+ "disk_budget": {
+  "free_before_r1_build": "23G",
+  "free_after_r1_build": "23G",
+  "exhausted": false,
+  "note": "jobs capped at 2 throughout; targeted packages only (rbitcoin-rpc, rbitcoin-node); no whole-workspace build; disk never approached exhaustion (r0 started at 34G free)"
+ },
+ "approved_l2_binary_untouched": {
+  "path": "/tmp/opencode/rbitcoin-lab-retarget-profile/target/debug/rbitcoin-node",
+  "sha256": "eb257af7c10cdf0ded584adfadf2ae8124466304b13d26c17f855e76f9320f7c",
+  "verified_after_all_r1_work": true
+ },
+ "artifacts": {
+  "patch": {
+   "file": "testing/rbitcoin-bark-v31/node-candidate.patch",
+   "sha256": "97f84755b8ca470a3cc64145649eafae732913c2e2a02a116abfbe855fbb2a95",
+   "lines": 939,
+   "applies_cleanly_to_l2_dry_run": true,
+   "covers": "14 diverged files (11 code/test + COMPAT.md + docs/rpc.md + new changelog.d/rpc-compat-profile-bark-v31.md)"
+  },
+  "candidate_manifest": {
+   "file": "testing/rbitcoin-bark-v31/candidate-manifest.json",
+   "aggregate_sha256": "f8a5111119d9e0df79cc8987f23d4b380c6ecad2df094b4c8196b2e2b04ba6d3",
+   "file_records": 25,
+   "note": "same recipe as the L2 snapshot manifest: base e8cf9c9d + sorted {path, sha256} records over the 18 snapshot files plus every diverged/new candidate file"
+  },
+  "devcheck": {
+   "receipt": "testing/rbitcoin-bark-v31/devcheck-receipt.json",
+   "exit_code": 0,
+   "vectors": 12,
+   "note": "golden-vector gate run before both r1 probe runs (same pattern as the probe's run_two_nodes.sh); bound separately in each external-node-binding.json because the external probe mode has no --devcheck-receipt option"
+  }
+ }
+}

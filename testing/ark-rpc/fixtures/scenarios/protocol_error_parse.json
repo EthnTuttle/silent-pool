@@ -1,0 +1,18 @@
+{
+  "name": "protocol_error_parse",
+  "description": "server answers JSON-RPC -32700 (parse error) for every request: a protocol error says nothing about method support; no method is reported missing and the verdict is unproven",
+  "overrides": [
+    {"op": "protocol_error", "code": -32700}
+  ],
+  "expect": {
+    "verdict_status": "unproven",
+    "reasons": ["surface-unproven", "funded-unproven"],
+    "funded_state": "unproven",
+    "checks": {
+      "getnetworkinfo.version-shape": {"availability": "unknown", "behavior": "unknown"},
+      "getmempoolentry.recognized": {"availability": "unknown", "behavior": "unknown"},
+      "testmempoolaccept.recognized": {"availability": "unknown", "behavior": "not_run"},
+      "sendrawtransaction.recognized": {"availability": "unknown", "behavior": "not_run"}
+    }
+  }
+}
