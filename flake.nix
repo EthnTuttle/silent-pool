@@ -184,6 +184,29 @@
               # a writable HOME for its crash-database/config dirs; point it
               # at the derivation's private writable build top.
               export HOME="$NIX_BUILD_TOP"
+              # The gate's verifier steps run cargo inside
+              # testing/lab-ark-funded/verifier; its default target/ dir
+              # would pollute the verifier source tree, which the
+              # qa-consumer-tests portability lock asserts contains exactly
+              # its 9 policy files. The local capture never exercised
+              # verifier-clippy and qa-consumer-tests in the same tree, so
+              # the derivation exposed it. A shared CARGO_TARGET_DIR under
+              # the build source root is byte-identical for every cwd=.
+              # step (their default target dir) and only redirects the
+              # verifier steps' artifacts out of the locked tree.
+              export CARGO_TARGET_DIR="$PWD/target"
+              # test_probe_package copies AP5_PROBE_TEST_PACKAGE with
+              # mode-preserving shutil.copytree and then rewrites one
+              # fixture to prove the runtime manifest does not hide the
+              # change. The runCommand copy's chmod -R u+w does not survive
+              # the store's mode canonicalization (files are 444), so the
+              # rewrite failed with EACCES in the sandbox. Provide a
+              # byte-identical writable copy in the private build dir,
+              # exactly as the intake's packages.nix comment intends.
+              mkdir -p "$NIX_BUILD_TOP/ap5-probe-test-package"
+              cp -a "$AP5_PROBE_TEST_PACKAGE/." "$NIX_BUILD_TOP/ap5-probe-test-package/"
+              chmod -R u+w "$NIX_BUILD_TOP/ap5-probe-test-package"
+              export AP5_PROBE_TEST_PACKAGE="$NIX_BUILD_TOP/ap5-probe-test-package"
             '';
             # Reproduce the reviewed installCheckPhase command exactly, plus
             # a failure-evidence capture: a failed derivation's $out is
