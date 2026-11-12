@@ -835,7 +835,7 @@ with open(marker, "w") as f:
         // half, the peer observes EOF, records it and exits orderly. The
         // EOF-to-shutdown semantics remain intact - never weakened.
         Arc::try_unwrap(control)
-            .map(|control| drop(control))
+            .map(drop)
             .ok()
             .expect("sole control handle");
         let mut waited = 0;
@@ -851,4 +851,3 @@ with open(marker, "w") as f:
         assert!(status.success(), "peer exits orderly after EOF: {status}");
     }
 }
-

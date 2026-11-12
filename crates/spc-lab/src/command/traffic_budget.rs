@@ -24,9 +24,7 @@ fn fresh_monotonic_ms() -> io::Result<u64> {
     {
         match *TEST_MONOTONIC.lock().unwrap() {
             TestClock::Fixed(v) => return Ok(v),
-            TestClock::Fail => {
-                return Err(invalid("monotonic clock unreadable (injected)"))
-            }
+            TestClock::Fail => return Err(invalid("monotonic clock unreadable (injected)")),
             TestClock::Real => {}
         }
     }
@@ -43,8 +41,7 @@ fn fresh_boot_id() -> io::Result<String> {
             return Ok(boot.clone());
         }
     }
-    spc_lab_txd::bootstrap::boot_id()
-        .map_err(|e| invalid(&format!("boot id unreadable: {e}")))
+    spc_lab_txd::bootstrap::boot_id().map_err(|e| invalid(&format!("boot id unreadable: {e}")))
 }
 
 #[cfg(test)]
@@ -56,12 +53,10 @@ enum TestClock {
 }
 
 #[cfg(test)]
-static TEST_MONOTONIC: std::sync::Mutex<TestClock> =
-    std::sync::Mutex::new(TestClock::Real);
+static TEST_MONOTONIC: std::sync::Mutex<TestClock> = std::sync::Mutex::new(TestClock::Real);
 
 #[cfg(test)]
-static TEST_BOOT: std::sync::Mutex<Option<String>> =
-    std::sync::Mutex::new(None);
+static TEST_BOOT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -566,14 +561,16 @@ mod tests {
         // Earlier positive: inside both bounds, exactly one HashStart.
         *TEST_BOOT.lock().unwrap() = Some("boot".into());
         *TEST_MONOTONIC.lock().unwrap() = TestClock::Fixed(1_000);
-        log.start_hash_budget_checked(operation.clone(), 9_000).unwrap();
+        log.start_hash_budget_checked(operation.clone(), 9_000)
+            .unwrap();
         assert_eq!(record_counts(&path), (1, 1));
 
         // Idempotent replay: same operation with the clock now past
         // every deadline - history replays without clock validation and
         // without a second HashStart.
         *TEST_MONOTONIC.lock().unwrap() = TestClock::Fixed(50_000);
-        log.start_hash_budget_checked(operation.clone(), 9_000).unwrap();
+        log.start_hash_budget_checked(operation.clone(), 9_000)
+            .unwrap();
         assert_eq!(record_counts(&path), (1, 1));
 
         // A different operation bound to the same id still conflicts.
@@ -610,10 +607,9 @@ mod tests {
 
         // Clock failure refuses closed.
         *TEST_MONOTONIC.lock().unwrap() = TestClock::Fail;
-        assert!(
-            log2.start_hash_budget_checked(budget_op(&id2, 10_000), 9_000)
-                .is_err()
-        );
+        assert!(log2
+            .start_hash_budget_checked(budget_op(&id2, 10_000), 9_000)
+            .is_err());
 
         // Boot mismatch refuses closed.
         *TEST_MONOTONIC.lock().unwrap() = TestClock::Fixed(1_000);

@@ -20,11 +20,11 @@
 //! refresh and offboard, and the `0x5350` wire transport.
 
 mod aggregate_api;
+#[cfg(all(test, feature = "postgres-integration"))]
+mod aggregate_join_proof_tests;
 mod aggregate_receive;
 #[cfg(test)]
 mod aggregate_tests;
-#[cfg(all(test, feature = "postgres-integration"))]
-mod aggregate_join_proof_tests;
 mod aggregate_watch;
 #[cfg(test)]
 mod audit_regressions;

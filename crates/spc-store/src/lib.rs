@@ -16,5 +16,9 @@ pub mod wire;
 
 pub use codec::{CodecError, Reader, Writer};
 pub use postgres::Store;
+// The store hands out its sqlx pool (`Store::pool`); downstream callers need
+// the sqlx namespace in scope to call trait methods (e.g. `Executor::execute`)
+// on it. Re-exported so consumers do not need their own sqlx dependency edge.
+pub use sqlx;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

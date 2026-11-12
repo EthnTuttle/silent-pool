@@ -5,9 +5,6 @@
 
 #![deny(unsafe_code)]
 
-pub mod ladder;
-pub use ladder::{band_amount, decompose, LADDER_BASE_RUNGS_SATS};
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
@@ -33,8 +30,6 @@ pub enum Error {
     Threshold,
     #[error("arithmetic overflow")]
     Overflow,
-    #[error("payout needs {required} outputs, maximum {max}")]
-    PayoutSlots { required: u64, max: usize },
     #[error("derivation failed for {0:?}")]
     Derivation(SpId),
     #[error("payout slots exceeded: {required} required, cap {max}")]

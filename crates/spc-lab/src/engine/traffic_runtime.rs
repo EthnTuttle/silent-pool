@@ -2,8 +2,8 @@
 //! no bootstrap completion or funding is synthesized by this controller.
 use super::*;
 use crate::evidence::{
-    ListenerObservation, NodeListenerEvidence, NodeNetworkReadinessNode, NodeNetworkReadinessReport,
-    NodeProcessBinding,
+    ListenerObservation, NodeListenerEvidence, NodeNetworkReadinessNode,
+    NodeNetworkReadinessReport, NodeProcessBinding,
 };
 use crate::ids::{ActorId, CommandId};
 use crate::traffic::control::{RpcGate, TxDriverControl};
@@ -1319,11 +1319,7 @@ impl RunEngine {
                 // Err return keeps `began` false, so no HashStart and no
                 // new operation id or timeout is created.
                 let now = spc_lab_txd::bootstrap::monotonic_ms().map_err(|e| e.to_string())?;
-                success_within_deadline(
-                    pass.completed_at_mono_ms,
-                    now,
-                    clock.deadline_mono_ms,
-                )?;
+                success_within_deadline(pass.completed_at_mono_ms, now, clock.deadline_mono_ms)?;
                 self.persist_node_network_readiness(
                     command_id, "ready", None, &pass, &plan, &clock,
                 );
@@ -1620,7 +1616,10 @@ impl RunEngine {
         // completed.
         let peer_rows = |request_id: &mut u64,
                          stamp: &mut Option<u64>|
-         -> Result<BTreeMap<String, Vec<readiness::PeerHandshakeRow>>, GateFailure> {
+         -> Result<
+            BTreeMap<String, Vec<readiness::PeerHandshakeRow>>,
+            GateFailure,
+        > {
             let mut rows_by_node = BTreeMap::new();
             for spec in &self.scenario.nodes {
                 let node = &spec.id;
@@ -1817,9 +1816,10 @@ impl RunEngine {
                         return pass;
                     }
                 }
-                if let (Some(before_inode), Some(after_inode)) =
-                    (listener_inode(sample_before, endpoint), listener_inode(sample_after, endpoint))
-                {
+                if let (Some(before_inode), Some(after_inode)) = (
+                    listener_inode(sample_before, endpoint),
+                    listener_inode(sample_after, endpoint),
+                ) {
                     if before_inode != after_inode {
                         pass.failure = Some(retry(format!(
                             "node {node} {label} listener {endpoint} was rebound during the observation"
@@ -1904,9 +1904,7 @@ impl RunEngine {
                     netns_identity: sample_before
                         .and_then(|sample| sample.netns_identity)
                         .map(|(dev, ino)| [dev, ino]),
-                    host_netns_identity: before
-                        .host_netns_identity
-                        .map(|(dev, ino)| [dev, ino]),
+                    host_netns_identity: before.host_netns_identity.map(|(dev, ino)| [dev, ino]),
                     boot_id: before.boot_id.clone(),
                 },
             });
@@ -2664,11 +2662,7 @@ struct AcquisitionClock {
 /// of being substituted for the current time. The `Err` return keeps
 /// the operation `began == false`, so no HashStart, no new operation
 /// id and no timeout reset happen.
-fn success_within_deadline(
-    completed: Option<u64>,
-    now: u64,
-    deadline: u64,
-) -> Result<(), String> {
+fn success_within_deadline(completed: Option<u64>, now: u64, deadline: u64) -> Result<(), String> {
     if let Some(stamp) = completed {
         if stamp > now {
             return Err(format!(
@@ -2892,12 +2886,12 @@ mod readiness_gate_tests {
         assert!(err.contains("judged at 10001 ms"), "{err}");
     }
 
-    /// The pre-HashStart transition semantics are enforced by the
-    /// command log's checked budget start (see
-    /// traffic_budget::CommandLog::start_hash_budget_checked and its
-    /// locked-clock tests): a slow ready-record persist or command-log
-    /// lock wait that carries the fresh clock to either the original
-    /// operation deadline or the carried acquisition expiry refuses
+    // The pre-HashStart transition semantics are enforced by the
+    // command log's checked budget start (see
+    // traffic_budget::CommandLog::start_hash_budget_checked and its
+    // locked-clock tests): a slow ready-record persist or command-log
+    // lock wait that carries the fresh clock to either the original
+    // operation deadline or the carried acquisition expiry refuses
     // inside the guard, before any HashStart write or hash debit.
 
     /// The acquisition bounds are source-declared constants, not

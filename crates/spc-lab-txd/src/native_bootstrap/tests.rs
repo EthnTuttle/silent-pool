@@ -978,9 +978,9 @@ fn ap5_config() -> ActorConfig {
 #[test]
 fn real_ap5_profile_strict_readiness_gate_precedes_sole_hash_start() {
     use crate::net_readiness::{
-        capture_bracket, observe_peer_graph, LinkProofFailure, NodeProcessIdentity,
-        PeerHandshakeRow, PeerDualSample, PeerSample, PlannedPeers, ReadinessAcquisitionBounds,
-        EVIDENCE_FORM, EXPECTED_PROTOCOL_VERSION, EXPECTED_SUBVER, READINESS_CONTRACT_VERSION,
+        capture_bracket, observe_peer_graph, LinkProofFailure, NodeProcessIdentity, PeerDualSample,
+        PeerHandshakeRow, PeerSample, PlannedPeers, ReadinessAcquisitionBounds, EVIDENCE_FORM,
+        EXPECTED_PROTOCOL_VERSION, EXPECTED_SUBVER, READINESS_CONTRACT_VERSION,
         READINESS_MAX_FD_ENTRIES, READINESS_MAX_PEER_ROWS, READINESS_MAX_RPC_CALL_MS,
         READINESS_MAX_TCP_ROWS,
     };

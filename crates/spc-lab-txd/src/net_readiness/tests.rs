@@ -401,7 +401,10 @@ fn ap5_proof_schema_round_trips_with_stable_field_names() {
             .len(),
         3
     );
-    assert_eq!(dialer_raw["netns_identity"], json!([HOST_NETNS.0, HOST_NETNS.1]));
+    assert_eq!(
+        dialer_raw["netns_identity"],
+        json!([HOST_NETNS.0, HOST_NETNS.1])
+    );
     assert_eq!(dialer_raw["exe"], json!(NODE_EXE));
 }
 
@@ -458,7 +461,10 @@ fn emit_canonical_fixture_bytes() {
         &planned.listener_ports(),
     )
     .expect("the AP5 B -> A join table proves the dial");
-    println!("{}", serde_json::to_string(&proof).expect("proof serializes"));
+    println!(
+        "{}",
+        serde_json::to_string(&proof).expect("proof serializes")
+    );
 }
 
 /// The version 2 fixture (the superseded failed-to-certify contract) no
@@ -1367,7 +1373,10 @@ fn peer_identity_changed_between_samples_retries() {
     changed.b.rows[0].addr = "127.0.0.1:33699".to_string();
     let duals = BTreeMap::from([("node-a".to_string(), changed)]);
     let pass = observe_peer_graph(&planned, &duals, &ap5_identities(), &before, &after);
-    assert_retry(&pass.failure, "peer identities changed between the resampled");
+    assert_retry(
+        &pass.failure,
+        "peer identities changed between the resampled",
+    );
 }
 
 /// A peer present in sample B but absent from sample A retries.
@@ -1466,8 +1475,12 @@ fn node_netns_differs_from_host_controller_refuses() {
     let mut namespaced_after = after.clone();
     let mut sample = process_sample(PID_B, START_B, fds_b(), &rows_table);
     sample.netns_identity = Some((9, 4_026_532_001));
-    namespaced_before.processes.insert("node-b".to_string(), sample.clone());
-    namespaced_after.processes.insert("node-b".to_string(), sample);
+    namespaced_before
+        .processes
+        .insert("node-b".to_string(), sample.clone());
+    namespaced_after
+        .processes
+        .insert("node-b".to_string(), sample);
     let dual = dual_of(vec![completed_row(3, B_EPHEMERAL, A_LISTEN)]);
     let result = decide_directed_dial(
         &dial_of(&planned, "node-b", "node-a"),
@@ -1617,8 +1630,7 @@ fn acquisition_bounds_serialize_with_all_source_declared_fields() {
     assert!(text.contains("\"max_peer_rows\":256"));
     assert!(text.contains("\"max_tcp_rows\":8192"));
     assert!(text.contains("\"max_fd_entries\":8192"));
-    let back: ReadinessAcquisitionBounds =
-        serde_json::from_str(&text).expect("bounds deserialize");
+    let back: ReadinessAcquisitionBounds = serde_json::from_str(&text).expect("bounds deserialize");
     assert_eq!(back, bounds);
     // The whole-acquisition record round trips with its clock stamps.
     let record = ReadinessAcquisitionRecord {
@@ -1667,8 +1679,7 @@ fn live_bracket_capture_observes_identities_and_stamps_after_reads() {
         NodeProcessIdentity {
             node: "self".to_string(),
             pid: std::process::id(),
-            start_time_ticks: process_start_ticks(std::process::id())
-                .expect("own start ticks"),
+            start_time_ticks: process_start_ticks(std::process::id()).expect("own start ticks"),
             network_namespace: None,
         },
     )]);

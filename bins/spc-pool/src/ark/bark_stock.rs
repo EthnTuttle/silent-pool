@@ -254,7 +254,6 @@ pub async fn open_bark_wallet(opts: BarkWalletOptions) -> Result<BarkWalletClien
 /// each hold one clone of the same client).
 #[derive(Clone)]
 pub struct BarkWalletClient {
-    operation_lock: Arc<tokio::sync::Mutex<()>>,
     wallet: bark::Wallet,
     /// The wallet's persister: the thin send stores its change key index
     /// the same way stock bark's action does.

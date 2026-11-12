@@ -17,7 +17,6 @@ use thiserror::Error;
 use spc_crypto::{input_hash, tier_tweaks, SharedSecret};
 
 pub mod audit;
-pub mod audit;
 // Frozen public DTOs keep Approved's receipt inline. Each exchange is bounded;
 // boxing it would change the already-shared Rust construction API.
 #[allow(clippy::large_enum_variant)]

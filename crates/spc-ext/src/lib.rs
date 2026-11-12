@@ -8,8 +8,6 @@
 
 #![deny(unsafe_code)]
 
-pub mod authorization;
-
 use secp256k1::{schnorr, Keypair, Message, PublicKey, Secp256k1, XOnlyPublicKey};
 use thiserror::Error;
 

@@ -33,12 +33,14 @@ async fn store() -> Store {
         "dedicated ladder DB required"
     );
     let admin = Store::connect(&url).await.unwrap();
-    let name = format!(
-        "ladder_completion_agent_join_{}",
-        rand::random::<u64>().to_string()
-    );
-    sqlx::query(&format!("CREATE DATABASE {name}"))
-        .execute(admin.pool())
+    let name = format!("ladder_completion_agent_join_{}", rand::random::<u64>());
+    // CREATE DATABASE cannot run inside a transaction, so it goes straight
+    // through the admin pool (PgPool::execute via the re-exported sqlx
+    // Executor trait; no new dependency edge for this crate).
+    use spc_store::sqlx::Executor;
+    admin
+        .pool()
+        .execute(format!("CREATE DATABASE {name}").as_str())
         .await
         .unwrap();
     let store = Store::connect(&url.replace("/ladder_completion?", &format!("/{name}?")))
@@ -93,9 +95,9 @@ async fn member(
             entries: serde_json::json!([entry]),
             high_water: serde_json::json!({"0":"0"}),
             window_target: Some("1".into()),
-            work_unit_version: spc_accounting::WorkUnitVersion::V1,
+            work_unit_version: WorkUnitVersion::V1,
             work_unit_fingerprint: None,
-            window_rule: spc_accounting::WindowRule::ShareWorkLegacy,
+            window_rule: WindowRule::ShareWorkLegacy,
         })
         .await
         .unwrap();

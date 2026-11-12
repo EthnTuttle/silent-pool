@@ -897,8 +897,7 @@ pub fn capture_bracket(
     let mut processes = BTreeMap::new();
     for identity in identities.values() {
         let start_ticks = process_start_ticks(identity.pid);
-        let socket_inodes =
-            process_socket_inodes_bounded(identity.pid, bounds.max_fd_entries)?;
+        let socket_inodes = process_socket_inodes_bounded(identity.pid, bounds.max_fd_entries)?;
         let tcp_rows = pid_tcp_rows_bounded(identity.pid, bounds.max_tcp_rows)?;
         let netns_identity = netns_identity_of(identity.pid);
         let exe = process_exe(identity.pid);
@@ -1363,13 +1362,11 @@ pub fn decide_directed_dial(
         .rows
         .iter()
         .find(|candidate| candidate.id == row.id)
-        .ok_or_else(|| {
-            LinkProofFailure::Retry {
-                detail: format!(
-                    "peer id {} is absent from the acceptor's sample A (connection replaced)",
-                    row.id
-                ),
-            }
+        .ok_or_else(|| LinkProofFailure::Retry {
+            detail: format!(
+                "peer id {} is absent from the acceptor's sample A (connection replaced)",
+                row.id
+            ),
         })?;
     match row_a.completed_inbound_markers() {
         Ok(()) => {}
@@ -1472,8 +1469,7 @@ pub fn decide_directed_dial(
         }
         _ => {
             return refuse(
-                "host controller network namespace identity changed between bracket samples"
-                    .into(),
+                "host controller network namespace identity changed between bracket samples".into(),
             );
         }
     };
@@ -1481,8 +1477,7 @@ pub fn decide_directed_dial(
     // readable, stable across both brackets, and equal to the host
     // controller's (this host-network proof form does not apply to a
     // process in another namespace).
-    let refuse_failure =
-        |detail: String| LinkProofFailure::Refuse { detail };
+    let refuse_failure = |detail: String| LinkProofFailure::Refuse { detail };
     let netns_of = |node: &str| -> Result<[u64; 2], LinkProofFailure> {
         match (
             process_sample(before, node)?.netns_identity,

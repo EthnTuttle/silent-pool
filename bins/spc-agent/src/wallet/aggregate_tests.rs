@@ -512,12 +512,27 @@ fn aggregate_grant_revision_must_strictly_precede_sent_status_revision() {
     // refuse, as does the unsigned-meaning revision 0. Revision 2 (strictly
     // preceding) is accepted by the envelope join under the true signer,
     // so the ordering check is exactly what refused 3 and 4.
-    assert!(verify_order_envelope(&s.orders[0], &order, &build(3), &signer.x_only_public_key().0)
-        .is_err());
-    assert!(verify_order_envelope(&s.orders[0], &order, &build(4), &signer.x_only_public_key().0)
-        .is_err());
-    assert!(verify_order_envelope(&s.orders[0], &order, &build(0), &signer.x_only_public_key().0)
-        .is_err());
+    assert!(verify_order_envelope(
+        &s.orders[0],
+        &order,
+        &build(3),
+        &signer.x_only_public_key().0
+    )
+    .is_err());
+    assert!(verify_order_envelope(
+        &s.orders[0],
+        &order,
+        &build(4),
+        &signer.x_only_public_key().0
+    )
+    .is_err());
+    assert!(verify_order_envelope(
+        &s.orders[0],
+        &order,
+        &build(0),
+        &signer.x_only_public_key().0
+    )
+    .is_err());
     verify_order_envelope(
         &s.orders[0],
         &order,
@@ -528,15 +543,13 @@ fn aggregate_grant_revision_must_strictly_precede_sent_status_revision() {
     // A non-sent order state never joins even with a strictly preceding
     // grant revision.
     let pending = status("pending");
-    assert!(
-        verify_order_envelope(
-            &pending.orders[0],
-            &order,
-            &accepted,
-            &signer.x_only_public_key().0
-        )
-        .is_err()
-    );
+    assert!(verify_order_envelope(
+        &pending.orders[0],
+        &order,
+        &build(2),
+        &signer.x_only_public_key().0
+    )
+    .is_err());
 }
 
 #[test]
