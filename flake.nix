@@ -140,7 +140,20 @@
             probe = import ./nix/lab/ark-probe.nix { inherit pkgs; };
           };
           inherit (ap5Packages) ap5-tools ap5-vtxo-verifier ap5-qa-source
-            spc-lab-ap5-qualified ap5-inputs;
+            ap5-inputs;
+          # The qualified derivation's install-check gate executes the frozen
+          # reviewed test sources (R4 pool-control wallet_control tests,
+          # cpu-miner evidence/lifecycle helpers, agent native-source-audit
+          # helpers) whose scratch root is hardcoded to /tmp/opencode. Those
+          # bytes are pinned by the R4 binding, so provision the root inside
+          # the derivation's private sandbox /tmp at integration level; no
+          # reviewed source bytes change. Done here rather than in the
+          # intake's packages.nix to keep the reviewed packet byte-exact.
+          spc-lab-ap5-qualified = ap5Packages.spc-lab-ap5-qualified.overrideAttrs (old: {
+            preInstallCheck = (old.preInstallCheck or "") + ''
+              mkdir -p /tmp/opencode
+            '';
+          });
           spc-pool-ark = mkBinary "spc-pool" "rpc,ark";
           spc-agent-ark = mkBinary "spc-agent" "ark";
           spc-pool = mkBinary "spc-pool" "rpc";
@@ -222,6 +235,14 @@
           # removed, so every derivation that compiles spc-agent ark lib
           # tests must carry the same anchors (compile-time) and a fresh
           # results directory (runtime), and preserve the receipt on install.
+          # Scratch-root note: the reviewed R4 pool-control test module and
+          # the frozen cpu-miner/agent test helpers hardcode the
+          # /tmp/opencode scratch root (workstation convention; the lab
+          # ark_infrastructure tests fall back to the platform temp dir but
+          # these do not). The reviewed source bytes are frozen by the R4
+          # binding, so this derivation provisions that root inside its own
+          # private sandbox /tmp instead of changing reviewed source. No
+          # host path is read; the sandbox /tmp is per-build.
           test-ark =
             let
               joint = import ./nix/checks/wallet-native-joint.nix {
@@ -233,6 +254,7 @@
               version = "0.1.0";
               doCheck = true;
               inherit (joint) preBuild preCheck;
+              preConfigure = "mkdir -p /tmp/opencode";
               installPhase = ''
                 runHook preInstall
                 mkdir -p "$out"
