@@ -154,6 +154,25 @@
           # parent exists; the tools build only installs bin/, so provision
           # the share/ parent here the same way.
           spc-lab-ap5-qualified = ap5Packages.spc-lab-ap5-qualified.overrideAttrs (old: {
+            # The Nix build sandbox has no fontconfig setup at all (no
+            # /etc/fonts, no system font dirs). chromium-156 renders the
+            # DevTools endpoint fine, but its Skia font manager aborts the
+            # renderer (SIGABRT,
+            # SkFontMgr_FontConfigInterface.cpp:163 "Not implemented.") on
+            # the first real text layout with zero usable fonts - observed
+            # in qualified attempt 4 as chrome crash dumps plus a silently
+            # hung browser step (now also caught loudly by the cjs itself;
+            # see the compiled_browser.cjs hardening). FONTCONFIG_FILE
+            # redirects fontconfig to this config whose only font source
+            # is the locked nixpkgs dejavu-minimal font set, validated to
+            # pass the full browser suite 15/15 as the sole font source.
+            FONTCONFIG_FILE = (pkgs.writeText "ap5-chromium-fonts.conf" ''
+              <?xml version="1.0"?>
+              <!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+              <fontconfig>
+                <dir>${pkgs.dejavu_fonts.minimal}/share/fonts</dir>
+              </fontconfig>
+            '').outPath;
             preInstallCheck = (old.preInstallCheck or "") + ''
               mkdir -p /tmp/opencode
               mkdir -p "$out/share"
