@@ -149,9 +149,14 @@
           # the derivation's private sandbox /tmp at integration level; no
           # reviewed source bytes change. Done here rather than in the
           # intake's packages.nix to keep the reviewed packet byte-exact.
+          # The harness's fresh_root does a bare mkdir on
+          # $out/share/ap5-qualification and requires a fresh directory whose
+          # parent exists; the tools build only installs bin/, so provision
+          # the share/ parent here the same way.
           spc-lab-ap5-qualified = ap5Packages.spc-lab-ap5-qualified.overrideAttrs (old: {
             preInstallCheck = (old.preInstallCheck or "") + ''
               mkdir -p /tmp/opencode
+              mkdir -p "$out/share"
             '';
           });
           spc-pool-ark = mkBinary "spc-pool" "rpc,ark";
