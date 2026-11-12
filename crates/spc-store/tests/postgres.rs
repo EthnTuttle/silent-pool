@@ -704,6 +704,7 @@ async fn ark_delivery_ids_reports_registered_miners() {
     identity(&store, plain).await;
     store
         .upsert_ark_delivery(&ArkDeliveryRow {
+            registration_commit: None,
             sp_id: registered,
             ark_id: [7; 4],
             b_ark: vec![5; 33],

@@ -594,6 +594,7 @@ impl FrontEvent {
                         network,
                     },
                     delivery: ArkDeliveryRow {
+                        registration_commit: None,
                         sp_id,
                         ark_id,
                         b_ark,
@@ -935,6 +936,7 @@ mod tests {
                     network: 3,
                 },
                 delivery: ArkDeliveryRow {
+                    registration_commit: None,
                     sp_id: [1; 32],
                     ark_id: [1, 2, 3, 4],
                     b_ark: hex::decode(

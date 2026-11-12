@@ -690,6 +690,8 @@ fn install_ark_acl(url: &str, password: &str) -> Result<()> {
         "(+xadd ~spc:ark:authorization:requests)".into(),
         "(+hget ~spc:ark:authorization:grants)".into(),
         "(+get +set ~spc:ark:pending-cursor:*)".into(),
+        "(+xadd ~spc:ark:authorization:consumption)".into(),
+        "(+hget ~spc:ark:authorization:consumed)".into(),
         "(+hget +hset +hgetall +hdel +get +set +sadd +srem +smembers +sismember +expire ~spc:ark:seen ~spc:ark:ambiguous ~spc:ark:board:*)".into()]] {
         write!(stream,"*{}\r\n",words.len())?;
         for word in words { write!(stream,"${}\r\n{}\r\n",word.len(),word)?; }

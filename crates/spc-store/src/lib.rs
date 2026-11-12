@@ -9,6 +9,7 @@ pub mod bootstrap;
 pub mod codec;
 pub mod economic;
 pub mod models;
+pub mod observations;
 pub mod postgres;
 pub mod redis;
 pub mod wire;

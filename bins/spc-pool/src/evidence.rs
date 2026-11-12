@@ -15,6 +15,19 @@ struct Trace {
 }
 static TRACE: OnceLock<Mutex<Trace>> = OnceLock::new();
 static SOURCE_KEY: OnceLock<bitcoin::secp256k1::Keypair> = OnceLock::new();
+pub(crate) fn session_id() -> [u8; 16] {
+    TRACE
+        .get_or_init(|| {
+            Mutex::new(Trace {
+                session: rand::random(),
+                seq: 0,
+                previous: [0; 32],
+            })
+        })
+        .lock()
+        .expect("source trace lock")
+        .session
+}
 /// Front-only startup hook; never loaded into the Ark process.
 pub fn configure_source_signing_key(path: &std::path::Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;

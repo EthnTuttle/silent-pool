@@ -67,6 +67,8 @@ pub struct ArkEpochMailboxJson {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ArkDeliveryJson {
+    #[serde(default)]
+    pub registration_commit: Option<RegistrationCommit>,
     pub sp_id: String,
     pub ark_id: String,
     pub b_ark: String,
@@ -153,6 +155,7 @@ impl BootstrapResponse {
                 .ark_delivery
                 .into_iter()
                 .map(|d| ArkDeliveryJson {
+                    registration_commit: d.registration_commit.map(|commit| *commit),
                     sp_id: hex32(&d.sp_id),
                     ark_id: hex(&d.ark_id),
                     b_ark: hex(&d.b_ark),

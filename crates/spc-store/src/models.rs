@@ -57,6 +57,8 @@ impl MailboxMode {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArkDeliveryRow {
+    /// Observation metadata only; never part of 0x5350 or Ark-server RPCs.
+    pub registration_commit: Option<Box<RegistrationCommit>>,
     pub sp_id: [u8; 32],
     pub ark_id: [u8; 4],
     pub b_ark: Vec<u8>,
@@ -64,6 +66,14 @@ pub struct ArkDeliveryRow {
     pub mailbox_m: Option<Vec<u8>>,
     pub mailbox_d: Option<Vec<u8>>,
     pub epoch_fallback: EpochFallback,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegistrationCommit {
+    pub request_id: u32,
+    pub registration_rev: u64,
+    pub signed_fields_digest: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

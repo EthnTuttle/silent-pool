@@ -39,6 +39,7 @@ fn identity(seed: u8) -> SpIdentityRow {
 
 fn delivery(sp_id: [u8; 32], ark_id: u8) -> ArkDeliveryRow {
     ArkDeliveryRow {
+        registration_commit: None,
         sp_id,
         ark_id: [ark_id; 4],
         b_ark: vec![4; 33],

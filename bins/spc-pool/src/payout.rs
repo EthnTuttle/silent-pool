@@ -1220,6 +1220,7 @@ enum Disposition {
     Retry,
 }
 struct AbortTask(tokio::task::JoinHandle<()>);
+type RecomputedLedger = (Vec<LedgerRow>, Vec<([u8; 32], i64)>, Option<i64>);
 #[cfg(all(test, feature = "postgres-integration"))]
 #[path = "aggregate_boundary_tests.rs"]
 mod aggregate_boundary_tests;
@@ -1236,14 +1237,72 @@ impl PayoutService {
         }
         let mut authorizer = self.clone();
         authorizer.streams = self.streams.independent().await?;
+        let mut consumer = self.clone();
+        consumer.streams = self.streams.independent().await?;
+        consumer
+            .streams
+            .ensure_group_from(spc_ext::authorization::CONSUMPTION_STREAM, GROUP, "0")
+            .await?;
         Ok(Some(AbortTask(tokio::spawn(async move {
-            loop {
-                if let Err(error) = authorizer.process_authorizations().await {
-                    tracing::warn!(error=%error,"authorization dispatcher unavailable");
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+            let requests = async {
+                loop {
+                    if let Err(error) = authorizer.process_authorizations().await {
+                        tracing::warn!(error=%error,"authorization dispatcher unavailable");
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                }
+            };
+            let consumptions = async {
+                loop {
+                    if let Err(error) = consumer.process_consumptions().await {
+                        tracing::warn!(error=%error,"consumption observation dispatcher unavailable");
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                }
+            };
+            tokio::join!(requests, consumptions);
+        }))))
+    }
+
+    async fn process_consumptions(&self) -> Result<(), PayoutError> {
+        use spc_ext::authorization::{Consumption, CONSUMED_KEY, CONSUMPTION_STREAM};
+        let mut entries = self
+            .streams
+            .read_pending(CONSUMPTION_STREAM, GROUP, "consumption-observer", 64)
+            .await?;
+        if entries.is_empty() {
+            entries = self
+                .streams
+                .read_group(CONSUMPTION_STREAM, GROUP, "consumption-observer", 16)
+                .await?;
+        }
+        for (id, bytes) in entries {
+            if let Ok(consumption) = Consumption::decode(&bytes) {
+                let ack = match self
+                    .store
+                    .observe_authorization_consumption(&consumption)
+                    .await
+                {
+                    Ok(ack) => ack,
+                    Err(spc_store::postgres::StoreError::Invalid(reason)) => {
+                        tracing::warn!(reason, "conflicting opaque consumption; no receipt");
+                        None
+                    }
+                    Err(error) => return Err(error.into()),
+                };
+                if let Some(ack) = ack {
+                    self.streams
+                        .hset(
+                            CONSUMED_KEY,
+                            &consumption.field(),
+                            &hex::encode(ack.encode()),
+                        )
+                        .await?;
                 }
             }
-        }))))
+            self.streams.ack(CONSUMPTION_STREAM, GROUP, &id).await?;
+        }
+        Ok(())
     }
     pub fn new(
         store: Store,
@@ -1348,6 +1407,10 @@ impl PayoutService {
 
     pub async fn run(&self) -> Result<(), PayoutError> {
         self.store.migrate().await?;
+        let _observation_task = AbortTask(
+            crate::payout_observation::spawn(self.store.clone(), self.streams.independent().await?)
+                .await?,
+        );
         self.streams
             .ensure_group_from(spc_ext::authorization::REQUESTS_STREAM, GROUP, "0")
             .await?;
@@ -1586,10 +1649,15 @@ impl PayoutService {
                 ));
             }
             let fingerprint = self.persist_economic_snapshot(&e).await?;
-            let Some((ledger, _)) = self.recompute(&e, fingerprint).await? else {
+            let Some((ledger, _, observation)) = self.recompute(&e, fingerprint).await? else {
                 return Ok(Disposition::Retry);
             };
-            if self.store.economic_found(&e, &ledger, false).await.is_err() {
+            if self
+                .store
+                .economic_found_observed(&e, &ledger, false, observation)
+                .await
+                .is_err()
+            {
                 return Ok(Disposition::Retry);
             }
             let view = self.store.economic_view().await?;
@@ -1699,7 +1767,7 @@ impl PayoutService {
             }
             _ => None,
         };
-        let (ledger, deltas) = booked_ledger.unwrap_or_default();
+        let (ledger, deltas, _) = booked_ledger.unwrap_or_default();
 
         let settlement = Settlement {
             block_hash: e.block_hash,
@@ -1860,7 +1928,7 @@ impl PayoutService {
                     return Ok(());
                 };
                 let fp = self.persist_economic_snapshot(&event).await?;
-                let Some((ledger, _)) = self.recompute(&event, fp).await? else {
+                let Some((ledger, _, observation)) = self.recompute(&event, fp).await? else {
                     return Err(PayoutError::Snapshot("recanonical ledger unavailable"));
                 };
                 if self.store.economic_lifecycle(&hash).await?.as_deref() == Some("loss_held") {
@@ -1885,7 +1953,9 @@ impl PayoutService {
                         .economic_restore_loss_held(&event, self.confirmation_depth, tip)
                         .await?;
                 } else {
-                    self.store.economic_found(&event, &ledger, true).await?;
+                    self.store
+                        .economic_found_observed(&event, &ledger, true, observation)
+                        .await?;
                 }
             }
             self.store
@@ -1913,14 +1983,18 @@ impl PayoutService {
         &self,
         e: &BlockEvent,
         fingerprint: [u8; 32],
-    ) -> Result<Option<(Vec<LedgerRow>, Vec<([u8; 32], i64)>)>, PayoutError> {
+    ) -> Result<Option<RecomputedLedger>, PayoutError> {
         if let Some(ledger) = self.store.economic_ledger(&e.block_hash).await? {
             let deltas = ledger
                 .iter()
                 .filter(|r| r.pending_delta != 0)
                 .map(|r| (r.sp_id, r.pending_delta))
                 .collect();
-            return Ok(Some((ledger, deltas)));
+            return Ok(Some((
+                ledger,
+                deltas,
+                self.store.reconstruction_observation(&e.block_hash).await?,
+            )));
         }
         let coinbase = match self.chain.coinbase_outputs(&e.block_hash).await {
             Ok(outputs) => outputs,
@@ -2008,7 +2082,12 @@ impl PayoutService {
                     self.store.pending_map().await?
                 };
                 let ids: Vec<[u8; 32]> = entries.iter().map(|entry| entry.sp_id).collect();
-                let delivered = self.store.ark_delivery_ids(&ids).await?;
+                let attempt = rand::random();
+                let delivery_read = self
+                    .store
+                    .observe_settlement_delivery_read(e, &ids, &attempt)
+                    .await?;
+                let delivered = delivery_read.delivered;
                 let input = ReconstructInput {
                     height: e.height,
                     high_water: &high_water,
@@ -2028,9 +2107,28 @@ impl PayoutService {
                 };
                 match reconstruct_settlement(&input) {
                     Ok(reconstructed) => {
-                        Ok(Some((reconstructed.ledger, reconstructed.pending_deltas)))
+                        let body = serde_json::json!({"schema":"spc.settlement-reconstruction/1",
+                            "binding":spc_store::observations::block_binding(e)?,"delivery_read_observation":delivery_read.observation_id,
+                            "status":"complete","ledger":reconstructed.ledger,"pending_deltas":reconstructed.pending_deltas});
+                        let observation = self
+                            .store
+                            .record_observation(
+                                "settlement_reconstruction",
+                                &e.block_hash,
+                                Some(&attempt),
+                                &body,
+                            )
+                            .await?;
+                        Ok(Some((
+                            reconstructed.ledger,
+                            reconstructed.pending_deltas,
+                            Some(observation),
+                        )))
                     }
                     Err(err) => {
+                        self.store.record_observation("settlement_reconstruction",&e.block_hash,Some(&attempt),&serde_json::json!({
+                            "schema":"spc.settlement-reconstruction/1","binding":spc_store::observations::block_binding(e)?,
+                            "delivery_read_observation":delivery_read.observation_id,"status":"unknown","error":err.to_string()})).await?;
                         tracing::error!(
                             error = %err,
                             block = %display_hash(&e.block_hash),
@@ -2053,7 +2151,9 @@ impl PayoutService {
                     block = %display_hash(&e.block_hash),
                     "no authoritative chain view: booking from the block event's entries"
                 );
-                self.legacy_ledger(e).await.map(Some)
+                self.legacy_ledger(e)
+                    .await
+                    .map(|(ledger, deltas)| Some((ledger, deltas, None)))
             }
         }
     }
@@ -2220,6 +2320,7 @@ impl PayoutService {
                 network: identity_network(self.network, 1),
             },
             delivery: ArkDeliveryRow {
+                registration_commit: None,
                 sp_id: e.sp_id,
                 ark_id: e.ark_id,
                 b_ark: e.b_ark.to_vec(),
@@ -2591,24 +2692,104 @@ impl PayoutService {
         &self,
         members: &[spc_store::aggregate_store::AggregateMember],
     ) -> Option<(u32, [u8; 32], BTreeSet<[u8; 32]>)> {
-        if !self.chain.authoritative() {
-            return None;
-        }
-        let tip = self.chain.tip_height().await.ok()?;
-        let tip_hash = self.chain.block_hash_at(tip).await.ok()??;
-        let mut canonical = BTreeSet::new();
-        for member in members {
-            let actual = self.chain.block_hash_at(member.block_height).await.ok()??;
-            if actual == member.block_hash {
-                canonical.insert(actual);
+        self.observe_canonical_members(members).await.canonical()
+    }
+
+    async fn observe_canonical_members(
+        &self,
+        members: &[spc_store::aggregate_store::AggregateMember],
+    ) -> spc_store::observations::CanonicalRead {
+        use spc_store::observations::{CanonicalMemberRead, CanonicalRead};
+        let clock = || {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .and_then(|d| u64::try_from(d.as_millis()).ok())
+        };
+        let mut read = CanonicalRead {
+            schema: "spc.canonical-read/1".into(),
+            source_session: crate::evidence::session_id(),
+            started_unix_ms: clock(),
+            finished_unix_ms: None,
+            authoritative: self.chain.authoritative(),
+            tip: None,
+            tip_hash: None,
+            tip_after: None,
+            tip_hash_after: None,
+            members: members
+                .iter()
+                .map(|m| CanonicalMemberRead {
+                    height: m.block_height,
+                    expected_hash: m.block_hash,
+                    observed_hash: None,
+                    read_status: "not_read".into(),
+                })
+                .collect(),
+            outcome: String::new(),
+        };
+        let outcome: Result<(), &str> = async {
+            if !read.authoritative {
+                return Err("not_authoritative");
             }
+            let tip = self
+                .chain
+                .tip_height()
+                .await
+                .map_err(|_| "tip_read_failed")?;
+            read.tip = Some(tip);
+            read.tip_hash = self
+                .chain
+                .block_hash_at(tip)
+                .await
+                .map_err(|_| "tip_hash_read_failed")?;
+            if read.tip_hash.is_none() {
+                return Err("tip_hash_unavailable");
+            }
+            for member in &mut read.members {
+                member.observed_hash = match self.chain.block_hash_at(member.height).await {
+                    Ok(hash) => hash,
+                    Err(_) => {
+                        member.read_status = "read_failed".into();
+                        return Err("member_hash_read_failed");
+                    }
+                };
+                member.read_status = if member.observed_hash.is_some() {
+                    "present"
+                } else {
+                    "unavailable"
+                }
+                .into();
+                if member.observed_hash.is_none() {
+                    return Err("member_hash_unavailable");
+                }
+            }
+            read.tip_after = Some(
+                self.chain
+                    .tip_height()
+                    .await
+                    .map_err(|_| "tip_after_read_failed")?,
+            );
+            read.tip_hash_after = self
+                .chain
+                .block_hash_at(tip)
+                .await
+                .map_err(|_| "tip_hash_after_read_failed")?;
+            if read.tip != read.tip_after || read.tip_hash != read.tip_hash_after {
+                return Err("tip_changed");
+            }
+            Ok(())
         }
-        if self.chain.tip_height().await.ok()? != tip
-            || self.chain.block_hash_at(tip).await.ok()?? != tip_hash
-        {
-            return None;
+        .await;
+        read.finished_unix_ms = clock();
+        read.outcome = match outcome {
+            Ok(()) if read.started_unix_ms.is_some() && read.finished_unix_ms.is_some() => {
+                "complete"
+            }
+            Ok(()) => "clock_unavailable",
+            Err(reason) => reason,
         }
-        Some((tip, tip_hash, canonical))
+        .into();
+        read
     }
 
     async fn process_authorizations(&self) -> Result<(), PayoutError> {
@@ -2623,8 +2804,7 @@ impl PayoutService {
         for (stream_id, bytes) in requests {
             if let Ok(request) = AuthorizationRequest::decode(&bytes) {
                 if let Some(frozen) = self.store.aggregate(&request.order_id).await? {
-                    if let Some((tip, hash, canonical)) =
-                        self.canonical_members(&frozen.members).await
+                    let canonical_read = self.observe_canonical_members(&frozen.members).await;
                     {
                         let now = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
@@ -2632,7 +2812,7 @@ impl PayoutService {
                             .as_secs();
                         if let Some(grant) = self
                             .store
-                            .authorize_aggregate(&request, tip, hash, &canonical, now, signer)
+                            .authorize_aggregate_observed(&request, &canonical_read, now, signer)
                             .await?
                         {
                             let field = format!(
@@ -3086,6 +3266,7 @@ fn identity_effect(e: &ArkRegEvent, network: i16) -> RegistrationEffect {
             network,
         },
         delivery: ArkDeliveryRow {
+            registration_commit: None,
             sp_id: e.sp_id,
             ark_id: e.ark_id,
             b_ark: e.b_ark.to_vec(),
@@ -5077,7 +5258,7 @@ mod tests {
             window_target: 0,
             entries: Vec::new(),
         };
-        let Some((ledger, deltas)) = svc.recompute(&event, fingerprint).await.unwrap() else {
+        let Some((ledger, deltas, _)) = svc.recompute(&event, fingerprint).await.unwrap() else {
             panic!("a pre-migration row must settle, not hold");
         };
         // The estimate (d = 100 from the newest slice, window_n = 2 -> 200)

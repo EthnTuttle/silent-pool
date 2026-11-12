@@ -506,6 +506,9 @@ impl BarkWalletClient {
         // The point of no return: once the server accepts this request,
         // the inputs are spent server-side.
         if let Some(auth) = authorization {
+            auth.persist_consumption(&payment.address.to_string(), payment.sats)
+                .await
+                .map_err(SendFailure::BeforeCosign)?;
             auth.enter_cosign(&payment.address.to_string(), payment.sats)
                 .map_err(SendFailure::BeforeCosign)?;
         }

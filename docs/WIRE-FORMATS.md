@@ -496,6 +496,17 @@ Held stream entries remain unacknowledged and frozen membership stays reserved.
 
 ### 3.9 Private source evidence v2 and accounting ancestry v1
 
+The full-rail observation extension (migration 0012) is specified in
+`FULLRAIL-OBSERVATIONS.md`. Its append-only SQL bodies remain SPc-side. Private
+bootstrap delivery JSON adds optional `registration_commit` public provenance.
+Ark-side SPAC/1 is exactly magic `SPAC` + version byte 1, the existing 149-byte
+signed grant, and a little-endian u64 consumption clock in milliseconds (162
+bytes total). SPCA/1 is magic `SPCA` + version byte 1, a 32-byte
+`SPc/ArkConsumptionV1` tagged digest of the entire SPAC frame, a little-endian
+u64 observation ID, and a little-endian u64 DB receipt clock (53 bytes total).
+Neither frame adds identity, destination, block hash or member fields. These
+are local observation messages, not an Ark-server RPC or a replacement grant.
+
 Actual front trace target `spc_evidence` emits `distribution_frozen`,
 `job_issued`, `accounted`, `share_rejected`, `bootstrap_applied`, and
 `pending_applied`; payloads have `source.schema = spc.source-evidence/2`, a

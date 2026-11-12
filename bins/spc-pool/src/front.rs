@@ -68,6 +68,8 @@ fn slice_front_id(slice_id: u64) -> u8 {
 
 #[derive(Debug, Error)]
 pub enum FrontError {
+    #[error("decision observation unavailable: {0}")]
+    Observation(#[from] spc_store::postgres::StoreError),
     #[error("accounting unavailable: {0}")]
     AccountingUnavailable(String),
     #[error("template: {0}")]
@@ -147,6 +149,7 @@ pub struct FrontConfig {
 
 pub struct Front {
     economic_source: Option<spc_store::Store>,
+    observation_streams: Option<spc_store::redis::Streams>,
     economic_view: Option<spc_accounting::economic::View>,
     frozen_economic: Option<spc_accounting::economic::FrozenJob>,
     published_economic: Option<[u8; 32]>,
@@ -352,6 +355,7 @@ impl Front {
     ) -> Self {
         Self {
             economic_source: None,
+            observation_streams: None,
             economic_view: None,
             frozen_economic: None,
             published_economic: None,
@@ -419,9 +423,12 @@ impl Front {
     pub fn set_share_policy(&mut self, policy: SharePolicy) {
         self.share_policy = policy;
     }
-    /// Read-only access to payout's coherent economic snapshot. No SQL writes.
+    /// Read-only economic and committed-registration provenance access.
     pub fn set_economic_source(&mut self, store: spc_store::Store) {
         self.economic_source = Some(store);
+    }
+    pub fn set_observation_streams(&mut self, streams: spc_store::redis::Streams) {
+        self.observation_streams = Some(streams);
     }
 
     /// Configure whether sealed legacy slices may feed the type-32 store.
@@ -566,13 +573,150 @@ impl Front {
         self.ark_server = Some(metadata);
     }
 
-    fn refresh_ark_destinations(&mut self) -> Result<(), FrontError> {
+    async fn persist_derivation_observation(
+        &self,
+        attempt: &[u8; 16],
+        mut body: serde_json::Value,
+    ) -> Result<(), FrontError> {
+        body["schema"] = "spc.front-derivation/1".into();
+        let session = crate::evidence::session_id();
+        body["source_session"] = hex::encode(session).into();
+        body["front_id"] = self.cfg.front_id.into();
+        body["queried_identity_census"] = body["rows"]
+            .as_array()
+            .map(|rows| {
+                rows.iter()
+                    .map(|row| row["sp_id"].clone())
+                    .collect::<Vec<_>>()
+            })
+            .into();
+        body["census_complete"] = (body["status"] == "frozen_job").into();
+        body["a_send_x"] = self.send.as_ref().map(|s| hex::encode(s.x_only())).into();
+        use spc_store::observations::{
+            observation_digest, FrontObservation, FrontObservationAck, FRONT_OBSERVATIONS_ACK,
+            FRONT_OBSERVATIONS_STREAM,
+        };
+        let request = FrontObservation {
+            schema_version: 1,
+            session,
+            attempt: *attempt,
+            body: body.clone(),
+        };
+        let bytes = request.encode()?;
+        let observation = if let Some(streams) = &self.observation_streams {
+            crate::evidence::emit(
+                "derivation_prepared",
+                serde_json::json!({"attempt":hex::encode(attempt),"record":body}),
+            );
+            streams
+                .add(FRONT_OBSERVATIONS_STREAM, &bytes)
+                .await
+                .map_err(|e| {
+                    FrontError::AccountingUnavailable(format!("observation publish: {e}"))
+                })?;
+            let ack = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                loop {
+                    if let Some(value) = streams
+                        .hget(FRONT_OBSERVATIONS_ACK, &request.field())
+                        .await?
+                    {
+                        return Ok::<_, spc_store::redis::RedisError>(value);
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .map_err(|_| {
+                FrontError::AccountingUnavailable("observation persistence deadline".into())
+            })?
+            .map_err(|e| FrontError::AccountingUnavailable(format!("observation receipt: {e}")))?;
+            let ack: FrontObservationAck = serde_json::from_str(&ack).map_err(|_| {
+                FrontError::AccountingUnavailable("invalid observation receipt".into())
+            })?;
+            if ack.digest != observation_digest(&bytes) {
+                return Err(FrontError::AccountingUnavailable(
+                    "observation receipt digest".into(),
+                ));
+            }
+            if ack.observation_id <= 0 {
+                return Err(FrontError::AccountingUnavailable(
+                    "observation receipt id".into(),
+                ));
+            }
+            Some(ack.observation_id)
+        } else {
+            None
+        };
+        crate::evidence::emit(
+            "derivation_observed",
+            serde_json::json!({"observation_id":observation,"attempt":hex::encode(attempt),"record":body}),
+        );
+        Ok(())
+    }
+
+    async fn observed_delivery(
+        &self,
+        id: &SpId,
+        mut delivery: ArkDeliveryRow,
+    ) -> (ArkDeliveryRow, &'static str) {
+        let mut provenance = if delivery.registration_commit.is_some() {
+            "cached"
+        } else {
+            "missing_commit_provenance"
+        };
+        if let (Some(commit), Some(store)) = (
+            delivery.registration_commit.as_mut(),
+            self.economic_source.as_ref(),
+        ) {
+            if commit.signed_fields_digest.is_none() {
+                match store.registration_commit_digest(id, commit).await {
+                    Ok(digest) => {
+                        provenance = if digest.is_some() {
+                            "exact_request_row"
+                        } else {
+                            "missing_request_provenance"
+                        };
+                        commit.signed_fields_digest = digest;
+                    }
+                    Err(_) => provenance = "request_lookup_failed_unknown",
+                }
+            }
+        }
+        (delivery, provenance)
+    }
+
+    async fn refresh_ark_destinations(
+        &mut self,
+        attempt: &[u8; 16],
+    ) -> Result<Vec<serde_json::Value>, FrontError> {
+        let mut observations = Vec::new();
         let Some(metadata) = self.ark_server.clone() else {
+            let registrations: Vec<_> = self
+                .ark_registrations
+                .iter()
+                .map(|(id, d)| (*id, d.clone()))
+                .collect();
+            for (id, delivery) in registrations {
+                let (delivery, provenance) = self.observed_delivery(&id, delivery).await;
+                if let Some(cached) = self.ark_registrations.get_mut(&id) {
+                    cached.registration_commit = delivery.registration_commit.clone();
+                }
+                let mut row = crate::derivation_observation::inputs(
+                    &id,
+                    self.miners.get(&id),
+                    Some(&delivery),
+                    None,
+                    None,
+                );
+                row["commit_provenance"] = provenance.into();
+                row["outcome"] = "server_metadata_unavailable".into();
+                observations.push(row);
+            }
             for cap in self.ark.values_mut() {
                 cap.dest_known = false;
             }
             self.ark_dest.clear();
-            return Ok(());
+            return Ok(observations);
         };
         let registrations: Vec<(SpId, ArkDeliveryRow)> = self
             .ark_registrations
@@ -581,26 +725,70 @@ impl Front {
             .collect();
         let mut derived = Vec::new();
         for (sp_id, delivery) in registrations {
-            let destination = if let Some(keys) = self.miners.get(&sp_id) {
-                let send = self.send.as_ref().ok_or(FrontError::NoSendKey)?;
-                let ecdh = send.derive_pool_side(&keys.b_scan)?;
-                let epoch = self.ark_epoch_mailboxes.get(&(sp_id, send.h)).cloned();
-                registration::derive_ark_destination(
-                    &metadata,
-                    send.h,
-                    &ecdh,
-                    &delivery,
-                    epoch.as_ref(),
-                )?
-            } else {
-                None
+            let (delivery, commit_lookup) = self.observed_delivery(&sp_id, delivery).await;
+            if let Some(cached) = self.ark_registrations.get_mut(&sp_id) {
+                cached.registration_commit = delivery.registration_commit.clone();
+            }
+            let epoch = self
+                .send
+                .as_ref()
+                .and_then(|s| self.ark_epoch_mailboxes.get(&(sp_id, s.h)))
+                .cloned();
+            let mut row = crate::derivation_observation::inputs(
+                &sp_id,
+                self.miners.get(&sp_id),
+                Some(&delivery),
+                Some(&metadata),
+                epoch.as_ref(),
+            );
+            row["commit_provenance"] = commit_lookup.into();
+            let mut stage = "miner_keys";
+            let result: Result<Option<Vec<u8>>, FrontError> = (|| {
+                if let Some(keys) = self.miners.get(&sp_id) {
+                    stage = "send_context";
+                    let send = self.send.as_ref().ok_or(FrontError::NoSendKey)?;
+                    stage = "ecdh";
+                    let ecdh = send.derive_pool_side(&keys.b_scan)?;
+                    stage = "ark_destination";
+                    Ok(registration::derive_ark_destination(
+                        &metadata,
+                        send.h,
+                        &ecdh,
+                        &delivery,
+                        epoch.as_ref(),
+                    )?)
+                } else {
+                    Ok(None)
+                }
+            })();
+            let destination = match result {
+                Ok(destination) => destination,
+                Err(error) => {
+                    row["outcome"] = "derivation_error".into();
+                    row["error_stage"] = stage.into();
+                    row["error_reason"] = error.to_string().into();
+                    observations.push(row);
+                    self.persist_derivation_observation(attempt,serde_json::json!({"status":"failed_unadvertised_attempt", "job_id":null,"generation":null,
+                        "height":self.send.as_ref().map(|s|s.h),"rows":observations})).await?;
+                    return Err(error);
+                }
             };
+            row["destination_bytes"] = destination.as_ref().map(hex::encode).into();
+            row["outcome"] = if destination.is_some() {
+                "derived"
+            } else if self.miners.contains_key(&sp_id) {
+                "epoch_mailbox_held"
+            } else {
+                "missing_miner_keys"
+            }
+            .into();
+            observations.push(row);
             derived.push((sp_id, destination));
         }
         for (sp_id, destination) in derived {
             self.set_ark_dest(sp_id, destination.unwrap_or_default());
         }
-        Ok(())
+        Ok(observations)
     }
 
     /// Apply a bootstrap snapshot (WIRE-FORMATS §3.5) before serving: pending
@@ -789,6 +977,8 @@ impl Front {
             }
             WireFrontEvent::ArkRegApplied {
                 sp_id,
+                request_id,
+                registration_rev,
                 state,
                 identity,
                 delivery,
@@ -810,7 +1000,14 @@ impl Front {
                         tracing::error!(?sp_id, %error, "invalid identity point in ArkRegApplied; skipping");
                         return false;
                     }
-                    self.ark_registrations.insert(*sp_id, delivery.clone());
+                    let mut observed_delivery = delivery.clone();
+                    observed_delivery.registration_commit =
+                        Some(Box::new(spc_store::models::RegistrationCommit {
+                            request_id: *request_id,
+                            registration_rev: *registration_rev,
+                            signed_fields_digest: None,
+                        }));
+                    self.ark_registrations.insert(*sp_id, observed_delivery);
                     for entry in epoch_mailboxes {
                         self.ark_epoch_mailboxes
                             .insert((entry.sp_id, entry.height), entry.clone());
@@ -1025,7 +1222,9 @@ impl Front {
                 }
             }
         };
-        self.refresh_ark_destinations()?;
+        let derivation_attempt = rand::random();
+        let mut derivation_observations =
+            self.refresh_ark_destinations(&derivation_attempt).await?;
 
         let tier_cfg = TierConfig {
             fee_bps: self.cfg.fee_bps,
@@ -1254,6 +1453,25 @@ impl Front {
             None
         };
         if bumped {
+            for id in routing
+                .owed
+                .keys()
+                .filter(|id| !self.ark_registrations.contains_key(*id))
+            {
+                let mut row = crate::derivation_observation::inputs(
+                    id,
+                    self.miners.get(id),
+                    None,
+                    self.ark_server.as_ref(),
+                    None,
+                );
+                row["outcome"] = "unregistered_in_front_cache".into();
+                derivation_observations.push(row);
+            }
+            self.persist_derivation_observation(&derivation_attempt,serde_json::json!({"status":"frozen_job",
+                "job_id":(u64::from(job.height)<<32)|u64::from(self.job_seq),"generation":job.work.generation,"height":job.height,
+                "economic_revision":self.frozen_economic.as_ref().map(|e|e.revision),"distribution_fingerprint":hex::encode(distribution.fingerprint),
+                "rows":derivation_observations})).await?;
             crate::evidence::frozen_distribution(crate::evidence::FrozenEvidence {
                 finding_slice_id: self.open.as_ref().ok_or(FrontError::NoSlice)?.slice_id,
                 front_id: self.cfg.front_id,
@@ -2188,6 +2406,146 @@ pool_payout_descriptor = "DESCRIPTOR"
             bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &scan).serialize(),
             bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &spend).serialize(),
         )
+    }
+
+    fn observation_registration(front: &mut Front, seed: u8) -> SpId {
+        let id = id_for(seed);
+        let (scan, spend) = key_pair(seed);
+        let server = bitcoin::secp256k1::PublicKey::from_slice(&key_pair(9).0).unwrap();
+        front.set_ark_server(ArkServerMetadata {
+            ark_id: <[u8; 4]>::from(ark::address::ArkId::from_server_pubkey(server)),
+            server_pubkey: server,
+            mailbox_pubkey: bitcoin::secp256k1::PublicKey::from_slice(&key_pair(10).0).unwrap(),
+            testnet: true,
+        });
+        front.learn_identity(id, scan, spend).unwrap();
+        front.ark_registrations.insert(
+            id,
+            ArkDeliveryRow {
+                registration_commit: Some(Box::new(spc_store::models::RegistrationCommit {
+                    request_id: 1,
+                    registration_rev: 2,
+                    signed_fields_digest: Some(hex::encode([8; 32])),
+                })),
+                sp_id: id,
+                ark_id: [3; 4],
+                b_ark: spend.to_vec(),
+                mailbox_mode: spc_store::models::MailboxMode::EpochRegistered,
+                mailbox_m: Some(scan.to_vec()),
+                mailbox_d: Some(spend.to_vec()),
+                epoch_fallback: spc_store::models::EpochFallback::Hold,
+            },
+        );
+        front.set_ark(
+            id,
+            ArkCapability {
+                registered: true,
+                registration_committed: true,
+                dest_known: false,
+            },
+        );
+        id
+    }
+
+    #[tokio::test]
+    async fn actual_derivation_observes_epoch_hold_missing_keys_and_public_destination() {
+        let mut front = Front::new(
+            cfg(),
+            Arc::new(MockTemplateSource::new(template())),
+            type32(),
+        );
+        front.refresh().await.unwrap();
+        let id = observation_registration(&mut front, 0x51);
+        let rows = front.refresh_ark_destinations(&[1; 16]).await.unwrap();
+        assert_eq!(rows[0]["outcome"], "epoch_mailbox_held");
+        assert_eq!(rows[0]["mailbox_selection"], "hold_missing_epoch");
+        assert!(rows[0]["destination_bytes"].is_null());
+        front.ark_registrations.get_mut(&id).unwrap().epoch_fallback =
+            spc_store::models::EpochFallback::Static;
+        let rows = front.refresh_ark_destinations(&[2; 16]).await.unwrap();
+        assert_eq!(rows[0]["outcome"], "derived");
+        assert_eq!(rows[0]["mailbox_selection"], "static_fallback");
+        assert_eq!(
+            hex::decode(rows[0]["destination_bytes"].as_str().unwrap()).unwrap(),
+            front.ark_dest[&id]
+        );
+        assert!(
+            !serde_json::to_string(&rows)
+                .unwrap()
+                .contains(&hex::encode([0x51; 32])),
+            "private scan scalar never serialized"
+        );
+        front.miners.remove(&id);
+        let rows = front.refresh_ark_destinations(&[3; 16]).await.unwrap();
+        assert_eq!(rows[0]["outcome"], "missing_miner_keys");
+        assert_eq!(rows[0]["coinbase_key_status"], "missing_miner_keys");
+        assert!(!front.ark_dest.contains_key(&id));
+    }
+
+    #[cfg(feature = "postgres-integration")]
+    #[tokio::test]
+    async fn actual_derivation_failure_persists_public_inputs_and_classification() {
+        let url =
+            std::env::var("SPC_LADDER_TEST_DATABASE_URL").expect("owned PG required; no skip");
+        assert!(url.contains("ladder_completion"));
+        let admin = spc_store::Store::connect(&url).await.unwrap();
+        let name = format!("ladder_completion_derive_{}", uuid::Uuid::new_v4().simple());
+        sqlx::query(&format!("CREATE DATABASE {name}"))
+            .execute(admin.pool())
+            .await
+            .unwrap();
+        let store =
+            spc_store::Store::connect(&url.replace("/ladder_completion?", &format!("/{name}?")))
+                .await
+                .unwrap();
+        store.migrate().await.unwrap();
+        store.economic_initialize([0x11; 32]).await.unwrap();
+        let mut front = Front::new(
+            cfg(),
+            Arc::new(MockTemplateSource::new(template_at(1, 0x1c00_ffff, 0))),
+            type32(),
+        );
+        front.refresh().await.unwrap();
+        let id = observation_registration(&mut front, 0x51);
+        front.set_economic_source(store.clone());
+        let redis =
+            std::env::var("SPC_LADDER_TEST_REDIS_URL").expect("owned Redis required; no skip");
+        let streams = spc_store::redis::Streams::connect(&redis).await.unwrap();
+        let writer =
+            crate::payout_observation::spawn(store.clone(), streams.independent().await.unwrap())
+                .await
+                .unwrap();
+        front.set_observation_streams(streams.independent().await.unwrap());
+        front.ark_registrations.get_mut(&id).unwrap().b_ark = vec![0; 33];
+        assert!(front.refresh_ark_destinations(&[4; 16]).await.is_err());
+        let body: serde_json::Value = sqlx::query_scalar(
+            "SELECT body FROM source_decision_observation WHERE kind='front_derivation'",
+        )
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+        assert_eq!(body["status"], "failed_unadvertised_attempt");
+        assert_eq!(body["census_complete"], false);
+        assert_eq!(body["rows"][0]["error_stage"], "ark_destination");
+        assert!(body["rows"][0]["error_reason"]
+            .as_str()
+            .unwrap()
+            .contains("invalid B_ark registration"));
+        assert!(body["job_id"].is_null());
+        assert!(body["generation"].is_null());
+        assert!(!body.to_string().contains(&hex::encode([0x51; 32])));
+        front.ark_registrations.get_mut(&id).unwrap().b_ark = key_pair(0x51).1.to_vec();
+        let job = front.refresh().await.unwrap();
+        let accepted:serde_json::Value=sqlx::query_scalar("SELECT body FROM source_decision_observation WHERE kind='front_derivation' AND body->>'status'='frozen_job'")
+            .fetch_one(store.pool()).await.unwrap();
+        assert_eq!(accepted["generation"], job.work.generation);
+        assert_eq!(accepted["height"], job.height);
+        assert_eq!(
+            accepted["economic_revision"],
+            store.economic_view().await.unwrap().revision
+        );
+        assert_eq!(accepted["census_complete"], true);
+        writer.abort();
     }
 
     /// A source whose template the test can change between refreshes.
@@ -4074,6 +4432,7 @@ pool_payout_descriptor = "DESCRIPTOR"
             ark_identities: vec![],
             ark_epoch_mailboxes: vec![],
             ark_delivery: vec![spc_store::models::ArkDeliveryRow {
+                registration_commit: None,
                 sp_id: id,
                 ark_id: [1, 2, 3, 4],
                 b_ark: vec![2u8; 33],
@@ -4120,6 +4479,7 @@ pool_payout_descriptor = "DESCRIPTOR"
             network: 3,
         };
         let delivery = spc_store::models::ArkDeliveryRow {
+            registration_commit: None,
             sp_id: other,
             ark_id: [1, 2, 3, 4],
             b_ark: b_ark.to_vec(),
@@ -4367,6 +4727,7 @@ pool_payout_descriptor = "DESCRIPTOR"
         };
         front.apply_bootstrap(&snapshot).unwrap();
         let delivery_for = |seed: u8, mode| spc_store::models::ArkDeliveryRow {
+            registration_commit: None,
             sp_id: identity_sp_id,
             ark_id: <[u8; 4]>::from(ark::address::ArkId::from_server_pubkey(server)),
             b_ark: bitcoin::secp256k1::PublicKey::from_secret_key(

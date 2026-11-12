@@ -634,27 +634,98 @@ impl Store {
         now: u64,
         signer: &Keypair,
     ) -> Result<Option<AuthorizationGrant>> {
+        self.authorize_aggregate_inner(request, tip, tip_hash, canonical, now, signer, None)
+            .await
+    }
+
+    pub async fn authorize_aggregate_observed(
+        &self,
+        request: &AuthorizationRequest,
+        read: &crate::observations::CanonicalRead,
+        now: u64,
+        signer: &Keypair,
+    ) -> Result<Option<AuthorizationGrant>> {
+        let Some((tip, hash, canonical)) = read.canonical() else {
+            self.record_observation("authorization_decision",&request.order_id,None,&serde_json::json!({
+                "schema":"spc.authorization-decision/1","request_bytes":hex::encode(request.encode()),
+                "now":now,"canonical_read":read,"outcome":"canonical_read_unknown","grant_bytes":null})).await?;
+            return Ok(None);
+        };
+        let result = self
+            .authorize_aggregate_inner(request, tip, hash, &canonical, now, signer, Some(read))
+            .await;
+        if result.is_err() {
+            let _=self.record_observation("authorization_decision",&request.order_id,None,&serde_json::json!({
+                "schema":"spc.authorization-decision/1","request_bytes":hex::encode(request.encode()),"now":now,
+                "canonical_read":read,"outcome":"issuance_unknown","grant_bytes":null,
+                "reason":"transaction_or_persistence_failed"})).await;
+        }
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn authorize_aggregate_inner(
+        &self,
+        request: &AuthorizationRequest,
+        tip: u32,
+        tip_hash: [u8; 32],
+        canonical: &BTreeSet<[u8; 32]>,
+        now: u64,
+        signer: &Keypair,
+        read: Option<&crate::observations::CanonicalRead>,
+    ) -> Result<Option<AuthorizationGrant>> {
         let mut tx = self.pool().begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            .execute(&mut *tx)
+            .await?;
         sqlx::query("SELECT pg_advisory_xact_lock(1397769025)")
             .execute(&mut *tx)
             .await?;
         crate::economic::check_seed(&mut tx).await?;
+        let mut observation = serde_json::json!({"schema":"spc.authorization-decision/1","request_bytes":hex::encode(request.encode()),
+            "request_nonce":hex::encode(request.nonce),"now":now,"checked_tip":tip,"checked_tip_hash":hex::encode(tip_hash),
+            "canonical_set":canonical.iter().map(hex::encode).collect::<Vec<_>>(),"canonical_read":read,
+            "sql_members":null,"grant_bytes":null});
         let Some(row)=sqlx::query("SELECT state,revision,order_digest,not_before_height,sats FROM ark_aggregate WHERE order_id=$1 FOR UPDATE")
-            .bind(&request.order_id[..]).fetch_optional(&mut *tx).await? else {return Ok(None)};
+            .bind(&request.order_id[..]).fetch_optional(&mut *tx).await? else {
+                observation["outcome"]="aggregate_absent".into();
+                crate::observations::append(&mut tx,"authorization_decision",&request.order_id,None,&observation).await?;
+                tx.commit().await?;return Ok(None)
+            };
         let state: String = row.try_get("state")?;
         if state != "published"
             || request.nonce == [0; 16]
             || bytes32(row.try_get("order_digest")?)? != request.order_digest
             || height(row.try_get("not_before_height")?)? > tip
         {
+            observation["outcome"] = "request_not_issuable".into();
+            crate::observations::append(
+                &mut tx,
+                "authorization_decision",
+                &request.order_id,
+                None,
+                &observation,
+            )
+            .await?;
+            tx.commit().await?;
             return Ok(None);
         }
-        let rows=sqlx::query("SELECT m.block_hash,bf.status,m.sats,m.reserved,ap.sats AS payout_sats,ap.status AS payout_status
+        let census: Vec<serde_json::Value> = sqlx::query_scalar(
+            "SELECT to_jsonb(m) FROM ark_aggregate_member m WHERE order_id=$1 ORDER BY ordinal",
+        )
+        .bind(&request.order_id[..])
+        .fetch_all(&mut *tx)
+        .await?;
+        observation["queried_members"] = serde_json::Value::Array(census);
+        let rows=sqlx::query("SELECT m.block_hash,bf.status,m.sats,m.reserved,ap.sats AS payout_sats,ap.status AS payout_status,
+            jsonb_build_object('member',to_jsonb(m),'block_status',bf.status,'payout_status',ap.status,'payout_sats',ap.sats) AS observed_member
             FROM ark_aggregate_member m JOIN block_found bf USING(block_hash)
             JOIN ark_payout ap ON ap.block_hash=m.block_hash AND ap.sp_id=m.sp_id
             WHERE m.order_id=$1 ORDER BY m.ordinal FOR UPDATE OF bf,ap,m")
             .bind(&request.order_id[..]).fetch_all(&mut *tx).await?;
         let mut valid = !rows.is_empty();
+        observation["sql_members"] =
+            serde_json::Value::Array(rows.iter().map(|row| row.get("observed_member")).collect());
         let mut member_total = 0u64;
         for row in rows {
             member_total = member_total
@@ -673,6 +744,15 @@ impl Store {
         if !valid {
             sqlx::query("UPDATE ark_aggregate SET state='blocked_unknown',revision=revision+1 WHERE order_id=$1")
                 .bind(&request.order_id[..]).execute(&mut *tx).await?;
+            observation["outcome"] = "members_not_canonical_or_reserved".into();
+            crate::observations::append(
+                &mut tx,
+                "authorization_decision",
+                &request.order_id,
+                None,
+                &observation,
+            )
+            .await?;
             tx.commit().await?;
             return Ok(None);
         }
@@ -689,6 +769,9 @@ impl Store {
             signature: [0; 64],
         };
         grant.sign(signer);
+        observation["outcome"] = "issued".into();
+        observation["grant_bytes"] = hex::encode(grant.encode()).into();
+        observation["aggregate_revision"] = revision.into();
         sqlx::query("INSERT INTO ark_send_authorization(order_id,nonce,revision,order_digest,checked_tip,checked_tip_hash,expires_at,grant_bytes) VALUES($1,$2,$3,$4,$5,$6,$7,$8)")
             .bind(&request.order_id[..]).bind(&request.nonce[..]).bind(signed(revision)?).bind(&request.order_digest[..])
             .bind(h32(tip)?).bind(&tip_hash[..]).bind(signed(expires_at)?).bind(grant.encode()).execute(&mut *tx).await?;
@@ -697,6 +780,14 @@ impl Store {
             .bind(signed(revision)?)
             .execute(&mut *tx)
             .await?;
+        crate::observations::append(
+            &mut tx,
+            "authorization_decision",
+            &request.order_id,
+            None,
+            &observation,
+        )
+        .await?;
         tx.commit().await?;
         Ok(Some(grant))
     }

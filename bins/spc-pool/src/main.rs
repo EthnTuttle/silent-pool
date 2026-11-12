@@ -430,6 +430,10 @@ async fn main() -> anyhow::Result<()> {
         );
         front.set_share_policy(share_policy);
         if !allow_unchecked {
+            let observation_streams = streams
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("front observations require Redis"))?;
+            front.set_observation_streams(observation_streams.independent().await?);
             front.set_economic_source(
                 Store::connect_with_timeout(&config.storage.postgres, STORE_CONNECT_TIMEOUT)
                     .await?,

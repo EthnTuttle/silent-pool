@@ -547,6 +547,7 @@ mod tests {
         let hint = spc_crypto::mailbox_blinding_hint(&b_ark, &public(10)).unwrap();
         let ecdh = spc_crypto::SharedSecret::pool_side(800_000, &a_send, &b_scan_pub).unwrap();
         let mut delivery = ArkDeliveryRow {
+            registration_commit: None,
             sp_id: [0; 32],
             ark_id: [0; 4],
             b_ark: b_ark_pub.serialize().to_vec(),
@@ -603,6 +604,7 @@ mod tests {
         )
         .unwrap();
         let mut delivery = ArkDeliveryRow {
+            registration_commit: None,
             sp_id: [0; 32],
             ark_id: [0; 4],
             b_ark: public(2).serialize().to_vec(),

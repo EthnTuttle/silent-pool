@@ -1888,7 +1888,9 @@ impl Store {
 
         let delivery_rows = sqlx::query(
             "SELECT sp_id, ark_id, b_ark, mailbox_mode, mailbox_m, mailbox_d,
-                    epoch_fallback FROM ark_delivery",
+                    epoch_fallback, (SELECT jsonb_build_object('request_id',s.last_request_id,'registration_rev',s.registration_rev,
+                        'signed_fields_digest',encode(s.signed_fields_digest,'hex')) FROM ark_registration_state s WHERE s.sp_id=ark_delivery.sp_id) AS registration_commit
+                    FROM ark_delivery",
         )
         .fetch_all(&mut *tx)
         .await?;
@@ -2078,6 +2080,13 @@ fn ark_delivery_from_row(row: PgRow) -> Result<ArkDeliveryRow> {
     let ark: Vec<u8> = row.try_get("ark_id")?;
     let mode: String = row.try_get("mailbox_mode")?;
     Ok(ArkDeliveryRow {
+        registration_commit: row
+            .try_get::<Option<serde_json::Value>, _>("registration_commit")
+            .ok()
+            .flatten()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|_| StoreError::Invalid("registration observation metadata"))?,
         sp_id: id32(&id)?,
         ark_id: ark
             .as_slice()

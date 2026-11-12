@@ -54,6 +54,9 @@ pub struct SendAuthorization {
     request: AuthorizationRequest,
     key: XOnlyPublicKey,
     escaped: std::sync::atomic::AtomicBool,
+    consumption_sink: Option<spc_store::redis::Streams>,
+    consuming: std::sync::atomic::AtomicBool,
+    consumption_observation: std::sync::atomic::AtomicU64,
 }
 impl SendAuthorization {
     pub(crate) fn new(
@@ -73,9 +76,80 @@ impl SendAuthorization {
             request: request.clone(),
             key,
             escaped: std::sync::atomic::AtomicBool::new(false),
+            consumption_sink: None,
+            consuming: std::sync::atomic::AtomicBool::new(false),
+            consumption_observation: std::sync::atomic::AtomicU64::new(0),
         };
         context.validate(&order.ark_address, order.sats)?;
         Ok(context)
+    }
+    pub(crate) fn with_consumption_sink(mut self, streams: spc_store::redis::Streams) -> Self {
+        self.consumption_sink = Some(streams);
+        self
+    }
+    /// Persist an opaque lease-consumption observation before the cosign edge.
+    /// This does not ask for or create another grant. Loss leaves this attempt
+    /// pinned and expiry is rechecked under the existing wallet permit.
+    pub async fn persist_consumption(&self, address: &str, sats: u64) -> Result<(), String> {
+        use spc_ext::authorization::{
+            Consumption, ConsumptionAck, CONSUMED_KEY, CONSUMPTION_STREAM,
+        };
+        self.validate(address, sats)?;
+        let Some(streams) = &self.consumption_sink else {
+            return Ok(());
+        };
+        self.consuming
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .map_err(|_| "consumption already attempted")?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| "consumption clock")?;
+        let observed_unix_ms =
+            u64::try_from(now.as_millis()).map_err(|_| "consumption clock overflow")?;
+        let request = Consumption {
+            grant: self.grant.clone(),
+            observed_unix_ms,
+        };
+        streams
+            .add(CONSUMPTION_STREAM, &request.encode())
+            .await
+            .map_err(|e| e.to_string())?;
+        let bytes = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if let Some(value) = streams
+                    .hget(CONSUMED_KEY, &request.field())
+                    .await
+                    .map_err(|e| e.to_string())?
+                {
+                    return Ok::<_, String>(value);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .map_err(|_| "consumption persistence deadline")??;
+        let ack =
+            ConsumptionAck::decode(&hex::decode(bytes).map_err(|_| "consumption ack encoding")?)
+                .map_err(|_| "consumption ack")?;
+        if ack.digest != request.digest()
+            || ack.recorded_unix_ms / 1000 >= self.grant.expires_at
+            || ack.recorded_unix_ms / 1000
+                < self
+                    .grant
+                    .expires_at
+                    .saturating_sub(spc_ext::authorization::GRANT_LIFETIME_SECS)
+        {
+            return Err("consumption receipt does not bind this lease".into());
+        }
+        self.validate(address, sats)?;
+        self.consumption_observation
+            .store(ack.observation_id, std::sync::atomic::Ordering::Release);
+        Ok(())
     }
     pub fn validate(&self, address: &str, sats: u64) -> Result<(), String> {
         if self.escaped.load(std::sync::atomic::Ordering::Acquire) {
@@ -106,6 +180,12 @@ impl SendAuthorization {
     /// and worker pin already exist; response loss never resets this attempt.
     pub fn enter_cosign(&self, address: &str, sats: u64) -> Result<(), String> {
         self.validate(address, sats)?;
+        let observation = self
+            .consumption_observation
+            .load(std::sync::atomic::Ordering::Acquire);
+        if self.consumption_sink.is_some() && observation == 0 {
+            return Err("consumption not durably observed".into());
+        }
         self.escaped
             .compare_exchange(
                 false,
@@ -114,6 +194,13 @@ impl SendAuthorization {
                 std::sync::atomic::Ordering::Acquire,
             )
             .map_err(|_| "duplicate cosign escape".to_string())?;
+        let entered_unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| "escape clock")?
+            .as_millis();
+        tracing::info!(target:"spc_ark_observation",schema="spc.cosign-escape/1",order_id=%hex::encode(self.request.order_id),
+            nonce=%hex::encode(self.request.nonce),observation_id=observation,entered_unix_ms=%entered_unix_ms,
+            "existing lease enters possible cosign escape");
         Ok(())
     }
 }

@@ -408,6 +408,27 @@ impl Store {
         ledger: &[LedgerRow],
         recanonical: bool,
     ) -> Result<bool> {
+        self.economic_found_inner(event, ledger, recanonical, None, false)
+            .await
+    }
+    pub async fn economic_found_observed(
+        &self,
+        event: &BlockEvent,
+        ledger: &[LedgerRow],
+        recanonical: bool,
+        observation: Option<i64>,
+    ) -> Result<bool> {
+        self.economic_found_inner(event, ledger, recanonical, observation, true)
+            .await
+    }
+    async fn economic_found_inner(
+        &self,
+        event: &BlockEvent,
+        ledger: &[LedgerRow],
+        recanonical: bool,
+        observation: Option<i64>,
+        require_observation: bool,
+    ) -> Result<bool> {
         let job = event
             .economic
             .as_ref()
@@ -495,11 +516,46 @@ impl Store {
             sqlx::query("UPDATE economic_block SET lifecycle='unbooked',transition=transition+1,revision=$2 WHERE block_hash=$1").bind(&event.block_hash[..]).bind(rev as i64).execute(&mut *tx).await?;
             sqlx::query("UPDATE block_found SET status='pending',settled_at=NULL WHERE block_hash=$1 AND status='orphaned'").bind(&event.block_hash[..]).execute(&mut *tx).await?;
         } else {
-            sqlx::query("INSERT INTO economic_block(block_hash,parent_hash,height,payload_digest,raw_event,frozen_job,validated_ledger,consumption,lifecycle,revision) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'unbooked',$9)")
+            if require_observation && observation.is_none() {
+                return Err(StoreError::Invalid("missing reconstruction observation"));
+            }
+            if let Some(id) = observation {
+                let body:serde_json::Value=sqlx::query_scalar("SELECT body FROM source_decision_observation WHERE observation_id=$1 AND kind='settlement_reconstruction' AND subject=$2")
+                    .bind(id).bind(&event.block_hash[..]).fetch_one(&mut *tx).await?;
+                if body["status"] != "complete"
+                    || body["binding"]["payload_digest"] != hex::encode(digest)
+                    || body["ledger"]
+                        != serde_json::to_value(ledger)
+                            .map_err(|_| StoreError::Invalid("observed ledger JSON"))?
+                {
+                    return Err(StoreError::Invalid("reconstruction observation mismatch"));
+                }
+                let read_id = body["delivery_read_observation"]
+                    .as_i64()
+                    .ok_or(StoreError::Invalid("delivery read reference missing"))?;
+                let read:serde_json::Value=sqlx::query_scalar("SELECT body FROM source_decision_observation WHERE observation_id=$1 AND kind='settlement_delivery_read' AND subject=$2")
+                    .bind(read_id).bind(&event.block_hash[..]).fetch_one(&mut *tx).await?;
+                let queried = serde_json::to_value(
+                    event
+                        .entries
+                        .iter()
+                        .map(|entry| hex::encode(entry.sp_id))
+                        .collect::<Vec<_>>(),
+                )
+                .map_err(|_| StoreError::Invalid("delivery census JSON"))?;
+                if read_id >= id
+                    || read["status"] != "complete"
+                    || read["binding"] != body["binding"]
+                    || read["queried"] != queried
+                {
+                    return Err(StoreError::Invalid("delivery read ancestry mismatch"));
+                }
+            }
+            sqlx::query("INSERT INTO economic_block(block_hash,parent_hash,height,payload_digest,raw_event,frozen_job,validated_ledger,consumption,lifecycle,revision,reconstruction_observation) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'unbooked',$9,$10)")
                 .bind(&event.block_hash[..]).bind(&job.parent_hash[..]).bind(event.height as i32).bind(&digest[..]).bind(bytes)
                 .bind(serde_json::to_value(job).map_err(|_|StoreError::Invalid("economic job JSON"))?)
                 .bind(serde_json::to_value(ledger).map_err(|_|StoreError::Invalid("economic ledger JSON"))?)
-                .bind(serde_json::to_value(rows).map_err(|_|StoreError::Invalid("economic consumption JSON"))?).bind(rev as i64).execute(&mut *tx).await?;
+                .bind(serde_json::to_value(rows).map_err(|_|StoreError::Invalid("economic consumption JSON"))?).bind(rev as i64).bind(observation).execute(&mut *tx).await?;
         }
         check_balances(&mut tx).await?;
         tx.commit().await?;

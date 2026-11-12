@@ -53,6 +53,7 @@ impl ArkTransport for AdmissionFixture {
         authorization: &SendAuthorization,
         _: Option<&WalletOperationPermit>,
     ) -> Result<Vec<Vec<u8>>, String> {
+        authorization.persist_consumption(address, sats).await?;
         authorization.enter_cosign(address, sats)?;
         self.escapes.fetch_add(1, Ordering::SeqCst);
         Err("ACL fixture: simulated lost post-grant response".into())
@@ -122,6 +123,8 @@ async fn installed_ark_acl_allows_cursor_and_held_retry_without_identity_access(
 
     for key in [
         "arbitrary:key",
+        "spc:source:decisions",
+        "spc:source:decision-acks",
         "spc:ark:pending-cursor",
         "spc:slices",
         "spc:blocks",
@@ -133,6 +136,7 @@ async fn installed_ark_acl_allows_cursor_and_held_retry_without_identity_access(
         assert_noperm(role.kv_set(key, "forbidden").await);
     }
     for stream in [
+        "spc:source:decisions",
         "spc:slices",
         "spc:blocks",
         "spc:arkreg",
@@ -231,6 +235,11 @@ async fn installed_ark_acl_allows_cursor_and_held_retry_without_identity_access(
     restarted.retry_pending().await.unwrap();
     assert_eq!(role.kv_get(&cursor).await.unwrap().as_deref(), Some("0"));
     ready.store(true, Ordering::SeqCst);
+    use spc_ext::authorization::{Consumption, ConsumptionAck, CONSUMED_KEY, CONSUMPTION_STREAM};
+    admin
+        .ensure_group_from(CONSUMPTION_STREAM, "acl-consumption", "0")
+        .await
+        .unwrap();
     admin
         .ensure_group_from(REQUESTS_STREAM, "acl-issuer", "0")
         .await
@@ -264,6 +273,31 @@ async fn installed_ark_acl_allows_cursor_and_held_retry_without_identity_access(
             .hset(GRANTS_KEY, &field, &hex::encode(grant.encode()))
             .await
             .unwrap();
+        // ACL/protocol fixture only. The pool-owned PG test checks actual
+        // transactional persistence; this fixture proves restricted forwarding.
+        let entries = admin
+            .read_group(CONSUMPTION_STREAM, "acl-consumption", "issuer", 1)
+            .await
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        let consumption = Consumption::decode(&entries[0].1).unwrap();
+        assert_eq!(consumption.grant, grant);
+        let ack = ConsumptionAck {
+            digest: consumption.digest(),
+            observation_id: 1,
+            recorded_unix_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64,
+        };
+        admin
+            .hset(
+                CONSUMED_KEY,
+                &consumption.field(),
+                &hex::encode(ack.encode()),
+            )
+            .await
+            .unwrap();
     };
     tokio::time::timeout(Duration::from_secs(5), async {
         let (retry, ()) = tokio::join!(restarted.retry_pending(), issue_one);
@@ -290,5 +324,7 @@ async fn installed_ark_acl_allows_cursor_and_held_retry_without_identity_access(
         vec![(stream_id, frozen)]
     );
     assert_noperm(role.add(ORDERS_STREAM, b"still forbidden").await);
+    assert_noperm(role.hset(CONSUMED_KEY, "forged", "ack").await);
+    assert_eq!(admin.len(CONSUMPTION_STREAM).await.unwrap(), 1);
     assert_noperm(role.kv_get("spc:slices").await);
 }

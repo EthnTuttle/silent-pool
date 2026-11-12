@@ -6,6 +6,81 @@ use crate::{
 pub const GRANT_LIFETIME_SECS: u64 = 10;
 pub const REQUESTS_STREAM: &str = "spc:ark:authorization:requests";
 pub const GRANTS_KEY: &str = "spc:ark:authorization:grants";
+pub const CONSUMPTION_STREAM: &str = "spc:ark:authorization:consumption";
+pub const CONSUMED_KEY: &str = "spc:ark:authorization:consumed";
+
+/// Opaque observation of consuming an existing lease, never another grant.
+/// No identity, destination, block hash or membership can enter this frame.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Consumption {
+    pub grant: AuthorizationGrant,
+    pub observed_unix_ms: u64,
+}
+impl Consumption {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut w = Writer::default();
+        w.bytes(b"SPAC\x01")
+            .bytes(&self.grant.encode())
+            .u64(self.observed_unix_ms);
+        w.finish()
+    }
+    pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
+        let mut r = Reader::new(bytes);
+        if r.array::<5>()? != *b"SPAC\x01" {
+            return Err(Error::InvalidTnf);
+        }
+        let grant = AuthorizationGrant::decode(r.take(149)?)?;
+        let observed_unix_ms = r.u64()?;
+        r.finish()?;
+        Ok(Self {
+            grant,
+            observed_unix_ms,
+        })
+    }
+    pub fn digest(&self) -> [u8; 32] {
+        tagged("SPc/ArkConsumptionV1", &self.encode())
+    }
+    pub fn field(&self) -> String {
+        format!(
+            "{}:{}",
+            hex::encode(self.grant.request.order_id),
+            hex::encode(self.grant.request.nonce)
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConsumptionAck {
+    pub digest: [u8; 32],
+    pub observation_id: u64,
+    pub recorded_unix_ms: u64,
+}
+impl ConsumptionAck {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut w = Writer::default();
+        w.bytes(b"SPCA\x01")
+            .bytes(&self.digest)
+            .u64(self.observation_id)
+            .u64(self.recorded_unix_ms);
+        w.finish()
+    }
+    pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
+        let mut r = Reader::new(bytes);
+        if r.array::<5>()? != *b"SPCA\x01" {
+            return Err(Error::InvalidTnf);
+        }
+        let result = Self {
+            digest: r.array()?,
+            observation_id: r.u64()?,
+            recorded_unix_ms: r.u64()?,
+        };
+        r.finish()?;
+        if result.observation_id == 0 {
+            return Err(Error::InvalidTnf);
+        }
+        Ok(result)
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProvedReceipt {
@@ -218,5 +293,47 @@ mod tests {
         // Fixed-size schema has no identity or member-count field.
         assert_eq!(request.encode().len(), 69);
         assert_eq!(grant.encode().len(), 149);
+    }
+
+    #[test]
+    fn opaque_consumption_frames_bind_exact_grant_clock_and_refuse_extra_fields() {
+        let request = AuthorizationRequest {
+            order_id: [1; 16],
+            order_digest: [2; 32],
+            nonce: [3; 16],
+        };
+        let grant = AuthorizationGrant {
+            request,
+            revision: 4,
+            expires_at: 110,
+            signature: [5; 64],
+        };
+        let event = Consumption {
+            grant,
+            observed_unix_ms: 101_234,
+        };
+        let bytes = event.encode();
+        assert_eq!(bytes.len(), 162);
+        assert_eq!(Consumption::decode(&bytes).unwrap(), event);
+        let mut changed = event.clone();
+        changed.observed_unix_ms += 1;
+        assert_ne!(changed.digest(), event.digest());
+        let ack = ConsumptionAck {
+            digest: event.digest(),
+            observation_id: 9,
+            recorded_unix_ms: 101_240,
+        };
+        assert_eq!(ack.encode().len(), 53);
+        assert_eq!(ConsumptionAck::decode(&ack.encode()).unwrap(), ack);
+        let mut extra = bytes.clone();
+        extra.extend_from_slice(&[0x91; 32]);
+        assert!(Consumption::decode(&extra).is_err());
+        for end in 0..bytes.len() {
+            assert!(Consumption::decode(&bytes[..end]).is_err());
+        }
+        assert!(
+            !bytes.windows(32).any(|w| w == [0x91; 32]),
+            "no identity or block field exists in this frame"
+        );
     }
 }

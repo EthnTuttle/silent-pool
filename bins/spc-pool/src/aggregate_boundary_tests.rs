@@ -11,6 +11,207 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 // Fixed production stream, separate owned fixture databases.
 static AUTHORIZATION_FIXTURE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+#[tokio::test]
+async fn consumption_dispatch_crosses_poison_pel_prefix_and_commits_later_valid_receipt() {
+    use spc_ext::authorization::{Consumption, ConsumptionAck, CONSUMED_KEY, CONSUMPTION_STREAM};
+    let _fixture = AUTHORIZATION_FIXTURE.lock().await;
+    let vtxo = &ark::test_util::VTXO_VECTORS.board_vtxo;
+    let (svc, order, request) = fixture(vtxo, vtxo.server_pubkey()).await;
+    svc.streams
+        .ensure_group_from(CONSUMPTION_STREAM, GROUP, "0")
+        .await
+        .unwrap();
+    let frozen = svc.store.aggregate(&order.order_id).await.unwrap().unwrap();
+    let read = svc.observe_canonical_members(&frozen.members).await;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap();
+    let grant = svc
+        .store
+        .authorize_aggregate_observed(&request, &read, now.as_secs(), &key())
+        .await
+        .unwrap()
+        .unwrap();
+    let consumption = Consumption {
+        grant,
+        observed_unix_ms: now.as_millis() as u64,
+    };
+    for _ in 0..65 {
+        svc.streams
+            .add(CONSUMPTION_STREAM, b"invalid opaque frame")
+            .await
+            .unwrap();
+    }
+    let last = svc
+        .streams
+        .add(CONSUMPTION_STREAM, &consumption.encode())
+        .await
+        .unwrap();
+    let claimed = svc
+        .streams
+        .read_group(CONSUMPTION_STREAM, GROUP, "consumption-observer", 128)
+        .await
+        .unwrap();
+    assert!(claimed.iter().any(|(id, _)| id == &last));
+    svc.process_consumptions().await.unwrap(); // bounded first 64 poisoned entries
+    assert!(svc
+        .streams
+        .hget(CONSUMED_KEY, &consumption.field())
+        .await
+        .unwrap()
+        .is_none());
+    svc.process_consumptions().await.unwrap(); // remaining poison, then valid same-lease request
+    let encoded = svc
+        .streams
+        .hget(CONSUMED_KEY, &consumption.field())
+        .await
+        .unwrap()
+        .unwrap();
+    let ack = ConsumptionAck::decode(&hex::decode(encoded).unwrap()).unwrap();
+    assert_eq!(ack.digest, consumption.digest());
+    let body: serde_json::Value =
+        sqlx::query_scalar("SELECT body FROM source_decision_observation WHERE observation_id=$1")
+            .bind(ack.observation_id as i64)
+            .fetch_one(svc.store.pool())
+            .await
+            .unwrap();
+    assert_eq!(body["status"], "recorded");
+    assert_eq!(body["request_bytes"], hex::encode(consumption.encode()));
+    assert_eq!(
+        svc.store
+            .aggregate(&order.order_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        "authorized"
+    );
+    assert_eq!(svc.streams.len(&svc.receipts_stream).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn consumption_is_committed_before_escape_and_replay_never_reissues() {
+    let _fixture = AUTHORIZATION_FIXTURE.lock().await;
+    let vtxo = &ark::test_util::VTXO_VECTORS.board_vtxo;
+    let (svc, order, _) = fixture(vtxo, vtxo.server_pubkey()).await;
+    svc.streams
+        .ensure_group_from(REQUESTS_STREAM, GROUP, "0")
+        .await
+        .unwrap();
+    let _dispatcher = svc.authorization_dispatcher().await.unwrap();
+    let escaped = Arc::new(AtomicUsize::new(0));
+    let streams = svc.streams.independent().await.unwrap();
+    let mut worker = crate::ark::ArkService::new(
+        crate::ark::OrderVerifier::new(
+            key().x_only_public_key().0,
+            <[u8; 4]>::from(ark::address::ArkId::from_server_pubkey(
+                vtxo.server_pubkey(),
+            )),
+            u64::MAX,
+            0,
+        ),
+        crate::ark::SeenOrders::new(streams.clone(), 6),
+        CapacityTransport {
+            lock: Arc::new(tokio::sync::Mutex::new(())),
+            entered: std::sync::Mutex::new(None),
+            escaped: escaped.clone(),
+            deadline: Duration::from_millis(20),
+        },
+        streams,
+        110,
+    )
+    .require_fresh_authorization();
+    assert!(!worker.handle(&order).await.unwrap());
+    assert_eq!(escaped.load(Ordering::SeqCst), 1);
+    let bodies: Vec<serde_json::Value> = sqlx::query_scalar(
+        "SELECT body FROM source_decision_observation WHERE kind='authorization_consumption'",
+    )
+    .fetch_all(svc.store.pool())
+    .await
+    .unwrap();
+    assert_eq!(bodies.len(), 1);
+    let consumption = spc_ext::authorization::Consumption::decode(
+        &hex::decode(bodies[0]["request_bytes"].as_str().unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(consumption.grant.request.order_id, order.order_id);
+    assert!(consumption.observed_unix_ms / 1000 < consumption.grant.expires_at);
+    assert!(!worker.handle(&order).await.unwrap());
+    assert_eq!(escaped.load(Ordering::SeqCst), 1);
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM source_decision_observation WHERE kind='authorization_consumption'",
+    )
+    .fetch_one(svc.store.pool())
+    .await
+    .unwrap();
+    assert_eq!(count, 1);
+    assert!(svc
+        .streams
+        .sismember(crate::ark::SeenOrders::AMBIGUOUS_KEY, &order.order_id)
+        .await
+        .unwrap());
+    assert_eq!(svc.streams.len(&svc.receipts_stream).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn lost_consumption_receipt_has_no_escape_and_late_persistence_cannot_restart_send() {
+    let _fixture = AUTHORIZATION_FIXTURE.lock().await;
+    let vtxo = &ark::test_util::VTXO_VECTORS.board_vtxo;
+    let (svc, order, _) = fixture(vtxo, vtxo.server_pubkey()).await;
+    svc.streams
+        .ensure_group_from(REQUESTS_STREAM, GROUP, "0")
+        .await
+        .unwrap();
+    svc.streams
+        .ensure_group_from(spc_ext::authorization::CONSUMPTION_STREAM, GROUP, "0")
+        .await
+        .unwrap();
+    let mut issuer = svc.clone();
+    issuer.streams = svc.streams.independent().await.unwrap();
+    let issue = tokio::spawn(async move {
+        issuer.process_authorizations().await.unwrap();
+    });
+    let escaped = Arc::new(AtomicUsize::new(0));
+    let streams = svc.streams.independent().await.unwrap();
+    let mut worker = crate::ark::ArkService::new(
+        crate::ark::OrderVerifier::new(
+            key().x_only_public_key().0,
+            <[u8; 4]>::from(ark::address::ArkId::from_server_pubkey(
+                vtxo.server_pubkey(),
+            )),
+            u64::MAX,
+            0,
+        ),
+        crate::ark::SeenOrders::new(streams.clone(), 6),
+        CapacityTransport {
+            lock: Arc::new(tokio::sync::Mutex::new(())),
+            entered: std::sync::Mutex::new(None),
+            escaped: escaped.clone(),
+            deadline: Duration::from_millis(20),
+        },
+        streams,
+        110,
+    )
+    .require_fresh_authorization();
+    assert!(!worker.handle(&order).await.unwrap());
+    issue.await.unwrap();
+    assert_eq!(escaped.load(Ordering::SeqCst), 0);
+    assert!(svc
+        .streams
+        .sismember(crate::ark::SeenOrders::AMBIGUOUS_KEY, &order.order_id)
+        .await
+        .unwrap());
+    svc.process_consumptions().await.unwrap(); // immutable late observation, never a replacement send
+    assert!(!worker.handle(&order).await.unwrap());
+    assert_eq!(escaped.load(Ordering::SeqCst), 0);
+    let grants: i64 = sqlx::query_scalar("SELECT count(*) FROM ark_send_authorization")
+        .fetch_one(svc.store.pool())
+        .await
+        .unwrap();
+    assert_eq!(grants, 1);
+    assert_eq!(svc.streams.len(&svc.receipts_stream).await.unwrap(), 0);
+}
+
 struct ProofChain {
     blocks: BTreeMap<u32, [u8; 32]>,
     anchor: bitcoin::Transaction,
@@ -340,6 +541,7 @@ impl crate::ark::ArkTransport for CapacityTransport {
     ) -> Result<Vec<Vec<u8>>, String> {
         permit.ok_or("missing permit")?.require_wallet(&self.lock)?;
         authorization.validate(address, sats)?;
+        authorization.persist_consumption(address, sats).await?;
         authorization.enter_cosign(address, sats)?;
         self.escaped.fetch_add(1, Ordering::SeqCst);
         Err("response lost after this attempt's cosign escape".into())

@@ -589,7 +589,8 @@ impl<T: ArkTransport, D: OrderDedupe> ArkService<T, D> {
                     &request,
                     self.verifier.order_pubkey,
                 )
-                .map_err(ArkError::Transport)?,
+                .map_err(ArkError::Transport)?
+                .with_consumption_sink(self.streams.clone()),
                 capacity.as_ref(),
             )
             .await

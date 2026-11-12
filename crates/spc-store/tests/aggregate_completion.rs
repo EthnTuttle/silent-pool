@@ -115,6 +115,247 @@ fn fresh_id() -> [u8; 32] {
     sha256::Hash::hash(uuid::Uuid::new_v4().as_bytes()).to_byte_array()
 }
 
+fn canonical_observation(
+    member: &AggregateMember,
+    tip: u32,
+) -> spc_store::observations::CanonicalRead {
+    spc_store::observations::CanonicalRead {
+        schema: "spc.canonical-read/1".into(),
+        source_session: [7; 16],
+        started_unix_ms: Some(1),
+        finished_unix_ms: Some(2),
+        authoritative: true,
+        tip: Some(tip),
+        tip_hash: Some([9; 32]),
+        tip_after: Some(tip),
+        tip_hash_after: Some([9; 32]),
+        outcome: "complete".into(),
+        members: vec![spc_store::observations::CanonicalMemberRead {
+            height: member.block_height,
+            expected_hash: member.block_hash,
+            observed_hash: Some(member.block_hash),
+            read_status: "present".into(),
+        }],
+    }
+}
+
+#[tokio::test]
+async fn observed_grant_consumption_and_working_row_deletion_preserve_exact_history() {
+    use spc_ext::authorization::Consumption;
+    let store = store().await;
+    let member = member(&store, fresh_id(), fresh_id(), 100, 10_000).await;
+    let order = store
+        .freeze_aggregate(std::slice::from_ref(&member), 110, [9; 32], &signer())
+        .await
+        .unwrap();
+    store.publish_aggregate(&order.order_id).await.unwrap();
+    let request = AuthorizationRequest {
+        order_id: order.order_id,
+        order_digest: order_digest(&order).unwrap(),
+        nonce: uuid::Uuid::new_v4().into_bytes(),
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let read = canonical_observation(&member, 110);
+    let grant = store
+        .authorize_aggregate_observed(&request, &read, now, &signer())
+        .await
+        .unwrap()
+        .unwrap();
+    let row=sqlx::query("SELECT transaction_id,body FROM source_decision_observation WHERE kind='authorization_decision' AND subject=$1 AND body->>'outcome'='issued'")
+        .bind(&order.order_id[..]).fetch_one(store.pool()).await.unwrap();
+    let body: serde_json::Value = row.get("body");
+    assert_eq!(body["canonical_read"], serde_json::to_value(&read).unwrap());
+    assert_eq!(body["grant_bytes"], hex::encode(grant.encode()));
+    assert_eq!(body["queried_members"].as_array().unwrap().len(), 1);
+    let issuance_xid:i64=sqlx::query_scalar("SELECT transaction_id FROM source_decision_observation WHERE kind='authorization_row' AND subject=$1 AND body->>'operation'='INSERT'")
+        .bind(&order.order_id[..]).fetch_one(store.pool()).await.unwrap();
+    assert_eq!(issuance_xid, row.get::<i64, _>("transaction_id"));
+    assert!(store
+        .authorize_aggregate_observed(&request, &read, now, &signer())
+        .await
+        .unwrap()
+        .is_none());
+    let consumption = Consumption {
+        grant: grant.clone(),
+        observed_unix_ms: now * 1000,
+    };
+    let ack = store
+        .observe_authorization_consumption(&consumption)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(ack.digest, consumption.digest());
+    assert!(ack.recorded_unix_ms / 1000 < grant.expires_at);
+    assert_eq!(
+        store
+            .observe_authorization_consumption(&consumption)
+            .await
+            .unwrap()
+            .unwrap(),
+        ack
+    );
+    let mut conflict = consumption.clone();
+    conflict.observed_unix_ms += 1;
+    assert!(store
+        .observe_authorization_consumption(&conflict)
+        .await
+        .is_err());
+    sqlx::query("UPDATE ark_send_authorization SET checked_tip=checked_tip WHERE order_id=$1")
+        .bind(&order.order_id[..])
+        .execute(store.pool())
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM ark_send_authorization WHERE order_id=$1")
+        .bind(&order.order_id[..])
+        .execute(store.pool())
+        .await
+        .unwrap();
+    let history:Vec<serde_json::Value>=sqlx::query_scalar("SELECT body FROM source_decision_observation WHERE kind='authorization_row' AND subject=$1 ORDER BY observation_id")
+        .bind(&order.order_id[..]).fetch_all(store.pool()).await.unwrap();
+    assert_eq!(history.len(), 3);
+    assert_eq!(history[2]["operation"], "DELETE");
+    assert_eq!(
+        history[2]["before"]["grant_bytes"],
+        format!("\\x{}", hex::encode(grant.encode()))
+    );
+    assert_eq!(
+        store
+            .observe_authorization_consumption(&consumption)
+            .await
+            .unwrap()
+            .unwrap(),
+        ack,
+        "duplicate returns original evidence even after working-row scrub"
+    );
+    assert_eq!(
+        store
+            .aggregate(&order.order_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        "authorized"
+    );
+    assert!(
+        store
+            .aggregate_candidates(&member.sp_id)
+            .await
+            .unwrap()
+            .is_empty(),
+        "observation never refunds/reissues membership"
+    );
+}
+
+#[tokio::test]
+async fn observation_failure_rolls_back_grant_and_unknown_canonical_read_never_issues() {
+    let store = store().await;
+    let member = member(&store, fresh_id(), fresh_id(), 100, 10_000).await;
+    let order = store
+        .freeze_aggregate(std::slice::from_ref(&member), 110, [9; 32], &signer())
+        .await
+        .unwrap();
+    store.publish_aggregate(&order.order_id).await.unwrap();
+    let request = AuthorizationRequest {
+        order_id: order.order_id,
+        order_digest: order_digest(&order).unwrap(),
+        nonce: uuid::Uuid::new_v4().into_bytes(),
+    };
+    let mut read = canonical_observation(&member, 110);
+    read.tip_after = Some(111);
+    assert!(store
+        .authorize_aggregate_observed(&request, &read, 100, &signer())
+        .await
+        .unwrap()
+        .is_none());
+    read.tip_after = Some(110);
+    sqlx::query("CREATE FUNCTION reject_test_observation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.kind='authorization_decision' AND NEW.body->>'outcome'='issued' THEN RAISE EXCEPTION 'fixture observation persistence failure'; END IF; RETURN NEW; END $$")
+        .execute(store.pool()).await.unwrap();
+    sqlx::query("CREATE TRIGGER reject_test_observation BEFORE INSERT ON source_decision_observation FOR EACH ROW EXECUTE FUNCTION reject_test_observation()")
+        .execute(store.pool()).await.unwrap();
+    assert!(store
+        .authorize_aggregate_observed(&request, &read, 100, &signer())
+        .await
+        .is_err());
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM ark_send_authorization")
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM source_decision_observation WHERE kind='authorization_row'",
+    )
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    assert_eq!(count, 0);
+    assert_eq!(
+        store
+            .aggregate(&order.order_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        "published"
+    );
+}
+
+#[tokio::test]
+async fn expired_consumption_is_unknown_and_does_not_release_the_order() {
+    let store = store().await;
+    let member = member(&store, fresh_id(), fresh_id(), 100, 10_000).await;
+    let order = store
+        .freeze_aggregate(std::slice::from_ref(&member), 110, [9; 32], &signer())
+        .await
+        .unwrap();
+    store.publish_aggregate(&order.order_id).await.unwrap();
+    let request = AuthorizationRequest {
+        order_id: order.order_id,
+        order_digest: order_digest(&order).unwrap(),
+        nonce: uuid::Uuid::new_v4().into_bytes(),
+    };
+    let grant = store
+        .authorize_aggregate_observed(
+            &request,
+            &canonical_observation(&member, 110),
+            100,
+            &signer(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let consumption = spc_ext::authorization::Consumption {
+        grant,
+        observed_unix_ms: 101_000,
+    };
+    assert!(store
+        .observe_authorization_consumption(&consumption)
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        store
+            .aggregate(&order.order_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        "authorized"
+    );
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM source_decision_observation WHERE kind='authorization_consumption' AND body->>'status'='recorded'",
+    )
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    assert_eq!(count, 0);
+    let body:serde_json::Value=sqlx::query_scalar("SELECT body FROM source_decision_observation WHERE kind='authorization_consumption' AND body->>'status'='unknown'")
+        .fetch_one(store.pool()).await.unwrap();
+    assert_eq!(body["reason"], "grant_mismatch_or_expired");
+}
+
 #[tokio::test]
 async fn threshold_timeout_freeze_grant_and_all_covered_atomic_receipt() {
     let store = store().await;

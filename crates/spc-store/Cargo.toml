@@ -10,6 +10,7 @@ rust-version.workspace = true
 postgres-integration = []
 
 [dependencies]
+hex.workspace = true
 bitcoin.workspace = true
 spc-accounting.workspace = true
 spc-crypto.workspace = true
@@ -25,6 +26,5 @@ tokio.workspace = true
 uuid = { version = "1", features = ["v4", "serde"] }
 
 [dev-dependencies]
-hex.workspace = true
 futures-util = "0.3"
 redis = { version = "0.27", features = ["tokio-comp", "streams"] }
