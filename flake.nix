@@ -157,6 +157,14 @@
             preInstallCheck = (old.preInstallCheck or "") + ''
               mkdir -p /tmp/opencode
               mkdir -p "$out/share"
+              # The Nix build sandbox sets HOME=/homeless-shelter (absent and
+              # non-writable). chromium-156's crashpad handler aborts at
+              # startup there ("--database is required", SIGTRAP) before the
+              # DevTools endpoint comes up, so the ui-browser-tests gate step
+              # would always hit its 15s Chrome timeout. chromium only needs
+              # a writable HOME for its crash-database/config dirs; point it
+              # at the derivation's private writable build top.
+              export HOME="$NIX_BUILD_TOP"
             '';
           });
           spc-pool-ark = mkBinary "spc-pool" "rpc,ark";
