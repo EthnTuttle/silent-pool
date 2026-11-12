@@ -139,8 +139,16 @@
             inherit (arkPackages) captaind bark;
             probe = import ./nix/lab/ark-probe.nix { inherit pkgs; };
           };
-          inherit (ap5Packages) ap5-tools ap5-vtxo-verifier ap5-qa-source
-            ap5-inputs;
+          # ap5-inputs is NOT inherited from ap5Packages: the intake's
+          # aggregation embeds the intake (un-overridden)
+          # spc-lab-ap5-qualified out paths, which can never complete its
+          # installCheck in the build sandbox (no /tmp/opencode, no $out/share
+          # parent, no HOME/FONTCONFIG_FILE/CARGO_TARGET_DIR/probe-copy
+          # provisions - the attempt-1 failure signature). The flake-level
+          # ap5-inputs below re-derives the same outputs.json aggregation
+          # binding THIS flake's sandbox-qualified derivation instead; the
+          # intake packages.nix stays byte-exact.
+          inherit (ap5Packages) ap5-tools ap5-vtxo-verifier ap5-qa-source;
           # The qualified derivation's install-check gate executes the frozen
           # reviewed test sources (R4 pool-control wallet_control tests,
           # cpu-miner evidence/lifecycle helpers, agent native-source-audit
@@ -230,6 +238,60 @@
               fi
               runHook postInstallCheck
             '';
+          });
+          # ap5-inputs aggregation mirroring the intake packages.nix exactly
+          # (same schema, same field set), but binding the flake-overridden
+          # sandbox-qualified derivation above instead of the intake's
+          # un-provisioned one. Every non-qualified input is the identical
+          # derivation the intake receives (same locked nixpkgs, same
+          # rbitcoin-node-ark-lab, arkPackages captaind/bark, ark-probe,
+          # ap5Packages verifier/qa-source), so the resulting paths are
+          # byte-identical to the intake's for all fields except the
+          # qualified-bound ones and the runtime script. The runtime is
+          # re-imported from the same nix/lab/ark-runtime.nix with the
+          # qualified package in all six application roles, exactly as the
+          # intake's internal runtime does. The intake packages.nix is frozen
+          # (byte-exact R4 packet); if it ever changes, this mirror must be
+          # updated in the same change.
+          ap5-inputs = let
+            probePkg = import ./nix/lab/ark-probe.nix { inherit pkgs; };
+            qualifiedRuntime = import ./nix/lab/ark-runtime.nix {
+              inherit pkgs src;
+              node = rbitcoin-node-ark-lab;
+              lab = spc-lab-ap5-qualified;
+              pool = spc-lab-ap5-qualified;
+              miner = spc-lab-ap5-qualified;
+              scanner = spc-lab-ap5-qualified;
+              agent = spc-lab-ap5-qualified;
+              txd = spc-lab-ap5-qualified;
+              probe = probePkg;
+              inherit (arkPackages) captaind;
+            };
+          in pkgs.writeTextDir "outputs.json" (builtins.toJSON {
+            schema = "spc.lab.ap5.nix-outputs/v1";
+            base_revision = if self ? rev then self.rev else "nix-snapshot";
+            binaries = {
+              lab = "${spc-lab-ap5-qualified}/bin/spc-lab";
+              txd = "${spc-lab-ap5-qualified}/bin/spc-lab-txd";
+              pool = "${spc-lab-ap5-qualified}/bin/spc-pool";
+              agent = "${spc-lab-ap5-qualified}/bin/spc-agent";
+              miner = "${spc-lab-ap5-qualified}/bin/spc-cpu-miner";
+              scanner = "${spc-lab-ap5-qualified}/bin/spc-scan";
+              node = "${rbitcoin-node-ark-lab}/bin/rbitcoin-node";
+              captaind = "${arkPackages.captaind}/bin/captaind";
+              bark = "${arkPackages.bark}/bin/bark";
+              grpcurl = "${pkgs.grpcurl}/bin/grpcurl";
+              probe = "${probePkg}/bin/ark-rpc-probe";
+              redis-server = "${pkgs.redis}/bin/redis-server";
+              redis-cli = "${pkgs.redis}/bin/redis-cli";
+              psql = "${pkgs.postgresql_17}/bin/psql";
+            };
+            postgres_bin_dir = "${pkgs.postgresql_17}/bin";
+            runtime_script = "${qualifiedRuntime}/bin/spc-lab-self-hosted-ark";
+            pool_wallet_executor = "${spc-lab-ap5-qualified}/bin/pool-wallet-executor";
+            vtxo_verifier = "${ap5Packages.ap5-vtxo-verifier}/bin/ap5-vtxo-verifier";
+            qa_descriptor = "${ap5Packages.ap5-qa-source}/qa-source.json";
+            qa_path_env = pkgs.lib.makeBinPath [ spc-lab-ap5-qualified rbitcoin-node-ark-lab arkPackages.captaind arkPackages.bark probePkg pkgs.postgresql_17 pkgs.redis pkgs.grpcurl pkgs.coreutils ];
           });
           spc-pool-ark = mkBinary "spc-pool" "rpc,ark";
           spc-agent-ark = mkBinary "spc-agent" "ark";
