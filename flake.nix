@@ -253,6 +253,10 @@
               pname = "spc-ark-feature-tests";
               version = "0.1.0";
               doCheck = true;
+              # The two native_audit fixture-CPU tests spawn `python3` (the
+              # reviewed test module's owned fixture interpreter), which is
+              # not on the buildRustPackage sandbox PATH by default.
+              nativeBuildInputs = common.nativeBuildInputs ++ [ pkgs.python3 ];
               inherit (joint) preBuild preCheck;
               preConfigure = "mkdir -p /tmp/opencode";
               installPhase = ''
