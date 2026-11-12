@@ -1,11 +1,18 @@
 # silent-pool — Component Architecture
 
-Status: design-phase map for implementation planning. The only code today is the
+Status: **historical target-design map for implementation planning, not the
+current runtime role catalog.** It was written when the only code was the
 validated prototype trio (`spc_ark/`, `spc_ark_mailbox/`, `spc_ark_client/`,
-see `RESULTS.md`); everything else is specified in `docs/SPEC.md` (§1, §5, §6,
-§7.1, §11) and phased in `docs/ROADMAP.md`. Where this file and the spec
-disagree, the spec wins; where the payout derivation is concerned,
-`DESIGN.md` wins over both.
+see `RESULTS.md`). Implemented pool, miner, agent and lab code now exists. For
+the processes and browser/API surfaces actually launched by the current lab,
+use [`LAB-ROLES.md`](LAB-ROLES.md) and [`LAB-RUNTIME.md`](LAB-RUNTIME.md).
+The target design remains specified in `docs/SPEC.md` (§1, §5, §6, §7.1, §11)
+and phased in `docs/ROADMAP.md`. Where this file and the spec disagree, the
+spec wins; where the payout derivation is concerned, `DESIGN.md` wins over
+both. The historical statement below that the pool never speaks SV1 is
+obsolete: the target component map itself and the current implementation both
+include native SV1. This banner records that documentation history; it does
+not reinterpret normative `DESIGN.md` or `SPEC.md` behavior.
 
 ## 1. System context
 
@@ -48,7 +55,10 @@ disagree, the spec wins; where the payout derivation is concerned,
 External systems the design depends on but does not build: bitcoin-core
 (template provider; IPC with the `block_reserved_weight` fix or sv2-tp, SPEC
 §7.1), a stock third-party `captaind` Ark server (SPEC §11.3, O17), Redis, and
-Postgres. The pool never speaks SV1 and never runs an Ark server.
+Postgres. The historical sentence here saying that the pool never speaks SV1
+was obsolete even within this target map: the current implementation serves
+native SV1 and SV2. The pool uses an independent Ark server rather than
+running one itself.
 
 ## 2. Component inventory
 
@@ -59,7 +69,7 @@ Postgres. The pool never speaks SV1 and never runs an Ark server.
 | `spc-pool --roles front` | `sv2-apps/pool-apps/pool` (incl. its bundled JDS) | SV2 MP listeners, **native SV1 listener**, **and the JDP listener** (the `spc-jds` module: `0x0003` publication + validation, JD always on), template stream, job building, share validation, slice aggregation, block submit, distribution building + publishing, `a_send` generation | `a_send[H]` (RAM only, zeroised on height advance; SPEC §2.2); Noise authority key | Redis (write streams); Bootstrap RPC to `payout` at start (window rebuild; single-site: Postgres read) |
 | `spc-pool --roles payout` | (Blitzpool pattern, re-implemented) | Slice persistence, confirmation-gated idempotent ledger apply, Ark send-order signing/scheduling, scrub job | Ark order-signing key (not the ark seed) | **Sole Postgres writer**; Redis streams |
 | `spc-pool --roles api` | — | Read-only HTTP/JSON, public + `b_scan`-authenticated | none | Postgres read, Redis read |
-| `spc-pool --roles ark` | bark wallet integration | Pool's bark wallet + Ark float; executes signed, capped `ArkSendOrder`s; boards matured pool outputs to refill float | the **`ark` seed** (bark wallet + pool output keychain `m/86'/coin'/1'`) — the pool's only hot spending key | Redis ACL: read `spc:ark:orders`, write `spc:ark:receipts` **only**; no Postgres |
+| `spc-pool --roles ark` | bark wallet integration | Pool wallet/float; fresh authorized opaque orders; matured-output boarding | Independent Ark seed, no SPc secrets | Redis order/receipt plus opaque nonce authorization channels (WIRE §3.8); no Postgres or identity-bearing stream |
 | `spc-agent` | `sv2-apps/miner-apps/{translator, jd-client}` (+ warioishere/sv2-apps@90b3e3d for 0x0003 JDC) | Miner side, one binary/one seed: translator role (SV1→SV2), JDC role (own template), own-payout verifier (SPEC §3.6), both-tier scanner, SP-aware bark keystore, registration client (0x5350), refresh/offboard | `b_scan`, `b_ark`, mailbox key(s); **never** `b_spend` or the master seed (SPEC §11.5) | local wallet DB |
 | `spc-scan` | new | Reference scanner lib + CLI; finds/exports SPc outputs from blocks or header+branch+coinbase triples; type-32 audit client | `b_scan` (watch-only use) | none (stateless) |
 
@@ -184,8 +194,8 @@ Every TCP row above MAY be carried over Tor without a protocol change (SPEC §3.
 | `spc:slices` | front → payout | sealed `Slice` + per-identity aggregates (`Σd`, `Σd·f`) |
 | `spc:blocks` | front → payout | `{block_hash, height, front_id, fingerprint, high_water, entries}` on accepted submit |
 | `spc:stats` | front → payout/api | per-minute `{sp_id, accepted_d, rejected, hashrate_est}` — never per share |
-| `spc:arkreg` | front → payout | `{sp_id, b_scan, b_spend, ark_id, b_ark, mailbox_mode, M, D, epoch_fallback, sig}` (registration) |
-| `spc:front:events` | payout → all fronts | `ArkRegApplied{sp_id, rev}`, `LedgerApplied{block_hash, pending_deltas, republish}`, `BlockFound{block_hash, height, front_id, provisional_paids, high_water}`, `TipHeartbeat{hash, height}` |
+| `spc:arkreg` | front → payout | `{sp_id, b_scan, b_spend, ark_id, b_ark, mailbox_mode, M, D, epoch_fallback, sig, request_id, attempt}` (registration; attempt is the internal per-handle ack nonce) |
+| `spc:front:events` | payout -> all fronts | `ArkRegApplied`, `LedgerApplied`, historical `BlockFound`, `TipHeartbeat`, `EconomicChanged{rev,economic_revision,anchor_hash}`; WIRE §3.2 |
 | `spc:ark:orders` | payout → ark | signed `ArkSendOrder{order_id, ark_address, sats, not_before_height, sig}` — **no identity fields** |
 | `spc:ark:receipts` | ark → payout | `ArkSendReceipt{order_id, status, vtxo_id, expiry_height}` |
 
@@ -249,6 +259,17 @@ pool-template mode, weights in JD mode).
 
 `spc-share-ext`: message structs + `serve(window_store)` + `verify(samples)`
 (sampling verifier, `s` slices × `m` shares; SPEC §3.7).
+
+## 5.5 Ark registration public metadata
+When `[ark] enabled = true` and the `front` role is selected,
+`server_pubkey` and `mailbox_pubkey` are REQUIRED compressed-point hex strings
+from actual ArkInfo. The configured `ark_id` must equal
+`ArkId::from_server_pubkey(server_pubkey)`. These are public derivation inputs
+permitted to front; no SPc identity or Ark wallet/order secret crosses into
+`ark`. An ark-only role does not need them, but payout/front registration and
+actual 0x5350 advertisement cannot operate without valid metadata and Redis.
+Internal registration streams append a per-handle `attempt` nonce echoed by
+the ack, forcing a fresh durable resolution without changing the client wire.
 
 ## 6. Secrets and trust boundaries
 

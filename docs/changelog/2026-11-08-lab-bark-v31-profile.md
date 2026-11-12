@@ -1,0 +1,1 @@
+  - "2026-11-08: lab-only opt-in rbitcoin bark-v31 RPC compat profile adopted for isolated Ark development use; default node, pins and v0.9 adoption unchanged, no SPEC sections change. See docs/decisions/2026-11-08-lab-bark-v31-profile.md."

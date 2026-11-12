@@ -42,6 +42,50 @@ value except `"mock"`, which is accepted only on regtest/signet when
 TDP sources are not implemented in this build; they land with the
 rbitcoin/TP packet. Do not configure them expecting startup.
 
+### 1.1 v2 work-unit profile (opt-in, regtest only)
+
+The production accounting policy remains v1 (`share_difficulty`, `N * d`). The
+`network_block_work` profile is an opt-in lab feature, not a silent production
+change:
+
+```toml
+[accounting]
+work_unit_version = 2
+work_reference_target = "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"  # R = 2^255 - 1
+share_work_multiplier = 2                 # m = 2^j
+max_work_multiplier = 4294967296
+max_window_target_units = "18446744073709551616"
+pow_limit_bits = 0x207fffff               # must equal the node's effective consensus value
+window_rule = "network_block_work"
+# share_difficulty MUST be absent in v2.
+```
+
+v2 is restricted to `pool.network = "regtest"`. It requires exact power-of-two
+reference/multiplier values, rejects a reference below the effective pow limit,
+rejects legacy `share_difficulty`, disables SV1 ingress, and **does not
+advertise or accept type-32**: requests receive `unsupported-extension` and no
+v2 slice populates the type-32 store. The issued target family is
+`S(2^j) = 2^(k-j) - 1`, issued credit is exactly `2^j`, and a new generation
+is allocated on retarget/multiplier change. v2 arithmetic is checked; overflow
+or mixed-profile restore fails closed. The production denomination ladder,
+`DESIGN.md`, and exact `owed` remaining the settlement authority are unchanged;
+the lab feature does not amend payout policy.
+
+The v2 window is `Q(T) = ceil(N * (R + 1) / (T + 1))` network-reference units,
+not `N * d`. `Q` and the profile are persisted; settlement uses the snapshot's
+frozen version/fingerprint/rule/target. If the bounded history cannot reach Q,
+the result is explicit `window_underfilled` (warmup/inconclusive), never an
+N-block coverage claim.
+
+**Retention/scrub.** Durable deletion is selected per stored row version, not
+by the running payout's configured version. v1 keeps its legacy horizon and is
+never extended by a v2 setting. v2 uses the explicit `height < tip - 4096`
+cutoff (a row at `tip - 4096` is retained). The live v2 RAM tail is capped at
+4096 slices and uses the template height `tip + 1` (`height >= tip + 1 - 4096`),
+one block stricter than SQL, so RAM never serves a credit SQL has expired. This
+v2-only identity-retention extension never crosses the Ark boundary and adds no
+identity field there.
+
 ## 2. Roles and ports
 
 One binary, `spc-pool`, four roles, selected with `--roles` (or `[pool] roles`
@@ -65,7 +109,8 @@ lease at start and refuses to start if the lease is held.
 | `spc-agent` | outbound via SOCKS5 (optional) - upstream SV2 and JDP only | `[net] proxy` | SOCKS 9050 |
 
 Both `front` listeners (SV1 and SV2) feed the same share, slice and
-distribution path. The `payout` and `ark` roles have no inbound ports; they
+distribution path in v1. In v2 the SV1 listener is rejected and only the native
+SV2 listener is served. The `payout` and `ark` roles have no inbound ports; they
 talk to Redis/Postgres and the Ark server respectively. `spc-agent` connects
 upstream to `[pool] listen` (SV2) and serves local SV1 miners.
 
@@ -153,7 +198,9 @@ no spending key lives on that side - it holds only the xpub of
 **Postgres** (`[storage] postgres`): the `payout` role is the sole writer; the
 `api` role reads. Schema lives in `crates/spc-store/migrations/`. The
 `spc-stack` NixOS module provisions the `spc` database and user. See §5 for
-migrations.
+migrations. v2 rows carry `work_unit_version = 2`, a nonzero reference
+fingerprint and `window_rule = 1`; v1 rows carry `1`, NULL and `0`. Mixed
+profile rows or a v2 row with a zero fingerprint fail the schema checks.
 
 **Redis** (`[storage] redis`): the inter-role bus. Streams used today:
 `spc:slices`, `spc:blocks` (front -> payout), `spc:front:events`,
@@ -161,7 +208,8 @@ migrations.
 and `spc:ark:receipts` (ark -> payout); byte formats in
 `docs/WIRE-FORMATS.md`. Trim discipline (SPEC §5.2): `XTRIM MINID` behind the
 slowest live reader (payout group ack, front cursor heartbeats), 600 s floor,
-with a 1M-entry backstop alarm and re-bootstrap. The NixOS module runs the
+with a 1M-entry backstop alarm and re-bootstrap. The front event reader owns
+its own Redis connection; it must not share the publisher's blocking client. The NixOS module runs the
 `spc` Redis server with AOF `everysec` and no RDB. When fronts are remote,
 use TLS and per-front ACLs (`docs/MULTI-REGION.md` §6).
 
@@ -170,11 +218,23 @@ use TLS and per-front ACLs (`docs/MULTI-REGION.md` §6).
 | Secret | Where it lives | How it is supplied |
 |---|---|---|
 | `a_send[H]` (per-height ephemeral scalar) | `front` RAM only - **never touches disk** | derived in-process per height |
-| Noise `authority` key pair | `front` RAM (SV2 sessions) | `[pool] authority_public_key` publishes the public key |
+| Noise `authority` key pair | inline in the pool TOML | `[pool] authority_public_key` is the public pin; `[pool] authority_secret_key` is private and never logged/published; both MUST be a matching pair. The TOML carrying it SHOULD be mode 0600 (operator convention; the binary does not enforce file mode). |
 | `ark` seed (bark wallet + pool output keychain, hot) | `ark` host only, own secret store | `[ark] seed_path`, default `/run/secrets/ark/seed` |
 | Ark order-signing key (BIP340, CSPRNG) | `payout` host | `[ark] order_key_path`, default `/run/secrets/spc/ark-order-key`, hex 32 B, `0o600` file / `0o700` dir |
 | Ark order pubkey | `ark` host | `[ark] order_pubkey` (config) |
 | Postgres/Redis URLs | pool hosts | `environmentFile` (NixOS module); never in the Nix store |
+
+The Noise authority pair is inline in the pool TOML and must match exactly:
+
+```toml
+[pool]
+authority_public_key = "9auq...PH72"   # public pin; safe to publish
+authority_secret_key = "mkDL...n2"     # throwaway example only; mode 0600; redact from logs/artifacts
+```
+
+The secret is required when the `front` role is selected. A mismatched pair,
+an ephemeral key, or a public key without its secret is a startup error. Do not
+put the secret in a shell argument or commit it; the pool reads the TOML.
 
 Rules that are load-bearing (SPEC §2.2, §7.2, §9, §11.3):
 
@@ -201,7 +261,9 @@ Rules that are load-bearing (SPEC §2.2, §7.2, §9, §11.3):
 
 - Migrations are sqlx (`crates/spc-store/migrations/`), run at boot under
   `pg_advisory_lock(0x5350434d494752)`; any process may run them. Schema
-  changes are additive until v1.0 (SPEC §9).
+  changes are additive until v1.0 (SPEC §9). Migration `0005_lab_work_units.sql`
+  adds the v2 version/fingerprint columns and the distribution window rule with
+  legacy v1 defaults; it does not convert existing rows.
 - Upgrading: deploy the new binary; migrations apply at start. Take a
   pre-migration `pg_dump` first - see the rollback rule.
 - Rollback (SPEC §9): stopping `front` stops mining; that is the whole blast
@@ -210,9 +272,10 @@ Rules that are load-bearing (SPEC §2.2, §7.2, §9, §11.3):
   are paid when the pool resumes; the Ark send is idempotent per
   `(block_hash, sp_id)`. **Downgrading `spc-pool` across a schema version is
   unsupported** - restore from the pre-migration dump instead.
-- Postgres backups inherit the scrub policy: a backup older than
-  `scrub_after_blocks` is itself attribution data and should be rotated on the
-  same schedule (SPEC §9).
+- Postgres backups inherit the scrub policy: a backup older than the applicable
+  horizon is itself attribution data and should be rotated on the same schedule
+  (SPEC §9). v2 `slice_credit` uses the explicit 4096-height cutoff; v1 keeps
+  its legacy horizon. A v2 setting never extends v1 identity retention.
 
 ## 6. Regtest harnesses
 
@@ -280,6 +343,13 @@ e.g. `nix develop -c ./testing/regtest-rbitcoin-reorg-e2e.sh`.
 Ark end-to-end (`just ark-e2e`, `testing/ark-e2e.sh`) additionally needs a
 `captaind` in `PATH` and `SPC_ARK_E2E=1`; CI otherwise runs the mock
 transport.
+
+**Host lab runtime.** The approved host slice builds and runs rbitcoin +
+`spc-pool` + `spc-cpu-miner` + Redis + PostgreSQL and exposes a browser control
+surface. See [`LAB-RUNTIME.md`](LAB-RUNTIME.md) for the exact Nix store paths,
+private artifact layout, commands, node provenance exception, and known
+capability limits. It is an operator/lab tool, not a production deployment
+mode.
 
 ## 7. Metrics and alarms
 
@@ -362,3 +432,21 @@ about, not bugs:
 4. Also pending, lower operational impact: the `"ipc"`/`"sv2-tp"` template
    sources (§1), the seeded `--features cheat-slice-difficulty` statistical
    test, and the normative/security review over the integrated tree.
+5. **Host and namespace lab scope.** The approved `e891f34c` host slice is
+   bounded evidence, not production deployment. The current namespace-runtime
+   candidate additionally documents `--topology`: a host-resident controller,
+   actors entering broker user+network namespaces, per-pool namespaced Redis,
+   host PostgreSQL over private Unix sockets, namespace-scoped node/front RPC,
+   and durable partition/heal evidence; see [`LAB-RUNTIME.md`](LAB-RUNTIME.md)
+   sections 10-12. Convergence is an explicit versioned `phase.convergence`
+   action with declared observation/resume bounds, not an implicit runtime
+   fallback. Actor isolation is a network boundary on a shared filesystem,
+   not a security sandbox. This is a separate candidate requiring Fable approval of its
+   exact source/binary manifest, not an inherited host approval or a general
+   production topology. Host loopback still does not cross namespaces. Nix
+   network-tool outputs are externally blocked and are not required for the
+   core package; host-tool namespace proofs are labelled separately.
+6. **v2 is a lab profile.** It is regtest-only, v1 remains the frozen default,
+   type-32 is v1-only, and the lab's exact-`owed` pre-ladder scope does not
+   amend the production denomination policy. Runtime header/payout oracles and
+   causal hashrate-response claims remain out of scope.

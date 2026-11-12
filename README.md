@@ -2,7 +2,20 @@
 
 A Stratum (SV1 and SV2) mining pool that pays miners to **BIP 352 silent-payment addresses**: one-time, unlinkable P2TR outputs **directly in the coinbase** for earnings above a threshold, and **Ark (bark) out-of-round payments** below it. Accounting is **SLICE / PPLNS-JD**, so miners build their own block templates via Job Declaration and are paid for both hashrate and the fees they selected.
 
-**Status: implementation phase.** The core is running: `spc-crypto`, `spc-scan`, `spc-accounting`, `spc-store`, `spc-ext` and `spc-share-ext` are implemented and tested; `spc-pool` serves native SV1 and SV2, builds the SPc coinbase, assembles and submits blocks, settles through the payout role, and serves the read-only API; `spc-agent` translates SV1 miners to SV2. A real-bitcoind regtest run (`testing/regtest-e2e.sh`) mines two blocks and recovers a miner's coinbase output with `spc-scan`. The Ark role's order verification and the JD distribution validation are in place; the remaining work is the live JDS/JDC loop, the bark wallet adapter, and the type-32 network server. The Ark-tier derivation, mailbox and client prototypes (`spc_ark/`, `spc_ark_mailbox/`, `spc_ark_client/`, see `RESULTS.md`) are still reference material for the wallet side.
+**Status: implementation phase, bounded lab slice.** The core is running:
+`spc-crypto`, `spc-scan`, `spc-accounting`, `spc-store`, `spc-ext` and
+`spc-share-ext` are implemented and tested; `spc-pool` serves native SV1 and
+SV2, builds the SPc coinbase, assembles and submits blocks, settles through the
+payout role, and serves the read-only API; `spc-agent` translates SV1 miners to
+SV2. The opt-in v2 `network_block_work` work-unit profile is implemented for
+regtest only; type-32 remains v1-only and is refused, not advertised, in v2.
+A real-bitcoind regtest run (`testing/regtest-e2e.sh`) mines blocks and recovers
+a miner's coinbase output with `spc-scan`. The approved host lab adds a real
+two-pool runtime with rbitcoin, Redis and PostgreSQL (`docs/LAB-RUNTIME.md`).
+Ark settlement, the denomination ladder and full-window payout auditing remain
+separate gates. An isolated two-node/two-pool native-SV2 namespace lab has an
+implementation report under review; it does not inherit the host approval. See
+`docs/OPERATIONS.md` and `docs/reviews/` for exact scopes.
 
 ## The two ideas
 
@@ -38,14 +51,65 @@ starting points. The pool's `[template] source` is `"rpc"` for the regtest
 harness, `"ipc"`/`"sv2-tp"` for the production TDP paths, and `"mock"` for a
 smoke run.
 
+## Lab quick start
+
+The approved host slice is an operator/lab tool, not a production mode. From
+the approved host-runtime source:
+
+```sh
+nix build \
+  .#packages.x86_64-linux.spc-lab \
+  .#packages.x86_64-linux.spc-pool \
+  .#packages.x86_64-linux.spc-cpu-miner \
+  .#packages.x86_64-linux.spc-scan \
+  --print-out-paths
+
+/nix/store/...-spc-lab-0.1.0/bin/spc-lab runtime \
+  --scenario crates/spc-lab/scenarios/lab-live-v2-two-pools.json \
+  --run-dir /tmp/spc-lab-run-1 \
+  --node /path/to/rbitcoin-node \
+  --pool /nix/store/...-spc-pool-0.1.0/bin/spc-pool \
+  --miner /nix/store/...-spc-cpu-miner-0.1.0/bin/spc-cpu-miner \
+  --scanner /nix/store/...-spc-scan-0.1.0/bin/spc-scan \
+  --postgres-bin-dir /path/to/postgresql/bin \
+  --redis-server /path/to/redis-server \
+  --redis-cli /path/to/redis-cli \
+  --base-revision b0ab4ca34fda07c61a6335d05f598eaacc69678c \
+  --dirty-tree-hash <frozen-code-snapshot-sha256> \
+  --listen 127.0.0.1:0 --duration-secs 120
+```
+
+The printed URL serves the browser controls at `/` and the read-only role /
+process hub at `/lab`; `spc-lab serve` exposes both for recorded read-only
+review. The hub links only actual routes and does not claim wallet or Ark
+services are running. See [`docs/LAB-ROLES.md`](docs/LAB-ROLES.md) for the
+current role map, missing role-native UIs and required next Ark/wallet
+integrations. A headless finite run uses
+`--duration-secs` without `--listen`. Private identities, credentials, node
+cookie and generated configs live under `<run_dir>/private` (`0700` dir,
+`0600` files); inspect with `spc-lab snapshot|events|manifest|command` and stop
+with `stop_run`/duration/`interactive`; `spc-lab reap` only uses persisted
+ownership records. The node is an explicit externally supplied pinned L2 build,
+not a Nix package. See [`docs/LAB-RUNTIME.md`](docs/LAB-RUNTIME.md) for the full
+command set, idempotency rules and known limits (no causal hashrate claim,
+runtime header/payout oracle `inconclusive`, fee/witness/Ark/ladder/SV1 not
+covered). Its namespace section documents actual actor/storage/control
+placement and the separate partition/heal/crash-cleanup proof path.
+
 ## Documents
 
 - [`DESIGN.md`](DESIGN.md) — the one-identity derivation: Ark-tier destination derived from the same per-block ECDH as the coinbase output (authoritative for the Ark-tier key scheme; spec §11.8 defers to it); prototype in [`spc_ark/`](spc_ark/)
 - [`docs/SPEC.md`](docs/SPEC.md) — technical specification v0.1 (architecture, SPc protocol, SV2 surface, SLICE accounting, data model, interfaces, tests, deployment, §11 Ark rail)
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — phased build plan with architecture decisions and risks
+- [`docs/REGTEST-LAB.md`](docs/REGTEST-LAB.md) - review proposal for a headless/browser-controlled rbitcoin network with real SV2 CPU miners, competing pools, and network scenarios
+- [`Regtest lab review synthesis`](docs/reviews/2026-11-05-regtest-lab-review-summary.md) - independent Fable, Opus, Kimi K3, DeepSeek and GLM feedback, with checked findings and corrections
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — component map, interfaces and scoping for implementation planning
 - [`docs/MULTI-REGION.md`](docs/MULTI-REGION.md) — multi-region deployment design (its §10 deltas are mostly adopted into the spec; the spec wins on conflict)
 - [`docs/WIRE-FORMATS.md`](docs/WIRE-FORMATS.md) — byte-level formats of the project's own Redis streams, `spc:arkreg`, `spc:ark:*` and the front bootstrap RPC
+- [`docs/OPERATIONS.md`](docs/OPERATIONS.md) — build, deploy, v2 profile/retention, migrations and harnesses
+- [`docs/LAB-RUNTIME.md`](docs/LAB-RUNTIME.md) — approved host-lab startup, browser/headless controls, artifacts and limits
+- [`docs/LAB-ROLES.md`](docs/LAB-ROLES.md) — actual lab role/process map, `/lab` and `/` UI availability, namespace links and required next Ark/wallet integrations
+- [`docs/share-accounting-ext-deltas.md`](docs/share-accounting-ext-deltas.md) — intentional type-32 deltas and the v2 refusal
 - [`docs/reviews/`](docs/reviews/) — implementation-readiness review and its resolutions
 - [`docs/decisions/`](docs/decisions/) — dated decision records; first entry: the 2026-10-12 assessment of sv2-spec PR #203's reference implementation
 - [`UPSTREAM_DEPS.md`](UPSTREAM_DEPS.md) — exact commits this design is pinned to, and why

@@ -1,0 +1,1 @@
+  - "2026-11-08: read-only loopback operator page: optional off-by-default [operator] listen (loopback-only, api-role-gated) serving four GET routes and the spc-pool-observation/v1 DTO from one Store::liability_snapshot() call with closed-code nullable errors. See docs/decisions/2026-11-08-pool-operator-page.md."

@@ -1,0 +1,1 @@
+  - "2026-11-08: read-only live lab hub: /lab pages plus GET /api/lab/v1/runs/<id>/inventory serving the closed spc.lab.inventory.v1 allowlisted projection (evidence-fed health, loopback-only links, recorded/read-only serve); lab-tool scope, no SPEC body/payout/Ark semantics. See docs/decisions/2026-11-08-lab-live-hub.md."

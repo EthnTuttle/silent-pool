@@ -1,0 +1,1 @@
+  - "2026-11-08: traffic-runtime amendment (e) adds TrafficJournal::observer_snapshot, an owned deterministic committed tip/sequence/outpoint-status copy under the existing journal mutex, without file I/O or mutable state authority. Snapshot freshness is explicit and the observer still rescans inclusively. See docs/decisions/2026-11-08-traffic-observer-snapshot.md."

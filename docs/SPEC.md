@@ -5,10 +5,46 @@ title: "Spec: silent-pool — SPc pool technical specification"
 type: plan
 format: spec
 generated: 2026-10-09
-updated: 2026-11-03
+updated: 2026-11-09
 status: current
 supersedes: none
 changelog:
+  - "2026-11-10: net-pool pending correction: K=T-sum(raw) is gross bookkeeping/JD weight, not an independent pool-template fee floor. Actual full ladder payments must fit T; pay_P=K+sum(ark)+sum(forfeit)+sum(E-P). Empty known windows use the same frozen-P routing and settlement checks. This corrects the Nov-3 funding shorthand and the failed native r4 candidate, without changing JD/O11 or trimming entitlement. See docs/decisions/2026-11-10-net-pool-pending-correction.md."
+  - "2026-11-10: typed pre-request Ark admission: capacity deadlines and actual wallet input/proof/fee/policy shortages retain the same order as unpinned Held before any nonce/request. A durable fair PEL cursor retries Held after readiness/restart. Post-request ambiguity remains pinned. See docs/decisions/2026-11-10-pre-request-ark-readiness.md."
+  - "2026-11-10: audited warmup clarification: complete independently sealed eligible history may be empty/underfilled; retain frozen Q, compute raw against actual selected work, and preserve pending/coinbase/ownership/witness checks. Missing/pruned history stays UNKNOWN. Source-feed/2 signs derived window facts; the loaded-key wallet API returns public committed evidence with request-owned key cleanup. Full measured acceptance still requires full Q. See docs/decisions/2026-11-10-audited-warmup.md."
+  - "2026-11-10: explicit loss-held recanonicalization restores the complete originally validated ledger atomically only after fresh canonical confirmation and exact retained-row/Ark-provenance checks. Retained Sent is not rebooked or reissued; remaining rows restore additive deltas under Rule-B reservation checks, and confirmed recanonical Sent members clear only their corresponding pool loss. Unknown provenance or shallow ancestry holds. See docs/decisions/2026-11-10-loss-held-recanonicalization.md."
+  - "2026-11-10: source-feed v1 supplies signed pool trace seals and independent collector checkpoints over bounded private Unix frames; translator commits a job/generation/digest-correlated consumption ACK before activation and invalidates superseded work during audit. Wallet capacity is acquired before fresh authorization, with same-grant fences under the wallet permit and at registration/cosign. Migration 0011 records the previously unjournaled initial economic row; only proven fresh-empty seeds permit replay. See docs/decisions/2026-11-10-source-feed-and-grant-fences.md and docs/decisions/2026-11-10-economic-initial-checkpoint.md."
+  - "2026-11-10: bounded private frozen-order API: owner-authenticated GET /api/sp/me/ark-aggregates/<order_id>/order returns exact immutable signed ArkSendOrder bytes, maximum 348 bytes, after canonical/digest/signature checks. All uncertainty states remain watch-preserving. See docs/decisions/2026-11-10-frozen-order-owner-api.md."
+  - "2026-11-10: aggregate review A1-A5 boundary correction: independent payout-owned authorization scheduling, exact VTXO policy plus frozen full Ark server key, transactional legacy-receipt exclusion, per-identity orphan reversal, and durable fair receipt quarantine/retry. EconomicChanged is a reload hint; Rule-B SQL/bootstrap authority and SPCB/3 suffix are specified. See docs/decisions/2026-11-10-aggregate-receipt-boundaries.md."
+  - "2026-11-10: Rule B provisional-pending clarification: reserve only max(0,-delta_b), with actual mined delta_b computed from frozen job P_b; B/R/A and per-block lifecycle/ancestry are persisted and bootstrapped coherently. Fresh raw is never reduced by full unbooked payouts. Book applies additive delta and releases c atomically; unbooked orphan never reverses an unapplied delta. SPCB/3 freezes economic job provenance; missing views are unknown and descendant publication is chain/economic gated. See docs/decisions/2026-11-10-provisional-pending-net-debits.md."
+  - "2026-11-10: real private source-evidence v2 and committed accounting-history v1 adapters, source-bound actual-SV2-job verifier hooks, and refuse-mode source-feed requirement. Pool ingress attribution is explicitly attested; raw PoW/Merkle/prevout fees/window arithmetic and payout ownership are checked independently. Complete external source/history seals are required, not pool owed scalars. Journal strips destination/VTXO-proof fields; no source mapping enters Ark. Hard coinbase budget ceiling, not autoscaler floor, bounds the full no-trim set. See docs/decisions/2026-11-10-source-audit-runtime-binding.md."
+  - "2026-11-09: aggregate anchor/fresh-send-authorization policy authorized: freeze oldest covered canonical row's stored destination and bounded complete membership; fresh nonce-correlated all-member chain check before durable signed send authorization; potentially authorized sets never regroup on timeout; atomic Sent/NoEffect resolution with orphan loss or blocked_unknown absent proof. Anchor watches persist through coinbase discovery/retry horizons; status requires fresh B_scan API ownership proof. Supersedes §11.3 timeout-to-pending for potentially sent aggregates. See docs/decisions/2026-11-09-aggregate-anchor-and-send-authorization.md."
+  - "2026-11-09: bounded ladder-entry-v2 amendment fixes WIRE's single-key contradiction with §5.1: SPCB/2 block events, one logical identity row with k-ordered key array (2048 representation cap), mandatory full owed_sats and versioned SQL/JSON entries, exact per-k settlement and no frozen-window retry. JobEntriesV2 and complete-event snapshot IDs bind remainder/destination/window changes. Recovery returns all outputs; policy audit is explicitly source-version-bound. Aggregate destination and over-revenue error-held funding remain unresolved, not silently chosen. See docs/decisions/2026-11-09-ladder-entry-wire-v2.md."
+  - "2026-11-10: full lab native SV2 candidates require source-feed/2 committed wallet audit evidence before JobActivated/worker publication. The public spc.native-job-gate/1 codec binds actual ReceivedJob, SP identity, session/candidate epoch, fresh nonce, wallet lifecycle instance and controller peer/config generation; CPU holds public material only. Signed underfilled facts remain explicit, unknown/expired/replayed proofs grant no work, and funding/registration barriers remain. See docs/decisions/2026-11-10-native-audit-gate.md and docs/NATIVE-JOB-GATE.md."
+  - "2026-11-09: T1-DEST lab-only output admission permits exactly standard regtest P2PKH/P2WPKH/P2TR destinations through controller, checked address, request, builder and declared-raw admission. Address APIs require_network(Regtest); unsupported templates/versions/lengths and falsely owned witness outputs reject before payment-journal mutation. All traffic inputs, owned funding and receive/change derivation remain P2PKH; actual output lengths govern fee selection and final signed bytes govern exact fee/vbytes. Control v1/history 3/derivation v2, unknown/reorg/maturity/budgets and SPEC §11.3 privacy/fees are preserved. This enables admission of published stock Bark funding addresses, not funded node/Ark acceptance. See docs/decisions/2026-11-09-traffic-destination-extension.md."
+  - "2026-11-09: contextual native difficulty consumer amendment: required bound min-difficulty, spacing, interval and overlay facts; shared genesis-anchored raw-header verifier applies the node's exact gap/backtracking/boundary/inheritance/overlay order to GBT and observer/completion. No-periodic-retarget does not imply constant bits. Node policy and 40 H/s remain unchanged; periodic retargeting stays unsupported. See docs/decisions/2026-11-09-contextual-native-difficulty.md."
+  - "2026-11-09: T2-L private native-bootstrap evidence rechecks owned non-symlink 0700 roots, has an explicit 256 MiB bound, and records source/executable/artifact provenance through the existing private channel. Compiled tests pass; fresh actual-node GBT 207fffff versus bound fixed 200fffff is refused before hashing, not treated as funded acceptance. See docs/decisions/2026-11-08-native-bootstrap-executor.md and the implementation report."
+  - "2026-11-08: lab T2-L native bootstrap executor uses controller-reserved bounded CPU hash batches, strict legacy templates and BIP34 coinbases, bound no-retarget/subsidy policy, canonical raw-block proof before actor funding observation, and same-signer allocation distribution before independent completion. Raw work evidence is private and non-authoritative; J1/J2 and fresh funded acceptance remain separate. See docs/decisions/2026-11-08-native-bootstrap-executor.md."
+  - "2026-11-08: the lab Ark deployment is self-hosted and Nix-built from stock Bark c419159fa54085572f8ca72d2ba1716556a9d3eb. The run owns one provider Postgres cluster and separate per-pool Ark wallets/processes, discovers and binds real ArkInfo before front startup, and records initialized_unfunded separately from funded validation. Hosted-provider fallback is forbidden in the lab. Production independent-server and identity-stream boundaries are unchanged. See docs/decisions/2026-11-08-self-hosted-lab-ark.md."
+  - "2026-11-08: traffic-runtime amendment (e) adds TrafficJournal::observer_snapshot, an owned deterministic committed tip/sequence/outpoint-status copy under the existing journal mutex, without file I/O or mutable state authority. Snapshot freshness is explicit and the observer still rescans inclusively. See docs/decisions/2026-11-08-traffic-observer-snapshot.md."
+  - "2026-11-08: traffic-runtime amendment (f) activates history 3 / spc-lab-tx-journal/3 coherently in core and T0, preserving control v1 and key derivation v2; one versioned raw-header proof atomically admits lower canonical tips, every send rechecks retained coinbase and own-change ancestry maturity, and opaque queued-intent revalidation requires controller-local serialization. Reopen refuses history 2 and invalid proofs before mutation; existing bindings precede repair/session append. See docs/decisions/2026-11-08-traffic-rollback-history3.md."
+  - "2026-11-08: durable `0x5350` v1 registration, acknowledgment and Ark destination propagation. Versioned request/response frames add per-`sp_id` monotonic `request_id` correlation, the new `unsupported-mailbox-mode`, and 5 s retryable `registration-commit-unknown`. Fable-facing amendment: `request_id` is signed in `hash_SPc/ArkIdentity` so an old signature cannot replay with a larger counter. Migration 0006 atomically journals `sp_id`, request counter, immutable signed-fields digest, `ark_delivery` and payout revision under a row lock. The scoped Redis ack has TTL 3600 and is cache only. Same-request replays resolve durably; mismatch/stale/superseded never roll back newer delivery. Full registration state propagates and bootstraps, fresh `dest_id` is derived per distribution generation, and committed-but-underived routes pending, never forfeit. Advertisement exists only with the real handler; Ark order/receipt privacy is unchanged. See docs/decisions/2026-11-08-ark-registration-ack.md and docs/reviews/2026-11-07-ark-registration-implementation.md."
+  - "2026-11-08 AP-2 rework: internal per-handle attempt nonce/ack keys force every registration attempt through durable Superseded resolution rather than trusting stale cached Applied, with concurrent reply isolation and no client-wire/operation-ID change. Store upsert binds epoch_fallback correctly; validly signed semantic rejection journals and returns terminal errors without poisoning PEL. SPc/EpochMailboxes domain separates epoch signatures; hold outside epoch_registered rejects. Registration-sensitive rail/destination digest rolls the job even with same coinbase fingerprint, with stale old work and new dest frozen. Front-required public ArkInfo server/mailbox pubkeys and bootstrap upgrade semantics are documented. No approval or primary integration is implied until the same Fable re-reviews."
+  - "2026-11-08 R2.1 narrow resolution clarification: apply_registration now replays the full journal under the existing identity lock before is_new, preventing a rejected-ID PK collision without effect or PEL poison. Existing different digest returns registration-mismatch; identical digest preserves rejected terminal errors, current already_applied and old superseded outcomes. No counter advancement is needed to mask a conflict; missing/pruned rows use existing stale policy. No protocol/Ark-server change. Required revalidation commands and receipt are recorded in docs/reviews/2026-11-07-ark-registration-implementation.md when the build reservation opens."
+  - "2026-11-08: host operator runtime wiring: off-by-default --operator-ui flag (host-only, api-role-gated) plans one leased loopback front.<id>.operator listener per front, renders the approved [operator] section, publishes the URL only after an HTTP 200 route proof recorded as evidence, and links it as a typed operator_ui interface in the hub inventory and JS guard. See docs/decisions/2026-11-08-operator-runtime-wiring.md."
+  - "2026-11-08: add the lab expanded-access foundation for the spc-lab controller (scenario field `expanded_access`): per-principal run-local claim files under `<run>/private/access/` (0700/0600 atomic, CSPRNG 32-byte hex tokens, operator claim generated with the run, identity-miner-worker-pool bindings and the reserved principal/filename namespace validated at prepare before any filesystem effect, deletion- and rewrite-based revocation observed on the very next request through an unconditional fully validated claim-directory reload - hygiene-checked owner/mode/type, duplicate principal or token rejected, a failed load denying everyone including the operator until repair); Bearer authentication for every expanded route with exactly one header, constant-time compare and a closed unauthenticated static bootstrap list (same-origin POST check, CSP `default-src 'self'`, no CORS anywhere, whole-run artifacts and catalog operator-only); principal-bound command scope (users: pause/resume/budget naming an explicit non-empty subset of the claim's own workers, `send_user_payment` for self; operator: everything else) checked before any journal effect, with closed generic rejections that never reveal another principal's stored outcome; the command-log replay hash extended for expanded runs only with a persisted `hash_scheme` discriminator (`kind_only_v1`/`expanded_v1` - sha256 over scheme tag, principal, run id and the full kind payload), so idempotence is keyed per principal/run/semantics, legacy journal lines stay byte-identical and replay unchanged, an old runner never adopts an expanded entry, and an unknown or missing scheme fails closed; and the server-side user read projection - filtered snapshot/SSE/replay/resync through the claim's own worker whitelist (own fields plus allowlisted aggregates, explicit gaps and watermarks, every stream including the operator's re-authenticating at every event and heartbeat with revocation or rotation closing it at the next boundary) plus the `spc-user-projection/v1` miner-poll DTO that serves real worker rows or null-with-reason, never zeros, while the operator keeps the whole-run view. A GET-only role relay over declared topology listeners with a closed asset map backs the same-origin workbench bootstrap (test-only address mapping; no production relay reach claimed). No new dependencies; no live Ark or wallet fact claimed. See docs/decisions/2026-11-08-lab-expanded-access-foundation.md. Merge handoff (R4): in expanded runs the hub inventory route is operator-only (user claim 403 before any inventory build or I/O, tokenless 401 at the Bearer gate) and the /lab bootstrap pages join the closed pre-auth static list byte-exact to the Hub-approved assets (verified to carry no inline private fact, status, address or token); legacy runs keep the Hub's public inventory route unchanged."
+  - "2026-11-08: the private traffic history journal contract is version 2, aligned to the Fable-approved T1a core header before the first runtime journal write. `TrafficHistoryHeader` is now the full 14-field record mirror (record tag, seq 0, format magic, journal protocol `spc-lab-tx-journal/2`, regtest network, lab deterministic key mode, derivation version 2, run and driver ids, run-seed fingerprint, allocation digest, retry caps, creation time) - byte-identical to the core's first line, strict (deny_unknown_fields, no defaults), with the scenario, hello-ack and header all refusing the never-written v1 shape explicitly and never migrating it. The control protocol stays v1 and separate. A conformance suite proves the contract against a real journal written by the core (byte roundtrip, typed facts, digests, golden line, fail-closed mutations). No gate, capability, pool, payout, SV2, SPc or Ark semantics change; traffic runs remain safely unavailable. See docs/decisions/2026-11-08-traffic-history-v2.md."
+  - "2026-11-08: read-only live lab hub: /lab pages plus GET /api/lab/v1/runs/<id>/inventory serving the closed spc.lab.inventory.v1 allowlisted projection (evidence-fed health, loopback-only links, recorded/read-only serve); lab-tool scope, no SPEC body/payout/Ark semantics. See docs/decisions/2026-11-08-lab-live-hub.md."
+  - "2026-11-08: read-only loopback operator page: optional off-by-default [operator] listen (loopback-only, api-role-gated) serving four GET routes and the spc-pool-observation/v1 DTO from one Store::liability_snapshot() call with closed-code nullable errors. See docs/decisions/2026-11-08-pool-operator-page.md."
+  - "2026-11-08: lab-only opt-in rbitcoin bark-v31 RPC compat profile adopted for isolated Ark development use; default node, pins and v0.9 adoption unchanged, no SPEC sections change. See docs/decisions/2026-11-08-lab-bark-v31-profile.md."
+  - "2026-11-08: lab traffic wallet core rework (T1a, `spc-lab-txd`) per the Fable review dispositions. The traffic journal header is version 2 (`format_magic`, `history_version: 2`, `protocol: spc-lab-tx-journal/2`, network, key mode, derivation version, run id, driver id, run-seed fingerprint, allocation digest, persisted `JournalCaps`, creation time); the T0-approved v1 header shape cannot carry these fields, so T0 adopts the matching v2 type and allocation-digest semantics before the first T1 journal write, and v1-shaped journals are refused without migration. Core semantics: an ever-unknown, ever-RPC-accepted or reorg-resubmitted payment never releases its inputs on rejection (durable counters decide, crash replay agrees); reorg displacement cascades invalidation through own-transaction funding and descendants with generation-by-generation recovery via proven-unspent, capped resubmission, and a canonical re-inclusion of a reorged transaction in the new chain is recordable from `Reorged` as block evidence (never naming the displaced block on stale evidence: the journal derives the displacement seq and the last committed `ChainObserved` seq from the record stream, and a newer chain observation - a reorg back - makes the same-hash confirmation admissible, the original displacement identity preserved through the cascade and its generational restore), restoring the cascade one generation at a time; retry caps bound sends (N retries + the original), never evidence recording, and are persisted and revalidated on reopen; an exclusive kernel flock makes one journal one owner; a restart is journaled uncertainty - reopen is a writer operation that appends a durable `SessionStarted` record under the exclusive lock and moves in-flight broadcasts to unknown without consuming retry budgets or inflating attempt counters; funding observations carry provenance and a derivation locus but no script (the wallet derives it), own-transaction backing requires the journaled confirmed creator with an exact vout match, and coinbase funding is spendable only at 100 confirmations of the observed tip; the command digest covers the payer role and category; spending resolves keys by direct derivation at the recorded index; multi-actor allocations are validated (disjoint ranges, exactly one bootstrap host, unique driver ids, equal caps) before provisioning - production provision and reopen consume an opaque `ValidatedAllocation` token whose canonical digest is persisted in the header and verified on reopen before any mutation; failed journal writes - injected or real - share one rollback-or-poison recovery; late lifecycle observations after a reorg cycle are journaled with only the finish guarded (`note_rejected` always records the rejection and guards only the finish; an 'already known / already in block chain' node answer is a confirmation observation T1b maps to `note_confirmed`, never a rejection, and the core never parses the code string); traffic keys derive as HMAC-SHA256 over run seed and run id (derivation v2, key mode `lab_deterministic_run_seed_v1`). See docs/decisions/2026-11-08-traffic-wallet-core-rework.md."
+  - "2026-11-08: Reworked the T0 traffic-contract packet per the Fable review: the traffic capability gate now runs in `RunEngine::prepare` before any filesystem, lock or authority effect and on the adopt path before the owner lock (`traffic_capability_unrecorded` when no record exists, even if the node config declares the capability name); the AP-1a projection gained the frozen 17-row expected-check table with exact id-method binding, strict report provenance/target/profile validation and full per-check rows the gate recomputes both verdict stages from; the single `satisfied` verdict became the two-stage `recognized` (preflight gate) vs `behavior_proven` (false by construction for read-only reports; T3 consumes its own exercised evidence); the Fable-approved r2 contract `f4fc3e04...` is bound as the sole approved lineage (hash + table + decision in one change; the r1 candidate stays recognized-unapproved diagnostics; unknown hashes fail closed); `send_user_payment` gained the explicit fail-closed `destination_address` field (regtest p2pkh, resolving the plan 6.6/12 ambiguity); actor/driver ids are typed `ActorId`s; the history journal is confined to `traffic/`; the protocol string is exact (no trim) and the planned-schedule seed domain is frozen. Traffic scenarios still cannot start until T1 records a capability - the safe-unavailable state. Decisions: `docs/decisions/2026-11-08-lab-traffic-contract-t0.md` and `docs/decisions/2026-11-08-traffic-ap1a-lineage-r2-approved.md`."
+  - "2026-11-08: agent wallet foundation (AP-3a) made normative. §11.5 gains the exact BIP 85 child-wallet derivation (APP-39, m/83696968'/39'/0'/12'/0', English 12 words, index 0, empty passphrase - defined, not 'BIP85-style', vectors pinned in-tree), the offline provisioning shape (branch account xprvs m/352'/0'/0'/1' and 2' plus the 64-byte child seed and sp_address only; exact child-index, network-magic, shared-parent-fingerprint, B_scan and B_ark != B_spend validation at load, fail closed, nothing regenerated), the persistence layout (<datadir>/state.sqlite schema v2 for the SP-aware keystore/VTXO ledger/registration journal/scan cursor, bound to one identity, foreign or damaged files refused; <datadir>/bark/db.sqlite as the stock bark persister initialized via stock init_wallet with WalletProperties(network, fingerprint, none, none), 0700/0600 before open, reopen re-validated, foundation only - full Wallet::open is AP-3b), the registration client journal and terminal policy (durable request-id reservation before send, fresh id per changed payload, effective binding = most recent acknowledged applied/already_applied state so a historical row is not liveness and superseded clears the binding it names, hard terminals and counter exhaustion fatal until an explicit operator restart, wedge kinds mismatch/stale/superseded get exactly one fresh same-payload retry, all non-success in the 1/2/4/8/16/30 s backoff with registration_unavailable surfaced after six failures while retries continue), and status honesty (registered and connected are distinct; no transport means dormant, never a invented connection; loopback enforced at bind; unknown is null; monotonic-only scan cursor with journaled reorg rewind an explicit AP-3b dependency). §11.10 spc-agent [ark] gains seed_child, scan_xprv, ark_xprv, datadir, status_listen, network and ark_id (paths/ids only, key material never inline). Changelog fragment: its serial position relative to the concurrent AP-2 (lab-ark-registration) §11.4/§11.9 fragment is pending splice at merge; both fragments edit disjoint sections. See docs/decisions/2026-11-08-agent-wallet-foundation.md."
+  - "2026-11-08: pool-template jobs support segwit transaction sets, fail closed. Every template transaction is strict-decoded (full-tx deserialize plus byte-exact roundtrip; a non-canonical encoding or a zero-input transaction fails the refresh) and analyzed into txids, wtxids and a witness count. A set carrying witness data gains exactly one zero-value BIP 141 commitment output appended last (pool output stays index 0); BIP 141 leaves the reserved value unconstrained, and the pool draws it once per witness root - a share-stability choice, not a protocol obligation - so unchanged-set republications keep issued shares valid, and the commitment joins the job-change comparison (including the main-level publication identity) so a same-txid witness malleation republishes the job on both ingresses. Block assembly injects the coinbase witness (txid unchanged), re-verifies the commitment against the actual transaction set, and rejects wrong-reserved, missing, duplicate, malformed, valued or mismatched commitments without fallback, logging a bounded error when assembly fails after a share was credited; witness-free templates are byte-for-byte unchanged. Payout mode detection no longer reads a `6a24` commitment as the JD `OP_RETURN` carrier (`6a23` SPc), and settlement's tier crosscheck mirrors the 224 WU commitment overhead detected from the mined coinbase. Sections 2.4.2, 3.3 and 4.8 are amended. See docs/decisions/2026-11-08-pool-witness-commitment.md."
+  - "2026-11-05: the v2 accounting window is measured in network-block work, not N share-difficulties. With `N = 8`, reference target `R = 2^255 - 1`, network target `T` and `E(T) = 2^256/(T + 1)`, the persisted threshold is `Q(T) = ceil(N * (R + 1) / (T + 1))` reference units. On `0x200fffff`, `Q = 65` (floor 64); on the `0x207fffff` pow limit, `Q = 9` (floor 8). The window is at least N blocks of expected work; rounding error is below `E(R)` and whole-slice overshoot is reported. `underfilled`, `actual_sum` and `overshoot` are derived from `high_water` and `window_target`, not stored columns. A persisted `window_rule` uses code 0 `share_work_legacy` (`N * d`, v1) or code 1 `network_block_work` (v2), also carried as `U8 window_rule` on `spc:blocks`. Settlement uses the snapshot's rule and target and never recomputes from current bits; `max_window_target_units` is a hard cap `<= 2^64`, and `Q > max_window_target_units` fails with `window_target_too_large`. Sections 4.1, 4.3, 5.1, 5.3 and 7.4 and WIRE-FORMATS 3.1 are amended. See docs/decisions/2026-11-05-window-network-block-work.md."
+  - "2026-11-05: native SV2 conformance and authenticated miner sessions. A prevhash or nbits change publishes a future job before its single SetNewPrevHash; other same-(prevhash, nbits) template changes publish a nonfuture job, while ordinary curtime-only refreshes preserve the immutable issued job. Only the newest job is accepted (older ids return stale-share), and every SV1 republication sets clean_jobs=true. Targets use U256 little-endian and SetTarget precedes effective-target changes, with each job capturing its target at activation rather than retroactively changing active work. Coinbase Merkle paths are deepest-first across SV1/SV2/front/agent. One connection has one extended channel/identity, deterministic front-namespaced prefixes and exact negotiated extranonce validation. Bits/version changes republish jobs and the front rebuilds the coinbase/header hash before credit. Fronts require a provisioned matching Noise authority key pair and agents pin it. Native SV2 share replies correlate with front slice acceptance and carry the job generation's credited d; success does not assert node acceptance, settlement or payout. No share-work-unit, window, payout-tier or Ark-boundary policy changes. See docs/decisions/2026-11-05-sv2-native-conformance.md."
+  - "2026-11-05: lab work units v2 add an opt-in exact reference-target share-work profile restricted to the power-of-two family. `R = 2^k - 1` with `1 <= k <= 255`, `m = 2^j` with `0 <= j <= k - 1`, and `S = 2^(k-j) - 1` make `E(S)/E(R) = 2^j` exactly, where `E(T) = 2^256/(T + 1)`. The profile requires `R >= effective pow limit` (`reference_below_pow_limit`), a power-of-two `R + 1` (`reference_not_power_of_two`), and a power-of-two `m_cfg = 2^j_cfg` (`multiplier_not_in_family`). Issuance is O(1): `j_issue = min(j_cfg, k - ceil_log2(T + 1))` with exact-power-boundary handling; it records `multiplier_stepdown`/`multiplier_stepup` at a new generation, is not a clamp, and never scans for divisors. Hard caps are `m_cfg <= max_work_multiplier <= 2^32` and `Q <= max_window_target_units <= 2^64`. v2 checks slice `sum(d)`, `d*f`, `diff_fee_sum`, window `D_win`, SPEC 4.4 products and final conversions, failing with named errors rather than saturating, while v1 keeps its saturating behavior. Compact decode follows consensus `SetCompact` (including valid exponents 33/34). Work-unit version/fingerprint and `window_rule` are persisted and carried in definite `spc:slices`/`spc:blocks` fields; restore rejects mixed/mismatched profiles and the DB enforces the version/fingerprint relation. The oracle reads `job_issued` (`job_id -> share_target, m_issue`); v1 type-32 behavior is unchanged and v2 type-32 is not claimed. Sections 3.4, 4.1, 4.2, 4.4, 5.1, 5.3, 7.4 and WIRE-FORMATS 3.1/3.6 are amended. See docs/decisions/2026-11-05-lab-share-work-units.md."
+  - "2026-11-05: integrate the approved LP-1 reference-work and network-block-window decisions. v2 is opt-in regtest-only, rejects legacy `share_difficulty`, SV1 and v2 type-32, calculates exact targets with stepdown/up per immutable job generation, and settles from frozen version/fingerprint/rule/Q. V1 rows and arithmetic remain legacy. v2 slice, fee aggregate, window and payout products use checked exact arithmetic and restore rejects mixed profiles. `spc:slices` carries version/fingerprint, `spc:blocks` carries version/fingerprint/window_rule, and migration 0005 adds definite enums/CHECKs plus legacy defaults. Job/accounted evidence carries generation/target/credit, with disjoint SV1/SV2 correlation and `share_outcome_unknown` instead of false definitive timeout rejection. Native main-process SV2 non-block and block-qualified m=2 evidence is implemented; v2 type-32 and TDP/ladder production scenarios remain unclaimed. See docs/decisions/2026-11-05-lab-lp1-integration.md. Refresh failures invalidate front and ingress work. v2 refuses type-32 at SV2 ingress and never populates its store, regtest pow_limit_bits is pinned to consensus, payout v2 restoration validates stored sums with checked arithmetic, WIRE documents definite metadata fields, SQL pins nonzero 32-byte fingerprints, and evidence includes raw share hashes/full extranonce plus byte-order metadata. R2 retention correction: durable scrub chooses legacy-configured or 4096-height deletion strictly by each stored row work_unit_version, so payout configuration cannot delete v2 early or extend v1 identity retention; the v2-only 4096-height SPc attribution extension is explicit. Live/bootstrap v2 keeps all age-eligible slices up to 4096 independently of current/previous Q (same tip-horizon as SQL), preserving headroom for later harder windows. Real cap/age exhaustion remains explicit underfill/fail-closed; v1 retention and approved work-unit arithmetic are unchanged."
   - "2026-11-04: Tor scope narrowed to mining connections. Inbound `[reach]` is unchanged; outbound `[net]` is `spc-agent` only and covers upstream SV2 and JDP. The `ark` role's Ark-server dial and the agent's Ark/mailbox traffic are direct (no proxy, no .onion gate); the accepted residual is that the Ark server and mailbox endpoint see the network address. §3.8 outbound rewritten, §6.3 pool `[net]` removed, Ark egress clauses dropped. See docs/decisions/2026-11-04-tor-scope-mining-only.md."
   - "2026-11-03: settlement window target is persisted, not estimated. §5.1 `distribution_snapshot` gains `window_target NUMERIC(40,0)` (nullable; the exact `N x d` the front selected the window with, computed in u128 because `N x d` can exceed BIGINT, encoded exactly like `slice.difficulty`); the front writes it when it builds the distribution and carries it in the §3.3 `spc:blocks` event (WIRE-FORMATS §3.1 `U128 window_target`). §7.4 settlement reconstructs the window with the persisted target; only a pre-migration row (NULL) falls back to the slice estimate, with a warning naming the block, and a stored value that is not a u128 fails closed. See docs/decisions/2026-11-03-settlement-window-target.md."
   - "2026-11-03: denomination-ladder coinbase payouts with Ark remainders (operator product decision; tradeoffs in the record, not buried). FINAL ladder: constant rungs {500 000; 1 000 000; 3 000 000; 5 000 000} sats, greedy largest-first decomposition of `owed`, remainder < 500 000 sats (and full sub-500k balances) to the Ark rail at `H + confirmation_depth`, aggregated per `sp_id` below `[ark] min_overage_sats`. NO era scaling and no halving re-parameterization, forever: the band function is trivially pure over the amount (no dependence on height, subsidy, fees or the coinbase value), which removes the front/settlement divergence risk entirely. Output count is value-bounded by `T/500k` (~619 in era 1); `max_payout_slots = 1024` is a policy cap, not a weight limit (2 048 documented as fee-spike headroom; the 1 000 000-WU ceiling, coinbase <= 25 % of block, stands). Owner constraints applied: maximize on-chain share; NO deferral for capacity or trimming (trim removed); anything not payable in the coinbase goes over Ark; a small error rail (failed sends, unknown keys) is retained. Accepted costs: sub-500k identities get no coinbase output (~86 % of a 1 000-identity pool in the record's model), remainders trustodial until refresh, Ark server sees exact remainders, and each halving doubles the rungs' relative size with no scheduled change. Pool-template mode only in v1; JD weights stay exact-`owed` (O20). Sections: §0, §2.3, §3.6, §4.1, §4.4, §4.6, §4.7, §4.8, §5.1, §6.1, §6.3, §10 (O8 amended, O20 amended), §11.1, §11.2, §11.3, §11.6, §11.7, §11.9, §11.10. See docs/decisions/2026-11-03-banded-amounts-with-ark-overage.md."
@@ -130,7 +166,7 @@ Out of scope for v0.1: BIP 352 labels; a Lightning/BOLT12 rail for pending credi
 | `spc-crypto` | BIP 352 address parsing, `sp_id`, the SPc ECDH, the tier KDF (`t_onchain`, `t_ark`, `t_mb`), carriers, mailbox blinding, zeroising key types — every derivation in DESIGN.md / MAILBOX.md, used by pool and agent alike | new; absorbs the `spc_ark` and `spc_ark_mailbox` prototypes |
 | `spc-scan` | library + CLI: find and export SPc payouts from blocks or header+branch+coinbase triples | new |
 | `spc-accounting` | pure, I/O-free: slices, window, SLICE scores, pending ledger, denomination solver, autoscaler, output builder | new; ledger/solver/autoscaler re-implemented from §4.6/§4.8 (Blitzpool patterns, no code) |
-| `spc-share-ext` | extension type 32 messages on current `stratum-core` codec; server + sampling verifier | `demand-open-source/share-accounting-ext` |
+| `spc-share-ext` | extension type 32 messages on current `stratum-core` codec; server + sampling verifier, v1 only | `demand-open-source/share-accounting-ext` |
 
 **Miner-side consolidation (2026-10-12, made canonical 2026-10-13).** SRI ships the translator and JDC as separate binaries; this project ships them as **roles of one binary, `spc-agent`**: one process, one config, one seed. Where this spec says `spc-translator` or `spc-jdc` it means `spc-agent` running in that role.
 
@@ -219,7 +255,7 @@ Design notes, each with its source:
 OP_RETURN  OP_PUSHBYTES_35  0x53 0x50 0x63 <ser_x(A_send)>        # "SPc" ‖ 32 B
 ```
 
-Costs 46 B = 184 WU of real block space per block (8 value + 1 length + 37 script; not pre-paid — stated honestly; a `0x0003` JDC reserves exactly this TxOut size in `CoinbaseOutputConstraints`). Required because Coinbase-only JD carries no scriptSig bytes and Full-Template gives the pool approval but not specification authority over the scriptSig ([08-24 L3](research/raw/notes/2026-08-24-ll-jd-coinbase-control-amount-linkability.md)). Pool-template mode MUST NOT emit the `OP_RETURN` (it would be a protocol fingerprint with no benefit).
+Costs 46 B = 184 WU of real block space per block (8 value + 1 length + 37 script; not pre-paid — stated honestly; a `0x0003` JDC reserves exactly this TxOut size in `CoinbaseOutputConstraints`). Required because Coinbase-only JD carries no scriptSig bytes and Full-Template gives the pool approval but not specification authority over the scriptSig ([08-24 L3](research/raw/notes/2026-08-24-ll-jd-coinbase-control-amount-linkability.md)). Pool-template mode MUST NOT emit the SPc `OP_RETURN` carrier (it would be a protocol fingerprint with no benefit). 2026-11-08: the prohibition targets the SPc carrier script above, not `OP_RETURN` outputs in general - the BIP 141 witness commitment output (§3.3) is a zero-value `OP_RETURN` output and is not an SPc carrier.
 
 ### 2.5 Scanning (miner side; `spc-scan`)
 
@@ -233,14 +269,16 @@ for each block (header, coinbase, merkle_branch):
     for h in {H, H − 1}:                                     # tolerance, §3.5 R4
         input_hash = hash_SPc/Inputs(ser32(h) ‖ 0x02 ‖ A)
         ecdh = ser_P(input_hash · b_scan · lift_x_even(A))
-        t    = hash_SPc/TierSpc(ecdh ‖ ser32(0))
-        P    = B_spend + t·G
-        if OP_1 <ser_x(P)> ∈ coinbase.vout: record (txid, vout, amount, t)
+        for k in 0..2048:                                   # ladder-entry-v2 representation bound
+            t = hash_SPc/TierSpc(ecdh ‖ ser32(k))
+            P = B_spend + t·G
+            if OP_1 <ser_x(P)> ∈ coinbase.vout: record (txid, vout, k, amount, t)
+        REQUIRE owned k values form one contiguous, duplicate-free sequence from 0
     if Ark tier enabled:                                     # DESIGN.md "Miner can scan both tiers"; h = H only —
         ecdh  = (as above, at h = H)                         #   the pool derives Ark destinations at the mined height
         t_ark = hash_SPc/TierArk(ecdh ‖ ser32(0))
         keystore.insert(U = B_ark + t_ark·G)                 # §11.5; u = b_ark + t_ark when the signer is present
-        mailbox.open_epoch(H, ecdh)                          # §11.8 mailbox mode; closed at once if P was found above
+        mailbox.open_epoch(H, ecdh)                          # coinbase discovery does not settle a remainder
 ```
 
 The Ark tier is scanned for **every** block the pool found, including blocks where this miner got no coinbase output — that is how a sub-threshold miner learns which Ark keys to expect without any notification.
@@ -278,7 +316,7 @@ Clients that want JD payouts or auditing send `RequestExtensions{request_id: U16
 |---|---|---|
 | `0x0001` | extensions negotiation | everyone (`spc-translator`, `spc-jdc`) |
 | `0x0003` | Coinbase Transaction Payouts (PR #203) | `spc-jdc`, on **both** its JDP and MP connections |
-| `0x0020` (32) | Share Accounting (§3.7) | optional; `spc-translator` and `spc-jdc` request it by default |
+| `0x0020` (32) | Share Accounting (§3.7) | optional in v1 and requested by `spc-translator`/`spc-jdc` by default; **MUST NOT** be advertised or accepted in v2 |
 | `0x5350` | SPc delivery capabilities (§11.4) | optional; `spc-agent` requests it when its Ark tier is enabled |
 
 A client whose `RequestExtensions.Error` lists `0x0003` MUST NOT run JD mode (PR #203 §2).
@@ -291,13 +329,82 @@ Per `NewTemplate` (and per `SetNewPrevHash`) `front`:
 2. Asks `spc-accounting` for `Distribution(H, T = coinbase_tx_value_remaining, A_send)` (§4.7) → ordered outputs `[pool_output, P2TR(P_i)…]`.
 3. Builds `coinbase_tx_prefix = version ‖ vin_count ‖ null_prevout ‖ scriptSig_len ‖ height_push ‖ push32(A_send)` and `coinbase_tx_suffix = sequence ‖ outputs ‖ locktime`, honouring `coinbase_output_max_additional_size` reserved from the TP (`spc-pool` sets it from the current weight budget, §4.8, Blitzpool's per-stream reservation).
 4. Sends `NewExtendedMiningJob` / `NewMiningJob`. Standard channels receive the merkle root only; they cannot verify payouts (§3.6).
-5. XADDs a `spc:blocks` event `{block_hash, height, front_id, fingerprint, high_water, window_target, entries}` where `high_water` is the window's high-water vector (§4.3), `window_target` is the exact `N x d` the window was selected with (persisted by settlement, §7.4), and `entries` is the winning distribution's full entry list, which the finding front holds in RAM for the jobs it issued. Settlement reads the event payload; no Redis snapshot key. The fingerprint (sha256 of distribution) serves for deduplication/idempotency.
+5. XADDs a `spc:blocks` event `{block_hash, height, front_id, fingerprint, high_water, window_target, entries, work_unit_version, work_unit_fingerprint, window_rule}` where `high_water` is the window's high-water vector (§4.3), `window_target` is the exact `N * d` (v1) or `Q(T)` (v2) the window was selected with (persisted by settlement, §7.4), `work_unit_version`/`work_unit_fingerprint` select the profile, `window_rule` is `0` (`share_work_legacy`) or `1` (`network_block_work`), and `entries` is the winning distribution's full entry list, which the finding front holds in RAM for the jobs it issued. Settlement reads the event payload; no Redis snapshot key. The distribution fingerprint (sha256 of the distribution) serves for deduplication/idempotency; the work-unit fingerprint is the reference-target profile hash, not a distribution hash.
 
 Distribution recomputation is bounded: weights change with every share, but the output **keys** `P_i` are fixed per `(sp_id, H)`, so only amounts move. `front` rebuilds amounts on each template (every ~30 s) and never per share.
 
+**Job lifecycle and stale policy (2026-11-05).** A `(prev_hash, nbits)` change
+publishes exactly one future `NewExtendedMiningJob` (empty `min_ntime`) followed
+by one `SetNewPrevHash` naming it; a same-prevhash `nbits` change is included
+because SV2 carries header bits only in `SetNewPrevHash`. For unchanged
+`(prev_hash, nbits)`, fee/distribution/transaction/version changes publish only
+a nonfuture job. Ordinary GBT curtime advancement alone does not change the
+job or its immutable issued `min_ntime`; version/ntime rolling remains subject
+to the existing validation bounds. Only the newest job is accepted: any older
+job, including an older same-tip job, is rejected as `stale-share`, and every
+SV1 republication sets `clean_jobs = true`. Delivering a new job while a prior
+share outcome is pending is a scheduling detail; it does not change
+latest-only acceptance, activation order or per-job credit.
+
+**Witness commitments (2026-11-08).** Every template transaction is
+strict-decoded - full-transaction deserialization with trailing bytes
+rejected, plus a byte-exact re-serialization - and analyzed into txids,
+wtxids and a witness count; a non-canonical encoding (a segwit marker/flag
+with empty witness, or the zero-input serialization ambiguity) fails the
+refresh. There is no best-effort skip and no fallback. When the transaction
+set carries witness data, the coinbase gains exactly one additional
+zero-value output appended last - the 38-byte BIP 141 commitment
+`OP_RETURN 0x24 0xaa21a9ed SHA256d(witness_root || reserved)` - so the pool
+payout output stays at index 0 and consumer indices are unchanged. The
+witness root is the merkle fold of the wtxids with the coinbase leaf fixed
+at zero. BIP 141 leaves the reserved value unconstrained (any 32 bytes
+commit); the pool draws it from the OS RNG once per witness root, not per
+republication - a pool-side share-stability choice, not a protocol
+obligation: a refresh that republishes an unchanged transaction set keeps
+the commitment, so shares already issued against that job stay valid.
+BIP 141's consensus rule recognizes a commitment output by the 6-byte
+`6a24aa21a9ed` prefix with a script of at least 38 bytes and, where
+several outputs match, takes the highest output index; the pool's policy
+for its own coinbases is deliberately stricter - exactly one well-formed
+38-byte zero-value commitment output, appended last, with duplicate or
+malformed commitment-shaped outputs rejected outright - and parsing
+arbitrary node-accepted blocks under the lenient consensus rule is
+crosschecked against a real node in T4b, not assumed here. The commitment
+joins the job-change comparison: same-txid witness
+malleation moves the wtxid, hence the witness root and the commitment, and
+republishes the job even though the non-coinbase txids and the merkle branch
+are unchanged. A winning share on a witness job assembles the block by
+strict re-verification: every transaction strict-decoded, exactly one
+zero-value commitment in the coinbase, and that commitment equal to the one
+recomputed from the actual transaction set. A wrong reserved value or a
+missing, duplicate, malformed, valued or mismatched commitment rejects the
+block, which is never submitted. The injected coinbase witness (marker/flag
+after the version, one 32-byte item before the locktime) leaves the coinbase
+txid unchanged, so shares hashed over the stripped coinbase remain valid
+evidence. Witness-free templates are byte-for-byte unchanged. See
+docs/decisions/2026-11-08-pool-witness-commitment.md.
+
 ### 3.4 Share handling
 
-Share target validation follows changelog (d) and `docs/decisions/2026-11-02-share-target-policy.md`: every ingress validates a share against `effective_target = max(target_for_difficulty(share_difficulty), network_target)`. SV1 sends `mining.set_difficulty` and rejects a submission below its target (`low difficulty share`); SV2 announces `effective_target` in `OpenExtendedMiningChannelSuccess.target` and rejects with `SubmitSharesError{difficulty-too-low}`. The front re-checks the target before accounting.
+Share target validation is versioned. **v1** follows changelog (d) and
+`docs/decisions/2026-11-02-share-target-policy.md`: every ingress validates a
+share against `effective_target = max(target_for_difficulty(share_difficulty),
+network_target)`. SV1 sends `mining.set_difficulty` and rejects a submission
+below its target (`low difficulty share`); SV2 announces `effective_target` in
+`OpenExtendedMiningChannelSuccess.target` and rejects with
+`SubmitSharesError{difficulty-too-low}`. The front re-checks the target before
+accounting.
+
+**v2** is the opt-in `network_block_work` profile (§4.1). It uses the exact
+reference family `R = 2^k - 1`, configured multiplier `m_cfg = 2^j`, issued
+target `S(2^j_issue) = 2^(k-j_issue) - 1`, and credits exactly `d = 2^j_issue`
+(no float, no clamp, and no legacy `share_difficulty` key). The issued target
+MUST be no harder than the job's network target; a target outside the family
+or below the network target fails the generation rather than being rounded.
+v2 is restricted to `pool.network = regtest` and rejects SV1 ingress. The front
+publishes `work_unit_version = 2`, the nonzero reference fingerprint, the
+exact target and `m_issue` with the job; a later template or multiplier update
+allocates a new generation and never reprices an already issued job.
 
 Validate as SRI does (target, job, ntime, version mask), then:
 
@@ -306,7 +413,7 @@ key = sha256(channel_id ‖ job_id ‖ nonce ‖ ntime ‖ version ‖ extranonc
 REQUIRE key ∉ seen_shares                         # replay; identity-free nullifier (wiki: Nullifier vs Pseudonym)
 rec = ShareRec{ sp_id, d: share_difficulty, job_fees, job_id, nonce, ntime, version, extranonce, share_index }
 open_slice.push(rec)                              # §4.2 sealing rules may seal first
-reply SubmitShares.Success (or ShareOk{ref_job_id, share_index} if 0x0020 is active)
+reply SubmitShares.Success (or ShareOk{ref_job_id, share_index} in v1 when 0x0020 is active; v2 never activates it)
 ```
 
 `seen_shares` is per process and is lost on restart; `front` MUST reject shares whose `job_id` predates process start (jobs are re-issued on start), which bounds the replay window to zero at the cost of a few lost shares ([share accounting & durability](research/sibling/mining-pool-architecture/wiki/concepts/share-accounting-and-durability.md)).
@@ -356,13 +463,22 @@ A coded decline is a protocol message, so a client can always distinguish it fro
 
 ### 3.6 Client-side payout verification (`spc-translator`, `spc-jdc`)
 
-Both clients know `(b_scan or B_scan, B_spend)`, `H`, and `A_send` (from the job's `coinbase_tx_prefix` or the distribution's `OP_RETURN`). Before mining a job they MUST derive their own `P_{i,k}` (§2.3, receiver side; scan `k` from 0 until the first miss) and check the outputs carry the denomination shape of §4.4 — the sum over `k` must equal exactly the greedy-decomposition value of `owed` over the constant published rungs (§4.4), with `owed` recomputed from the type-32 window plus the prior error-held balance (any ladder ambiguity or absent publication is a hard reject; the rungs are four constants shared by every party, so no height or template data feeds the check). Result handling is `require_own_payout = warn | refuse` (default `warn`, because a sub-base miner legitimately has no coinbase output some blocks). The decomposition value — not `owed` — is what "correctly paid" means on the coinbase leg; the remainder leg is verified per §11.6. This is the "pre-block payout verification via the existing encrypted session" the wiki lists as engineering-solvable ([08-24 L6](research/raw/notes/2026-08-24-ll-jd-coinbase-control-amount-linkability.md)), and it is also how `spc-translator` detects at startup that it is pointed at an SPc pool at all (no `push32` after the height ⇒ abort with a loud error).
+**Audited warmup (2026-11-10).** A source-verified pool-template job MAY activate
+with an empty or underfilled window only under §4.3's complete-history rule.
+This is not an own-output absence bypass: the same contextual fees, coinbase
+conservation, Merkle/witness, Rule-B prior and complete owned k-set checks run.
+Wallet-owned verification signs derived Q/actual-work/shortfall/underfilled
+facts with the job/generation and source/checkpoint digests before collector
+commit (WIRE §3.10). Full measured N-block/T3 acceptance still requires full Q.
+The native gate consumes public evidence; keys remain in the existing wallet.
+
+Both clients know `(b_scan or B_scan, B_spend)`, `H`, and `A_send` (from the job's `coinbase_tx_prefix` or the distribution's `OP_RETURN`). Before mining a job they MUST derive their own `P_{i,k}` (§2.3, receiver side; scan `k` from 0 until the first miss) and check the outputs carry the denomination shape of §4.4 — the sum over `k` must equal exactly the greedy-decomposition value of `owed` over the constant published rungs (§4.4), with `owed` recomputed from the v1 type-32 window (v2 uses the pool's frozen v2 window; v2 does not serve type-32) plus the prior error-held balance (any ladder ambiguity or absent publication is a hard reject; the rungs are four constants shared by every party, so no height or template data feeds the check). Result handling is `require_own_payout = warn | refuse` (default `warn`, because a sub-base miner legitimately has no coinbase output some blocks). The decomposition value — not `owed` — is what "correctly paid" means on the coinbase leg; the remainder leg is verified per §11.6. This is the "pre-block payout verification via the existing encrypted session" the wiki lists as engineering-solvable ([08-24 L6](research/raw/notes/2026-08-24-ll-jd-coinbase-control-amount-linkability.md)), and it is also how `spc-translator` detects at startup that it is pointed at an SPc pool at all (no `push32` after the height ⇒ abort with a loud error).
 
 The check gates the JD fallback too (§3.5): under `refuse`, a distribution whose coinbase would omit the miner's `P` — or whose missing carrier makes the check impossible — is never declared; the JDC enters the same latched fallback having sent nothing, so no path exists on which the miner silently hashes a job that cannot pay it. Under `warn` the declaration proceeds and the warning stands.
 
 ### 3.7 Share Accounting extension (type 32 = `0x0020`)
 
-Served by `front` from the slice store (§5), message set and semantics per `extension.md` @ c661e93 with the **documented deltas** below (`docs/share-accounting-ext-deltas.md`). `front` serves type-32 for any pool block from share blobs obtained via the `payout` bootstrap RPC (WIRE-FORMATS §3.5 `type32_blobs`) plus the live `spc:slices` tail; there is no other cross-front share-blob path.
+Served by `front` from the slice store (§5) in **v1 only**, message set and semantics per `extension.md` @ c661e93 with the **documented deltas** below (`docs/share-accounting-ext-deltas.md`). `front` serves type-32 for any pool block from share blobs obtained via the `payout` bootstrap RPC (WIRE-FORMATS §3.5 `type32_blobs`) plus the live `spc:slices` tail; there is no other cross-front share-blob path. In v2 type-32 is unsupported: it MUST NOT be advertised, requests receive `Type32Message::Error{code: "unsupported-extension"}`, and no v2 slice may populate the type-32 store. The bootstrap payload MAY still contain identity-free blobs for v2 `window_tail` rows because the payout export covers every row; the v2 front ignores them.
 
 | Item | upstream | silent-pool |
 |---|---|---|
@@ -406,7 +522,14 @@ Tor is a **transport option, not a protocol mode**. It changes no message, no en
 
 | Name | Default | Meaning |
 |---|---|---|
-| `N` | 8 | window target `= N × d`, `d` = credited share difficulty (changelog (d)); TIDES and SLICE both use 8, [PPLNS-JD](research/wiki/concepts/pplns-jd.md) |
+| `N` | 8 | v1 window target `= N × d`, `d` = credited share difficulty (changelog (d)); v2 threshold is `Q(T)` network-reference units (§4.3). TIDES and SLICE both use 8, [PPLNS-JD](research/wiki/concepts/pplns-jd.md) |
+| `work_unit_version` | 1 | `1` frozen legacy (`share_work_legacy`) or `2` exact reference work (`network_block_work`, opt-in regtest only) |
+| `work_reference_target` | none | v2 only: `R = 2^k - 1`, `1 <= k <= 255`; `R + 1` MUST be an exact power of two and `R >= pow_limit` |
+| `share_work_multiplier` | none | v2 only: `m_cfg = 2^j_cfg`, `0 <= j_cfg <= k - 1`; the issued `m_issue` is `min(m_cfg, 2^(k - ceil_log2(T+1)))` |
+| `max_work_multiplier` | `2^32` | v2 hard cap; must be `>= m_cfg` and `<= 2^32` |
+| `max_window_target_units` | `2^64` | v2 hard cap on `Q(T)`, decimal u128 string; larger Q fails `window_target_too_large` |
+| `window_rule` | `1` for v2, `0` for v1 | `0` = `share_work_legacy` (`N * d`), `1` = `network_block_work` (`Q(T)`); explicit mismatch is an error |
+| `pow_limit_bits` | pinned `0x207fffff` | v2 effective regtest consensus value; any other value is rejected. The build does not dynamically query/override a different consensus value. |
 | `δ` (`slice_fee_delta_sats`) | 0 in pool-template mode; 50 000 under JD | new slice when a share's job fees `≥ f_ref + δ` |
 | `max_slice_shares` | 65 000 | hard seal (keeps `GetShares` payloads bounded) |
 | `fee_bps` | 100 | pool fee, taken from both subsidy and fees |
@@ -415,14 +538,15 @@ Tor is a **transport option, not a protocol mode**. It changes no message, no en
 | `ladder_base_rungs_sats` | `[500000, 1000000, 3000000, 5000000]` | rungs for pool-template coinbase decomposition (§4.4, FINAL decision 2026-11-03): **constant, forever** — no era scaling, no re-parameterization; greedy largest-first; remainder < smallest rung to Ark |
 | `coinbase_weight_budget` floor / ceiling | 50 000 / 1 000 000 WU | autoscaler bounds; ceiling caps the coinbase at 25 % of block weight |
 | `max_payout_slots` | 1024 | **policy cap, not a weight limit** (2026-11-03): era-1 value bound `T_owed/500k = 619` (26.6 KB, 106k WU); 1024 outputs = 44.0 KB / 176k WU; 2048 (88.1 KB / 352k WU) is the documented fee-spike headroom setting |
-| `retain_windows` | 16 blocks | slice retention for type-32 audits |
-| `scrub_after_blocks` | 100 | delete `sp_id → P_i` / `U_i` snapshot entries this many blocks after the block is fully settled — booked **and**, for Ark-tier entries, sent (§11.3) |
+| `retain_windows` | 16 blocks | v1 slice/type-32 retention horizon; never applied to v2 rows |
+| `scrub_after_blocks` | 100 | delete `sp_id → P_i` / `U_i` snapshot entries this many blocks after the block is fully settled — booked **and**, for Ark-tier entries, sent (§11.3). v2 `slice_credit` uses the separate 4096-height cutoff, not this value. |
 
 ### 4.2 Slices
 
 ```
 ShareRec { sp_id, d: u64, job_fees: u64, job_id: u64, nonce, ntime, version, extranonce: [u8;≤32], share_index: u32 }
-Slice    { prev_hash, H, ref_job_id, ref_fees, shares: Vec<ShareRec>, difficulty: u128, root: [u8;32] }
+Slice    { prev_hash, H, ref_job_id, ref_fees, shares: Vec<ShareRec>, difficulty: u128, root: [u8;32],
+           work_unit_version: u8, work_unit_fingerprint: [u8;32] }
 
 seal_if_needed(open, incoming):
     if incoming.prev_hash != open.prev_hash        → seal (new H)
@@ -432,21 +556,83 @@ seal(open): open.root = merkle_root([share_leaf(s) for s in shares]); emit to sp
 share_leaf(s) = sha256d(ser(nonce ‖ ntime ‖ version ‖ extranonce ‖ job_id ‖ share_index))   # identity-free
 ```
 
-Leaves contain no `sp_id`, so `GetShares` responses and retained share blobs carry no identity (the extension's types have zero identity fields — [SV2 Share Accounting Extension](research/wiki/concepts/sv2-share-accounting-ext.md)). Identity lives only in the per-slice aggregates (§5.1 `slice_credit`), which are what get scrubbed.
+v2 `Slice::push` and aggregate construction use checked accumulation for
+`sum(d)`, `d * f`, and each per-identity/slice `diff_fee_sum`, returning the
+named accounting error on overflow; v1 keeps its frozen saturating path.
+
+Leaves contain no `sp_id`, so `GetShares` responses and retained share blobs carry no identity (the extension's types have zero identity fields — [SV2 Share Accounting Extension](research/wiki/concepts/sv2-share-accounting-ext.md)). Identity lives only in the per-slice aggregates (§5.1 `slice_credit`), which are what get scrubbed. v2 slices additionally carry the definite `work_unit_version = 2` and a nonzero reference fingerprint; v1 rows carry version `1` and the 32-byte zero sentinel on the wire (NULL in SQL). A slice whose stored version and fingerprint do not form one valid profile is never reinterpreted or mixed into another profile; a distribution or block additionally carries `window_rule` and must agree with the slice profile.
 
 ### 4.3 Window
 
+The window rule is selected by the **stored** `window_rule`; a live window is
+never mixed across versions. Both rules exclude the finding slice, walk newest
+first, take whole slices until the threshold is reached, include the slice that
+crosses it, and compute the same `high_water = {front_id:
+last_slice_stream_id}` vector.
+
+**v1 (`share_work_legacy`, frozen).** The target is `N * d`, where
+`d = min(share_difficulty, max(1, round(network_difficulty)))`; the same `d` is
+used in `ShareRec`, the window target and the slice aggregates (changelog (d),
+`docs/decisions/2026-11-02-share-target-policy.md`). Arithmetic remains the
+existing saturating path. Existing v1 rows, windows and distributions are never
+converted to v2.
+
+**v2 (`network_block_work`).** With v2 reference target `R`, network target
+`T` decoded from the finding job's `nbits`, and `N`:
+
 ```
-select_window(slices_desc_from_finding_slice, d):
-    skip the slice containing the block-finding share            # excluded from reward (extension.md)
-    take whole slices while Σ difficulty < N × d; include the slice that crosses the threshold
-    t = slices taken
-    high_water = {front_id: last_slice_stream_id} for each front whose slices are in the window    # settlement and the type-32 window reconstruct exactly the slices at or below the vector; fork-ineligibility per MULTI-REGION §1 stale-fork rule
+Q(T) = ceil( N * (R + 1) / (T + 1) )      # reference units, exact then one ceiling
 ```
 
-The window target is `N × d`, where `d = min(share_difficulty, max(1, round(network_difficulty)))`; the same `d` is used in `ShareRec`, the window target and the slice aggregates (changelog (d), `docs/decisions/2026-11-02-share-target-policy.md`). Block detection still requires the consensus target.
+For `N = 8` and `R = 2^255 - 1`, `Q = 65` on the `0x200fffff` regtest profile
+and `Q = 9` on the `0x207fffff` pow limit (floors 64 and 8). The ceiling is
+deliberate: `floor` could select less than N blocks of work. The rounding error
+is strictly below one reference unit, and whole-slice overshoot is reported
+separately.
 
-Whole-slice granularity makes the window slightly larger than `N × d`; this matches `extension.md`'s definition and keeps `GetWindow` exact.
+The window accumulates whole slices until the stored `sum(difficulty) >= Q(T)`.
+The finding slice is still excluded, and the crossing slice is included.
+`Q(T)` is persisted in the distribution snapshot and settlement never
+recomputes it from later bits. `Q > max_window_target_units` fails with
+`window_target_too_large`; exhausting the bounded history before Q leaves
+`window_underfilled = true` and must not be described as N-block coverage.
+`underfilled`, `actual_sum` and `overshoot` are derived from `high_water` and
+the persisted target, never stored columns:
+
+```
+actual_sum = sum(slice.difficulty for slices at/below high_water)
+overshoot  = max(0, actual_sum - window_target)
+underfill  = max(0, window_target - actual_sum)
+```
+
+**Complete-history warmup.** A complete independently verified source/economic
+checkpoint may prove all eligible available history is known but sums below Q.
+Select ALL those completed slices, excluding the finding/open slice; use actual
+selected work and slice count in §4.4. Never lower Q, node bits or N, fabricate
+shares/work, trim entitlement, or claim full-Q coverage. Empty history needs
+proof of emptiness, including high-water entries for every participating front
+(zero for a known empty front). Missing or unproved-pruned history is UNKNOWN.
+
+For proven empty history the existing raw adapter assigns raw=0 per identity
+and raw pool_sats=T. Verified available prior pending is still added to owed
+and follows existing routing/conservation/error-ledger rules, never erased for
+bootstrap. An empty-window on-chain pending payout violating the existing
+actual-coinbase bound still rejects when full rung payments exceed T. Gross
+pool_sats=T is not a floor when repaying old P. With no prior entitlement the actual coinbase
+is pool-only T apart from validated zero-valued carrier/witness outputs.
+Legitimate retained sub-base pending remains owed. Derived underfill facts are
+proof/ACK annotations, not a new stored accounting rule or enum.
+
+The live v2 RAM tail retains every eligible stored-v2 slice up to the explicit
+4096-slice hard cap, using the template height (`tip + 1`) so the RAM cutoff is
+one block stricter than the SQL `tip - horizon` cutoff. It never retains a
+slice older than the SQL eligibility horizon, and current-Q selection still
+uses the whole crossing slice. This bounded headroom exists for a future
+harder/larger-Q window; it is not unbounded retention.
+
+Whole-slice granularity makes a v2 window at least `Q(T)` units and may exceed
+it by less than one reference unit plus the crossing slice; that overshoot is
+reported, not hidden. Block detection remains the consensus target.
 
 ### 4.4 Scores and payout (lorbax formula)
 
@@ -461,7 +647,18 @@ raw(id)      = ⌊ r_net · Σ_{s∈id} d_s / D_win ⌋
 
 Equivalently `payout(sᵢ) = r·score_d(sᵢ) + F_S·score_f(sᵢ)` with `F_S = F/t`, `score_d = dᵢ/D_win`, `score_f = dᵢfᵢ/DF_S` (lorbax; gap research). All arithmetic in `u128`; floors per term; remainders fall to the pool output. **Pool-template collapse**: with `δ = 0` every share in a slice has `f_s = f_ref`, so `score_f ≡ dᵢ/D_S` and the fee term becomes a difficulty-weighted split of `F_net` — plain PPLNS, same code path.
 
-**Denomination payouts (FINAL decision 2026-11-03).** `raw(id)` and `owed(id)` stay exact — settlement and miner audits recompute them. Coinbase outputs are quantized to a published, **constant** ladder: rungs `{500 000; 1 000 000; 3 000 000; 5 000 000}` sats, forever (no era scaling, no halving re-parameterization; each halving doubles the rungs' relative size, accepted — see the record). The band function is **trivially pure over the amount**: no dependence on height, subsidy, fees or the coinbase value, so build, settlement and miner audit share four constants and the front/settlement divergence risk is removed entirely. A kept id's coinbase payout is the **greedy largest-first decomposition** of `owed` over the rungs (repeated rungs allowed, one output per piece at `P_{i,k}`, §2.3); its remainder `owed mod 500 000` routes per §11.1 (Ark when deliverable, error rail otherwise, never forfeited by rounding). Rounding is strictly down — rounding up would spend the reserved `pool_sats`. The output count is value-bounded by construction: every output is `≥ 500 000` sats, so outputs `≤ T/500 000` (~619 in era 1; fees grow the bound with `T`) and the §4.8 slot cap can never be honestly approached. Pool-template mode only in v1: under JD the JDC computes sats from weights (§4.7), so JD distributions carry exact `owed` weights and §10 O20 tracks the JDC-side denomination convention.
+**v1 arithmetic is frozen** with its existing saturating behavior and
+interpretation. **v2 arithmetic is checked**: slice `sum(d)`, `d * f`,
+`diff_fee_sum`, `D_win`, the `r_net`/`F_net` products and every final
+conversion fail with a named error on overflow or division by zero instead of
+saturating or guessing. A v2 restore or distribution build that would mix
+versions/fingerprints fails closed; an already frozen distribution settles with
+its own persisted rule/target/profile. That explicit `owed` value is the
+settlement/audit authority; it is not a production-policy change, and the
+denomination ladder remains the separate `DESIGN.md`/2026-11-03 policy (the lab
+feature does not amend production payout policy).
+
+**Denomination payouts (FINAL decision 2026-11-03).** `raw(id)` and `owed(id)` stay exact - settlement and miner audits recompute them. Coinbase outputs use the constant rungs `{500000,1000000,3000000,5000000}` forever, without era scaling or halving re-parameterization. The band function depends only on owed. A kept identity receives its complete greedy largest-first decomposition, with repeated rungs at `P_{i,k}` (§2.3); the sub-base remainder follows §11.1, never forfeiture by rounding. Rounding is strictly down because outputs cannot exceed full owed. Gross `pool_sats = T - sum(raw)` is bookkeeping, not a separate reserve below which net `pay_P` cannot fall: signed pending repayment is accounted for by §4.6/§11.9. Full actual ladder payments must fit T, with no trimming or partial fallback. Every output is at least 500000 sats, so output count is bounded by T/500000 and the representation/weight limits in §4.8. This shaping is pool-template-only; JD keeps exact owed weights and O11 scaling (§4.7, §10 O20).
 
 ### 4.5 Worked example
 
@@ -484,6 +681,14 @@ Equivalently `payout(sᵢ) = r·score_d(sᵢ) + F_S·score_f(sᵢ)` with `F_S = 
 
 ### 4.6 Pending ledger (Blitzpool `bp-pplns` pattern, re-implemented)
 
+**Rule B (2026-11-10).** The pending contribution at build is available
+`A = B - sum(c_b)` over the complete canonical validated unbooked set, where B
+is booked pending, `delta_b = E_b - P_b` uses that job's frozen prior P_b and
+actual mined validation, and `c_b = max(0,-delta_b)`. New owed is fresh raw + A.
+Booking applies B += delta_b and releases c_b atomically; positive delta is
+unavailable before booking. Unbooked orphan releases c only, never -delta.
+See the binding Rule-B decision for lifecycle, JD/O11, reorg and readiness rules.
+
 ```
 owed(id)  = raw(id) + pending(id)                      # pending is error-held only (2026-11-03: no capacity deferral)
 kept      = { id : owed(id) ≥ 500_000 }                # coinbase-payable; below the base rung goes per §11.1
@@ -491,8 +696,29 @@ for id in kept:    greedy largest-first decomposition over {500k; 1M; 3M; 5M} �
                    pay(id)  = owed(id) − (owed(id) mod 500_000)
                    rem(id)  = owed(id) mod 500_000      # routed per §11.1: ark_due' if deliverable, else error pending'; never forfeited
 for id not kept:   pay(id) = 0;        owed(id) routed by §11.1 to ark_due', error pending' or forfeited
-pay_P     = T − Σ pay(id)                              # fee + rounding + forfeited + sats backing every held' balance (remainders included until their Ark send)
+pay_P     = T − Σ pay(id)                              # NET: K + Σ ark_due' + Σ forfeited + Σ (pending' - P)
 ```
+
+**Gross versus net pool value (2026-11-10 correction).** Let
+`K = T - sum(raw)`, `P` be this job's frozen available prior, `E` its resulting
+error pending, and `delta = E-P`. Per row,
+`paid + ark + forfeit + E = raw + P`; therefore
+`pay_P = K + sum(ark) + sum(forfeit) + sum(delta)`.
+Delta is signed. Gross fees were already deducted from fresh raw. Paying an
+old liability can make the current pool UTXO smaller than K or even smaller
+than the gross fee; that reduction is offset by liability reduction and prior
+holdings, not fee waiver or donation. Pool-template validation MUST NOT impose
+either extra floor. It retains `T.checked_sub(sum_actual_ladder_paid)` and all
+per-row/full-rung checks. Total owed may exceed T when legitimate error/Ark
+holds mean actual coinbase payments still fit. `raw.pool_sats` and
+`Routing.pool_fee` remain gross K for bookkeeping and JD weights; this does
+not alter legacy JD routing, O11 claims, Ark float, send caps or maturity.
+
+Known complete empty windows have raw=0 and gross K=T, but may repay frozen P
+through the same ordinary ladder/rail/conservation path. Missing ancestry,
+missing nonzero high-water slices, missing frozen v2 Q or incomplete history
+still fails closed. No special all-T pool-output requirement applies when P
+is being repaid.
 
 `held' = pending' + ark_due'`: everything the pool owes a miner after this block that is not in the coinbase. `forfeited` is not owed to anyone; it is pool revenue (§11.1). §11.1 decides where each non-kept id lands; this section only decides who gets a coinbase output.
 
@@ -503,6 +729,14 @@ pay_P     = T − Σ pay(id)                              # fee + rounding + for
 **Settlement reads the mined coinbase, never the snapshot's sats.** `payout` books from the block's actual coinbase: `T_actual = Σ coinbase outputs`; `paid(id)` = value of the output whose script is `OP_1 ser_x(P_id)` from `entries` (0 if absent). Pool-template mode: `T_actual = T` and `paid(id) = pay(id) = owed(id) − (owed(id) mod 500_000)` by construction — settlement re-runs the same accounting against the same four constant rungs and fails closed on `Σ_k value(P_{id,k}) ≠ pay(id)`, accumulating an id's outputs across `k` before the check (decision 2026-11-03: the ladder is a pure function of the amount; nothing else feeds it). JD mode: the JDC paid `floor(owed(id) · (T_actual − F) / W)` at **its** template revenue (PR #203 §4) and may have dust-pruned an id the snapshot kept, so the mined sats differ from `entries[].sats` on every JD block whose `T_actual ≠ T`; `pending'(id)` MUST be derived from `paid(id)`, never copied from the snapshot. The claim is `claim(id) = floor(owed(id) · (T_actual − F) / W)` (revenue-scaled; resolved 2026-10-14, `docs/decisions/2026-10-14-o11-claim-formula.md`), so `pending'(id) = claim(id) − paid(id)` keeps the ledger unsigned and matches pool-template mode's scaling. Blitzpool books `claim(T_actual) − paid` per address from the mined coinbase (`bp-pplns-engine` `on_block_found`, `ActualCoinbase`) for the same reason; the §11.6 miner audit closes to zero only under this rule. JD weights are exact `owed` in v1 — the §4.4 shaping is pool-template-only (§10 O20).
 
 ### 4.7 Distribution builder
+
+**Entry binding (2026-11-09).** Each logical row additionally freezes
+`owed_sats = raw + prior_pending`; its `p_x` array is in k order, while
+transaction outputs are globally script-sorted. WIRE-FORMATS §3.1 defines
+the mandatory version-2 binary/JSON encoding. Settlement MUST compare the
+full reconstructed entitlement, canonical count, every key-associated amount
+and sum, rather than accepting another owed value in the same band. Frozen
+high-water/window metadata MUST NOT be retried with another slice set.
 
 ```
 Distribution(H, T, a_send):
@@ -526,6 +760,21 @@ In JD mode the same function emits `weights` instead of sats (`weight_id = owed(
 
 P2TR output = 43 B = 172 WU. Since 2026-11-03 the budget does not trim miners; denomination payouts (§4.4) bound the output count by value: every output is `≥ 500 000` sats, so `outputs ≤ T/500 000` (~619 in era 1; a fee-doubled block can reach ~1 230). The fixed slot policy `max_payout_slots = 1024` (§4.1; 44.0 KB / 176k WU) is the recommended cap — belt-and-braces, honestly unreachable in era 1, deliberately approach-able only under fee spikes, for which **2 048 (88.1 KB / 352k WU) is the headroom setting**; hitting the cap at build fails closed and alarms, never silently defers. An under-sized weight budget costs **coverage elsewhere**, not validity and never delay (A2: no miner waits a block for capacity; the `trim_to_budget` loop and its trimmed-to-`pending` rail are removed). Autoscaler per template: `utilisation = used/budget`; step `×1.15` when `≥ 0.85` for `up_debounce` (3) consecutive templates; step `÷1.15` when `≤ 0.50` for `down_debounce` (20); `cooldown_secs` 300; clamp to floor/ceiling (50 000 / 1 000 000 WU, §4.1); on change send new `CoinbaseOutputConstraints` to the TP (pool-template) or a new `SetPayoutDistribution` (JD). The capacity alert fires if `T/500 000` would exceed the slot cap (a fee event), not before trimming — there is no trimming.
 
+**Witness overhead (2026-11-08).** A job whose transaction set carries
+witness data has a fixed additional 224 WU - 188 WU for the zero-value
+commitment output (47 vbytes) and 36 WU for the coinbase witness - counted
+in the tier weight budget only when a commitment is present. Witness-free
+templates carry no overhead. Settlement's tier crosscheck mirrors the same
+224 WU, detected from the mined coinbase, so a boundary-exact front routing
+reconstructs without spurious divergence. The constant does not cover the
+coinbase output-count CompactSize growing from one byte (<= 252 outputs) to
+three (`0xfd` + 2 bytes, >= 253 outputs) when the commitment output crosses
+that boundary (+2 vbytes = +8 WU): the whole-block weight model remains the
+preexisting tier-budget approximation, and the ladder keeps governing
+pool-controlled payout outputs - a documented model limit, not a hard block
+weight limit. See
+docs/decisions/2026-11-08-pool-witness-commitment.md.
+
 ## 5. Data model
 
 ### 5.1 Postgres (written only by `payout`; migrations via `sqlx`, advisory-locked at boot)
@@ -547,6 +796,7 @@ CREATE TABLE ark_delivery (                      -- a delivery capability (§0),
   mailbox_mode TEXT NOT NULL CHECK (mailbox_mode IN ('none','static','epoch_derived','epoch_registered')),
   mailbox_m    BYTEA,                            -- M; NULL iff mailbox_mode = 'none'
   mailbox_d    BYTEA,                            -- D = b_ark·S_mb; NULL iff mailbox_mode = 'none'
+  epoch_fallback SMALLINT NOT NULL DEFAULT 0 CHECK (epoch_fallback IN (0,1)),
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
   -- CHECK ((mailbox_mode = 'none') = (mailbox_m IS NULL AND mailbox_d IS NULL))
 );
@@ -556,6 +806,25 @@ CREATE TABLE ark_epoch_mailbox (                 -- MAILBOX.md variant A only
   height     INTEGER NOT NULL,                   -- epoch i
   mailbox_mi BYTEA NOT NULL,                     -- M_i
   PRIMARY KEY (sp_id, height)
+);
+
+CREATE TABLE ark_registration_state (         -- migration 0006, current request state per identity
+  sp_id                 BYTEA PRIMARY KEY REFERENCES sp_identity,
+  last_request_id       BIGINT NOT NULL CHECK (last_request_id BETWEEN 1 AND 4294967295),
+  signed_fields_digest  BYTEA NOT NULL CHECK (octet_length(signed_fields_digest) = 32),
+  registration_rev      BIGINT NOT NULL,
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE ark_registration_request (       -- durable applied-request journal, NOT a Redis cache
+  sp_id                 BYTEA NOT NULL REFERENCES sp_identity,
+  request_id            BIGINT NOT NULL CHECK (request_id BETWEEN 1 AND 4294967295),
+  signed_fields_digest  BYTEA NOT NULL CHECK (octet_length(signed_fields_digest) = 32),
+  outcome               TEXT NOT NULL CHECK (outcome IN ('applied','superseded','mismatch','stale')),
+  registration_rev      BIGINT NOT NULL,
+  error_code            TEXT,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (sp_id, request_id)
 );
 
 CREATE TABLE slice (
@@ -568,7 +837,10 @@ CREATE TABLE slice (
   difficulty  NUMERIC(40,0) NOT NULL,            -- u128
   root        BYTEA NOT NULL,
   shares      BYTEA NOT NULL,                    -- identity-free compact blob for GetShares (§4.2)
-  sealed_at   TIMESTAMPTZ NOT NULL
+  work_unit_version SMALLINT NOT NULL DEFAULT 1 CHECK (work_unit_version IN (1,2)),
+  work_unit_fingerprint BYTEA CHECK (work_unit_fingerprint IS NULL OR (octet_length(work_unit_fingerprint) = 32 AND work_unit_fingerprint <> decode(repeat('00', 32), 'hex'))),
+  sealed_at   TIMESTAMPTZ NOT NULL,
+  CHECK ((work_unit_version = 1) = (work_unit_fingerprint IS NULL))
 );
 CREATE INDEX slice_height_idx ON slice (height DESC, slice_id DESC);
 
@@ -585,10 +857,15 @@ CREATE TABLE distribution_snapshot (
   height          INTEGER NOT NULL,
   a_send_x        BYTEA NOT NULL,                -- public; never the secret
   distribution_id BIGINT,                        -- JD only
-  entries         JSONB NOT NULL,                -- [{sp_id, rail, p_x[] | ark_dest, sats}] (§4.7); scrubbed to [] per §5.1 note
+  entries         JSONB NOT NULL,                -- [{format_version:2, sp_id, rail, p_x:[], dest_id, sats, owed_sats}] (§4.7); scrubbed to []
   high_water      JSONB NOT NULL,                -- {front_id: last_slice_stream_id} (§4.3)
-  window_target   NUMERIC(40,0),                 -- exact N x d the front selected this window with (§4.3); NULL only for pre-migration rows, which settlement estimates with a warning (§7.4)
-  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+  window_target   NUMERIC(40,0),                 -- v1 exact N*d, v2 exact Q(T) (§4.3); NULL only for pre-migration rows, which settlement estimates with a warning (§7.4)
+  work_unit_version SMALLINT NOT NULL DEFAULT 1 CHECK (work_unit_version IN (1,2)),
+  work_unit_fingerprint BYTEA CHECK (work_unit_fingerprint IS NULL OR (octet_length(work_unit_fingerprint) = 32 AND work_unit_fingerprint <> decode(repeat('00', 32), 'hex'))),
+  window_rule     SMALLINT NOT NULL DEFAULT 0 CHECK (window_rule IN (0,1)),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK ((work_unit_version = 1 AND work_unit_fingerprint IS NULL AND window_rule = 0)
+      OR (work_unit_version = 2 AND work_unit_fingerprint IS NOT NULL AND window_rule = 1))
 );
 
 CREATE TABLE block_found (
@@ -631,20 +908,61 @@ CREATE TABLE pending_balance (
 );
 ```
 
-Nothing here is a per-share row ([share accounting & durability](research/sibling/mining-pool-architecture/wiki/concepts/share-accounting-and-durability.md)). The attribution surface is exactly `slice_credit` + `distribution_snapshot.entries` + `ark_payout.vtxo_id`; the **scrub job** deletes `slice_credit` rows for slices older than the oldest unsettled window + `retain_windows`, and empties `entries` (and nulls `vtxo_id`) for blocks fully settled — booked, and every `ark_payout` row out of `scheduled` — more than `scrub_after_blocks` ago. Ark-tier entries live until their send completes (normally `H_f + 6`, longer on retries): the Ark destination cannot be re-derived once `a_send` is gone (§2.2). `ark_delivery` is not scrubbed; it is live configuration, deleted when the miner withdraws it. `ledger_history` keeps `(block_hash, sp_id, rail, sats)` for idempotency and pending reconciliation but never a script or key, so a DB dump after scrub links identities to **amounts and tiers**, not to **outputs or VTXOs** — the residual leak is the amount channel, which exists on-chain anyway (§0).
+**Rule-B durable state (migration 0009).** `economic_state` has singleton `id`,
+`revision`, `anchor_height`, nullable `anchor_hash`, `complete`, and `reason`.
+`economic_block` is keyed by `block_hash` and retains `parent_hash`, `height`,
+`payload_digest`, scrub-sensitive nullable `raw_event`, immutable `frozen_job`,
+`validated_ledger`, `consumption`, `lifecycle` (`unbooked`, `booked`, `cancelled`,
+`loss_held`), `transition`, and `revision`. `economic_chain` records each
+verified height's `block_hash`, `parent_hash`, `pool_block`, `coinbase_digest`,
+and `revision`. The booked balance remains `pending_balance.sats`; U is the
+complete canonical `unbooked` set. These tables and their committed history
+MUST move atomically with monetary transitions. An existing balance/history
+without an economic checkpoint MUST NOT be initialized as empty history.
+Raw events follow the snapshot attribution horizon; history excludes their
+raw bytes and retains frozen monetary inputs/lifecycle evidence. Lost raw
+attribution MUST NOT be replaced by guessed recanonicalization inputs.
+
+Migration 0011 adds `economic_checkpoint` (WIRE §3.11). It records the exact
+actual initial-row bytes, bounded monetary snapshot bytes/digest, prior schema
+checksums, economic revision, preceding history watermark and SQL transaction
+snapshot boundary. The checkpoint itself is journaled as a real checkpoint
+INSERT. Only the exact untouched initial state plus the existing verified
+empty `history_start` qualifies as `fresh_empty`. Nonempty or inconsistent
+pre-migration data remains `unverified_existing`, preserving all amounts and
+holding readiness. Missing/altered/unverified seeds MUST fail closed; source
+history's append-only checkpoint copy binds the readback. No prior migration
+or history record is rewritten and no balance is credited by this migration.
+
+**Aggregate receipt state (migration 0010).** Frozen `ark_aggregate.server_pubkey`
+is the immutable full compressed 33-byte key from the configured server's
+verified ArkInfo. A historical NULL does not authorize a proof. SPc-side
+`ark_receipt_disposition` is keyed by `(stream,stream_id)` and records `status`
+(`terminal_invalid`, `retry_unknown`, `applied`), `reason`, bounded `payload`,
+full `payload_sha256`, `original_len`, and `attempts`. Payload retention is at
+most 4 MiB per item, with full hash/length even for oversized invalid items.
+`ark_receipt_cursor(stream,last_id)` persists fair pending-entry traversal.
+These records MUST NOT discharge or refund uncertain obligations.
+
+Nothing here is a per-share row ([share accounting & durability](research/sibling/mining-pool-architecture/wiki/concepts/share-accounting-and-durability.md)). Attribution includes `slice_credit`, `distribution_snapshot.entries`, raw economic events and Ark delivery proofs/IDs; the **scrub job** selects deletion horizons **per stored row version**, never from the payout process's configured version:
+
+- v1 `slice_credit` follows the unchanged legacy horizon derived from `retain_windows`, confirmation depth and `N`; v1 identity retention is never extended by a v2 configuration.
+- v2 `slice_credit` uses the explicit **4096 network-height** cutoff, `height < tip - 4096` (a row at `tip - 4096` is retained). Unknown versions are undeleted (fail closed).
+- live/bootstrap v2 RAM retains age-eligible slices only, up to the explicit 4096-slice cap and the same 4096-height horizon. The RAM cutoff uses the template height `tip + 1` (`height >= tip + 1 - 4096`) and is therefore one block stricter than the SQL cutoff; it never serves credits already expired under SQL. This bounded headroom preserves history for a future harder/larger-Q window.
+- `entries` are emptied (and `vtxo_id` nulled) only for blocks fully settled - booked, and every `ark_payout` row out of `scheduled` - more than `scrub_after_blocks` ago. The v2 4096-height extension is an SPc-side attribution-retention extension only; it adds no identity field to the Ark boundary and is not applied to v1. Ark-tier entries live until their send completes (normally `H_f + 6`, longer on retries): the Ark destination cannot be re-derived once `a_send` is gone (§2.2). `ark_delivery` is not scrubbed; it is live configuration, deleted when the miner withdraws it. `ledger_history` keeps `(block_hash, sp_id, rail, sats)` for idempotency and pending reconciliation but never a script or key, so a DB dump after scrub links identities to **amounts and tiers**, not to **outputs or VTXOs** — the residual leak is the amount channel, which exists on-chain anyway (§0).
 
 ### 5.2 Redis
 
 | Key / stream | Producer → consumer | Content |
 |---|---|---|
-| `spc:slices` (stream) | front → payout | sealed `Slice` + its per-identity aggregates |
-| `spc:blocks` (stream) | front → payout | `{block_hash, height, front_id, fingerprint, high_water, window_target, entries}` on `SubmitSolution` accepted |
+| `spc:slices` (stream) | front → payout | sealed `Slice` + its per-identity aggregates, including definite work-unit version/fingerprint |
+| `spc:blocks` (stream) | front -> payout | SPCB/3 `{block_hash, height, front_id, fingerprint, high_water, window_target, entries, work_unit_version, work_unit_fingerprint, window_rule, economic}` on `SubmitSolution` accepted |
 | `spc:stats` (stream) | front → payout/api | per-minute `{sp_id, accepted_d, rejected, hashrate_est}` — never per share |
 | `spc:arkreg` (stream) | front → payout | `{sp_id, b_scan, b_spend, ark_id, b_ark, mailbox_mode, M, D, epoch_fallback, sig}` (registration) |
-| `spc:front:events` (stream) | payout → all fronts | `ArkRegApplied{sp_id, rev}`, `LedgerApplied{block_hash, pending_deltas, republish}`, `BlockFound{block_hash, height, front_id, provisional_paids, high_water}`, `TipHeartbeat{hash, height}` |
+| `spc:front:events` (stream) | payout -> all fronts | `ArkRegApplied`, `LedgerApplied`, historical `BlockFound`, `TipHeartbeat`, `EconomicChanged{rev,economic_revision,anchor_hash}`; WIRE §3.2 |
 | ~~`spc:dist:current`~~ | intra-`front` state since 2026-10-13 | current `distribution_id`, `H` (JD validation); was a stream when the JDS was a separate process |
-| `spc:ark:orders` (stream) | payout → ark | signed `ArkSendOrder` (§11.3) — no identity fields. Redis ACL: `ark` may read only this stream and write only `spc:ark:receipts` |
-| `spc:ark:receipts` (stream) | ark → payout | `ArkSendReceipt` keyed by opaque `order_id` |
+| `spc:ark:orders` (stream) | payout → ark | signed `ArkSendOrder` (§11.3) - no identity fields; Ark also writes opaque fresh authorization requests and reads nonce-specific grants (WIRE §3.8) |
+| `spc:ark:receipts` (stream) | ark -> payout | `ProvedReceipt` (SPRP/1), bound to the durable grant; legacy `ArkSendReceipt` only for explicitly unreserved legacy obligations |
 
 Consumer groups give at-least-once delivery; `ledger_history`'s PK makes apply idempotent, so redelivery is harmless (Blitzpool's exactly-once-by-idempotency).
 
@@ -654,7 +972,21 @@ Byte-level formats of the stream payloads above, the `spc:arkreg` entry and the 
 
 ### 5.3 `front` process memory
 
-`channels: HashMap<ChannelId, (sp_id, B_scan, B_spend)>` · `ark_delivery: HashMap<sp_id, ArkDelivery>` (loaded from §5.1, updated by `spc:front:events`) · `a_send: Option<(u32 /*H*/, Zeroizing<[u8;32]>, [u8;32] /*A_x*/)>` · `ecdh_cache: HashMap<sp_id, Zeroizing<[u8;33]>>` (cleared with `a_send` on height advance) · `open_slice: Slice` · `seen_shares: HashSet<[u8;32]>` (cleared on `SetNewPrevHash`) · `window_cache: Vec<SliceAgg>` (live slice tail; rebuilt at start through the bootstrap RPC, which in single-site reads Postgres directly) · `type32_blobs: HashMap<slice_id, ShareBlob>` (obtained via bootstrap RPC + live `spc:slices` tail) · `budget: Autoscaler` · `provisional_paids: HashMap<sp_id, u64>` (announced paid amounts from `BlockFound` events; reversed by `LedgerApplied` on orphan) · `outbox: Vec<RedisEvent>` (bounded; MULTI-REGION §8a). Front readiness requires bootstrap-RPC completion.
+Front RAM holds channels/identity keys, registration and epoch-mailbox caches,
+the height's zeroizing send secret/ECDH cache, open/sealed slices, replay set,
+v1-only type-32 blobs, output budget and bounded outbox. Its pending cache is
+available A from a complete Rule-B economic view, with frozen per-job B/R/A
+and selected slice IDs. Historical `provisional_paids` is not monetary
+authority. Readiness requires bootstrap plus an economic anchor matching the
+actual parent hash. `EconomicChanged` and `LedgerApplied` trigger coherent
+reload; dropped/reordered hints cannot authorize work from an incomplete view.
+
+**Restore rejection.** A bootstrap/restore that would mix v1 and v2 slices,
+unknown versions, mismatched fingerprints, or a distribution `window_rule`
+that disagrees with its stored version fails closed. v1 rows are replayed under
+the v1 rule only; no conversion or zero-fill is performed.
+
+**v2 bounded live tail.** For v2 the front keeps every eligible stored-v2 slice up to the 4096-slice hard cap. It applies the same 4096-height horizon as SQL before current-Q selection, but computes it from the template height (`tip + 1`): `slice.height >= tip + 1 - 4096`. That is one block stricter than the SQL row cutoff (`height >= tip - 4096`), so the RAM set can never contain a credit SQL has expired. Bootstrap fetches no more than the cap; subsequent rolls use the new tip before selection. Unbounded retention and live use of expired credits are forbidden. If the bounded history cannot reach Q, `window_underfilled` is true and the run is warmup/inconclusive, never N-block coverage.
 
 Loss on crash: the open slice (≤ `max_slice_shares` shares, typically seconds of work) and `seen_shares` (mitigated §3.4). `ponytail:` accepted for v0.1; upgrade path is a periodic open-slice checkpoint to Redis.
 
@@ -696,7 +1028,8 @@ spc-scan vectors                                                                
 network = "testnet4"            # fixes HRP ("tsp") and TP params
 roles = ["front", "payout", "api"]
 listen = "0.0.0.0:34254"
-authority_public_key = "…"      # Noise static key (SRI convention)
+authority_public_key = "…"      # Noise static key (SRI convention); public pin
+authority_secret_key = "…"      # front only; base58check private key, mode 0600, never logged or published
 pool_payout_descriptor = "tr(tpub…/0/*)"   # xpub of the ark seed's account m/86'/coin'/1' (§11.3); index = block height
 fee_bps = 100
 front_id = 0                    # 0..127, unique per front (§3.5, §9); single-site = 0
@@ -713,7 +1046,7 @@ socket_path = "/run/bitcoin/node.sock"
 extranonce_bytes = 16            # scriptSig budget: 100 − 4 − 33 − 16 = 47 B spare (§2.4.1)
 
 [sv1]                              # native SV1 listener (2026-11-02); pool-template only
-enabled = true
+enabled = true                     # MUST be false when work_unit_version = 2
 listen = "0.0.0.0:3333"
 extranonce1_bytes = 4            # per connection; extranonce1 + extranonce2 must fit §2.4.1
 extranonce2_bytes = 4            # miner-chosen
@@ -730,6 +1063,15 @@ max_payout_slots = 1024          # policy cap, not a weight limit (era-1 value b
 retain_windows = 16
 scrub_after_blocks = 100
 confirmation_depth = 6
+# v2 is opt-in and regtest-only; all keys below are v2-only. v1 keeps the
+# legacy share_difficulty policy frozen and MUST NOT carry these keys.
+# work_unit_version = 2
+# work_reference_target = "7fff...ffff"   # 32-byte big-endian, R = 2^k - 1
+# share_work_multiplier = 2               # power of two, m = 2^j
+# max_work_multiplier = 4294967296        # hard cap <= 2^32
+# max_window_target_units = "18446744073709551616"  # hard cap <= 2^64
+# pow_limit_bits = 0x207fffff             # pinned regtest value; any other is rejected
+# window_rule = "network_block_work"      # required for v2; 0/legacy is rejected
 
 [budget]
 floor_wu = 50000
@@ -747,7 +1089,7 @@ distribution_rebalance_bps = 100
 grace_same_height_only = true    # MUST stay true (§3.5)
 
 [extensions]
-share_accounting = true          # 0x0020
+share_accounting = true          # 0x0020; MUST be false in v2 (type-32 unsupported)
 window_hot_blocks = 6
 
 [storage]
@@ -764,7 +1106,7 @@ address = "pool.example:34254"
 authority_public_key = "…"
 sp_address = "tsp1q…"                      # becomes user_identity; validated at startup
 require_own_payout = "warn"                # "warn" | "refuse"   (§3.6)
-request_share_accounting = true
+request_share_accounting = true    # v1 only; ignored/refused in v2
 
 [downstream]
 listen = "0.0.0.0:34255"                   # SV1 ASICs point here; their usernames are labels only
@@ -819,7 +1161,7 @@ Per template: `n_kept` scalar multiplications (`ecdh_i` — `B_scan,i` is fixed,
 
 ### 7.4 Idempotency and exactly-once
 
-Block settlement runs in one Postgres transaction. `payout` first reconstructs the paid window from `distribution_snapshot.high_water` (§4.3, MULTI-REGION §1): exactly the slices at or below the vector, never a re-derivation from the current contents of Postgres. The window target is the snapshot's persisted `window_target` — the exact `N x d` the front used — so a difficulty retarget between the reference slice and the finding block cannot change the window settlement rebuilds; only a pre-migration row (NULL `window_target`) is estimated from the stored slices, with a warning naming the block, and a stored value that is not a u128 is a corrupt row that fails closed rather than a silent guess. Then: `INSERT block_found … ON CONFLICT DO NOTHING` → if inserted, `INSERT ledger_history` rows (PK rejects replays) → `INSERT ark_payout` rows (`status='scheduled'`, `due_height = height + confirmation_depth`, so normally due at once) for the Ark-rail ids → `UPDATE pending_balance` → `UPDATE block_found.status`. The Ark send is a second, separately idempotent step keyed by the same `(block_hash, sp_id)` and driven by the `ark` role's receipts (§11.3). Orphan check (`confirmation_depth`) runs before the transaction; an orphaned block writes `status='orphaned'` and **no** ledger rows. If a front cannot deliver a found block's event (crashed before XADD, outbox overflow), `payout`'s chain reconciliation sees the pool coinbase on-chain with no `block_found` row (`spc_orphaned_settlement_total{reason=missing_block_event}`, MULTI-REGION §8a), books it `status='pending'` with `fingerprint` NULL (§5.1: the column is nullable while the event is lost; `CHECK` forbids `confirmed` with NULL) and alarms — a build MUST never fail over a lost event (Blitzpool's vouching invariant), and the operator reconstructs from the on-chain coinbase + `slice_credit` if needed; that reconstruction sets `fingerprint`, after which the block may be confirmed and booked.
+Block settlement runs in one Postgres transaction. `payout` first reconstructs the paid window from `distribution_snapshot.high_water` (§4.3, MULTI-REGION §1): exactly the slices at or below the vector, never a re-derivation from the current contents of Postgres. The window target is the snapshot's persisted `window_target` - v1 exact `N * d`, v2 exact `Q(T)` - selected by the snapshot's persisted `work_unit_version`, `work_unit_fingerprint` and `window_rule`. A difficulty retarget or later template change cannot alter the window or target settlement rebuilds. Only a pre-migration row (NULL `window_target`) is estimated from the stored slices, with a warning naming the block, and a stored value that is not a u128, a mixed profile, or a v2 row without a nonzero fingerprint is a corrupt row that fails closed rather than a silent guess or conversion. The finding job's `nbits`/generation and the snapshot's profile are immutable settlement inputs. Then: `INSERT block_found … ON CONFLICT DO NOTHING` → if inserted, `INSERT ledger_history` rows (PK rejects replays) → `INSERT ark_payout` rows (`status='scheduled'`, `due_height = height + confirmation_depth`, so normally due at once) for the Ark-rail ids → `UPDATE pending_balance` → `UPDATE block_found.status`. The Ark send is a second, separately idempotent step keyed by the same `(block_hash, sp_id)` and driven by the `ark` role's receipts (§11.3). Orphan check (`confirmation_depth`) runs before the transaction; an orphaned block writes `status='orphaned'` and **no** ledger rows. If a front cannot deliver a found block's event (crashed before XADD, outbox overflow), `payout`'s chain reconciliation sees the pool coinbase on-chain with no `block_found` row (`spc_orphaned_settlement_total{reason=missing_block_event}`, MULTI-REGION §8a), books it `status='pending'` with `fingerprint` NULL (§5.1: the column is nullable while the event is lost; `CHECK` forbids `confirmed` with NULL) and alarms — a build MUST never fail over a lost event (Blitzpool's vouching invariant), and the operator reconstructs from the on-chain coinbase + `slice_credit` if needed; that reconstruction sets `fingerprint`, after which the block may be confirmed and booked.
 
 ### 7.5 Pool-tag patch
 
@@ -846,11 +1188,12 @@ The derivation vectors are DESIGN.md's: port `spc_ark/src/lib.rs::test_vector` (
 ### 8.3 Integration — SV2 surface (in-process, no bitcoind)
 
 - channel open with `sp`, `tsp`, bare `bc1q`, descriptor, `sri/solo/…`, empty, 63-char-truncated, two addresses on one connection → exactly the §3.1 table; **assert no coinbase was built for a rejected channel**.
-- `RequestExtensions` matrix: `{0x0001}`, `{0x0001, 0x0003}`, `{0x0001, 0x0020}`, unknown id → correct `.Success`/`.Error` lists; JDC with `0x0003` on only one connection refuses JD mode.
+- `RequestExtensions` matrix: `{0x0001}`, `{0x0001, 0x0003}`, `{0x0001, 0x0020}`, unknown id → correct `.Success`/`.Error` lists; JDC with `0x0003` on only one connection refuses JD mode. In v2 `0x0020` is not advertised and a request receives `unsupported-extension`.
+- v2 profile vectors: non-power-of-two reference/multiplier, reference below pow limit, `Q > max_window_target_units`, multiplier stepdown at a new generation, checked overflow/division failure, mixed-profile restore refusal, and a frozen settlement target after a later retarget.
 - share replay (same share twice, same share on two channels), stale job after restart → rejected.
 - slice sealing on prev-hash change, fee band, `max_slice_shares`; merkle root matches an independent implementation.
 - `SetPayoutDistribution` published on height change; validation rejects mutated amounts, reordered outputs, a missing `OP_RETURN`, and a **height-straddling** declaration under the grace window; accepts the previous id from the same front on the same connection at the same height.
-- type-32: `GetWindow` for a found block returns a window whose `Σ difficulty ≥ N × D`; `GetShares` merkle paths verify; a pool build compiled with `--features cheat-slice-difficulty` is caught by the verifier within 3 windows at `4 × 8` sampling (statistical test, seed-pinned).
+- type-32 (v1 only): `GetWindow` for a found block returns a window whose `Σ difficulty ≥ N × D`; `GetShares` merkle paths verify; a pool build compiled with `--features cheat-slice-difficulty` is caught by the verifier within 3 windows at `4 × 8` sampling (statistical test, seed-pinned).
 
 ### 8.4 End-to-end — regtest harness (`testing/regtest-harness`, CI)
 
@@ -873,7 +1216,23 @@ Grinding `a_send` to collide with a known earlier payment (must be a fixed-point
 
 **Topology.** One `spc-pool` binary; dev/testnet runs `--roles front,payout,api` in one process, and MAY add `ark` to it on regtest/signet only; production splits `front` (one per region; RAM-only state — no durable state of its own) from a single `payout` (sole Postgres writer), N `api` replicas, and a single `ark` on its own host. Each `front` listens for SV2 (Noise) and native SV1 (plain TCP, §3.1) on separate ports; both listeners feed the same share and distribution path. Any listener (SV2, SV1, JDP, `api`) MAY be published as a Tor onion service, in which case it binds loopback and the address is advertised via `[reach]` (§3.8); a multi-front deployment publishes one address per front or fronts them with OnionBalance, and the onion key is backed up with that front's other secrets. Each `front` claims its `front_id` at start with a Redis `SET NX` lease (heartbeat-refreshed, holding an instance UUID) and refuses to start if the lease is held — a duplicate `front_id` would silently collide `distribution_id`s and `slice_id`s (MULTI-REGION §10). The `spc-jds` module is part of `front` — JD is always on, and `a_send` is shared in-process (§2.2). Redis and Postgres are the only durable state of the SPc side, and **no spending key lives on it**: it holds only the xpub of `pool_payout_descriptor`. The pool has exactly one hot seed, the `ark` seed (bark wallet + pool output keychain), held only by the `ark` role on its own host with its own secret store and no access to the attribution data (§11.3). Its blast radius is the float plus whatever pool revenue the operator leaves under it; moving surplus elsewhere is operator policy and out of scope.
 
-**Migrations.** `sqlx migrate` at boot under `pg_advisory_lock`; every process may run them (Blitzpool pattern). Schema changes are additive until v1.0.
+**Migrations.** `sqlx migrate` at boot under `pg_advisory_lock`; every process may run them (Blitzpool pattern). Schema changes are additive until v1.0. Migration `0005_lab_work_units.sql` adds the v2 profile columns/checks with legacy v1 defaults; v1 rows remain readable and are never converted.
+
+**v2 is a lab profile, not a production rollout.** The `network_block_work`
+profile is opt-in and restricted to regtest in this revision. Production
+testnet4/mainnet rollout remains v1 until a separate decision and evidence
+packet; the lab profile does not amend `DESIGN.md` payout policy.
+
+The expanded lab MUST build its own stock pinned Ark server and tooling through
+Nix, and own its storage, wallets, private configuration and process lifetime.
+It MUST NOT fall back to a hosted Ark provider. The lab's provider database MUST
+be independent of every pool database, and each pool MUST retain a separate
+Ark-role wallet/process and the §11.3 identity boundary. Startup MUST bind
+actual ArkInfo server/mailbox keys and policy before rendering front delivery
+metadata. RPC health and initialized wallets MUST NOT imply funded readiness:
+native funding, boarding, receive, refresh and offboard require their own real
+transaction evidence. An infrastructure-only run MAY remain initialized and
+unfunded while the native funding and registered-agent runtime are integrated.
 
 **Rollout.** regtest CI → testnet4 (`tsp`) soak ≥ 24 h with ≥ 1 found block independently recovered by a third party's `spc-scan` → publish `docs/spc-spec.md` to the Delving thread and the BIP mailing list → mainnet is out of scope for this document.
 
@@ -951,6 +1310,90 @@ The coinbase leg is unchanged in JD mode and denomination-shaped in pool-templat
 
 ### 11.3 Pool side: the `ark` role
 
+**Aggregate authorization amendment (2026-11-09).** The binding decision
+`docs/decisions/2026-11-09-aggregate-anchor-and-send-authorization.md` selects
+the oldest covered canonical row's stored destination and requires frozen
+whole-set membership, fresh attempt-correlated all-member chain checks,
+durable authorization before grant, and atomic definitive outcome application.
+Its potentially-sent uncertainty rule supersedes the older timeout-to-pending
+send-loop clause below: uncertain membership remains pinned as `blocked_unknown`.
+Ark messages carry only opaque delivery/authorization data, never member mapping.
+The private SPc owner API also exposes the exact frozen signed order via
+`GET /api/sp/me/ark-aggregates/<order_id_hex>/order` (WIRE §3.8). Authentication
+uses a fresh single-use B_scan challenge. Lookup MUST constrain authenticated
+sp_id and order_id before reading bytes. The stored order MUST roundtrip
+canonically, bind its ID/digest and any durable grant digest, and verify with
+the configured order public key before return. Return stored bytes including
+signature, never reconstruct from a current destination. Unknown/corrupt state
+does not prove NoEffect; the wallet keeps its watch.
+
+**Review boundary correction (2026-11-10, A1-A5).** The fresh-authorization
+consumer MUST run independently of unrelated blocking stream reads, within
+the payout role and using its Store. Quiet streams MUST NOT consume the Ark
+worker's authorization deadline. After an authorization request may have
+escaped, deadline expiry/overload retains uncertainty and never permits a
+replacement grant or send. Proven pre-request capacity/readiness shortages are
+instead Held as specified below; they are not ambiguous send attempts.
+
+The stock sender acquires that wallet's shared operation permit BEFORE
+requesting its fresh grant. Manual/automatic board, maintenance, recovery and
+send selection share the same mutex. Guarded execution MUST reject a foreign
+permit and MUST NOT reacquire the mutex. It validates the existing immutable
+grant after acquisition and immediately before input registration and cosign
+after intervening awaits. The local cosign escape is single-use; durable grant
+and sender pin precede it. After possible escape, completion/reconciliation
+keeps the same action and reservations and does not require a replacement
+fresh grant. The payout dispatcher never takes wallet capacity.
+
+**Known pre-request readiness (A1-RP1).** Before creating any nonce/request,
+the worker MUST check the actual wallet's input state, eligibility, complete
+proof/anchor availability, signing-key availability and supported address/
+provider fee policy under the same operation permit. Zero/short, locked,
+expired or depth-ineligible float cannot count as spendable; actual gross fee
+coverage is checked, not a configured balance target. The pinned fee API's
+zero arkoor fee is verified as the supported case, never generalized to waive
+a nonzero/unsupported quote. These bounded read/planning operations perform no
+input registration, locking or cosign. Their closed typed pre-request shortage
+outcomes return Held without a new ambiguity pin, refund or terminal receipt.
+Existing pins are checked first and never cleared. Later funding/confirmation
+can make the SAME frozen order eligible for its first grant/send. The existing
+PEL retains Held orders, with a persisted bounded cursor for fair same-consumer
+restart retries. Failures after a request/grant remain on the unknown path.
+This send-readiness gate does not gate mining needed to fund/confirm the float.
+
+Receipt proof validation MUST compare the entire VTXO policy with the frozen
+address policy and the VTXO's full server key with the frozen verified ArkInfo
+key. Same-user HTLC or other-server proofs do not discharge a Pubkey order.
+Canonical proof encoding, full signature/genesis/anchor verification, unique
+VTXO IDs, exact total and durable grant binding remain mandatory. Aggregate
+mode rejects legacy receipts, and Store MUST serialize legacy Sent against
+member reservation/freeze to prevent partial settlement.
+
+Orphan handling MUST preserve reserved/possibly sent or sent identities while
+reversing unrelated reversible identities in the same block exactly once.
+The block's orphan flag is not a reason to skip later member reconciliation.
+No-authorization cancellation uses that same per-identity reversal boundary;
+all monetary and Rule-B lifecycle updates commit together. Sent orphan value
+remains recorded as pool loss, never refunded to pending.
+An explicit recanonical transition of a `loss_held` block MAY restore the
+complete original booked ledger only after fresh canonical confirmation at
+the configured depth. Existing retained rows must exactly match frozen
+effects and retain valid reserved/Sent Ark provenance; other original rows
+are restored additively in the same transaction. Complete coverage and B>=R
+are checked before commit. Retained Sent is never applied or sent twice.
+Only that confirmed transition clears the recanonical member's orphan flag
+and recomputes its aggregate's remaining pool loss. Missing raw provenance,
+inconsistent retained effects, inadequate depth or reservation conflict holds
+UNKNOWN rather than applying a partial ledger.
+
+Receipt processing isolates invalid items. Terminal-invalid evidence is
+durably quarantined before ACK. Missing anchors, canonicality or other unknown
+evidence remains retryable and reserved. Pending-entry traversal is bounded
+and fair across more than one batch and survives restart. One invalid or
+unknown prefix MUST NOT permanently starve a later valid proof. Pool Sent
+only wakes client retrieval; a wallet watch closes after wallet-verified owned
+VTXO/proof or explicit terminal no-delivery reconciliation.
+
 **Flow per found block.**
 
 ```
@@ -980,7 +1423,7 @@ Concretely:
                    sats, not_before_height, sig }                  # spc:ark:orders, payout → ark
   ArkSendReceipt { order_id, status: sent | failed, vtxo_id, expiry_height }   # spc:ark:receipts, ark → payout
   ```
-  No `sp_id`, `B_scan`, `B_spend`, `P_i`, block hash or snapshot data crosses into `ark`, so a compromised `ark` host learns exactly the Ark server's view (destination keys, amounts, timing) and nothing about who was paid in any coinbase. `payout` alone maps `order_id → (block_hash, sp_id)`.
+  No `sp_id`, `B_scan`, `B_spend`, `P_i`, block hash or snapshot data crosses into `ark`, so a compromised `ark` host learns exactly the Ark server's view (destination keys, amounts, timing) and nothing about who was paid in any coinbase. `payout` alone maps `order_id → (block_hash, sp_id)`. The v2 4096-height retention extension (§5.1) is SPc-side only; it adds no identity field or longer retention to the Ark boundary.
 - **Egress.** `ark` reaches the Ark server directly; Tor is not used for Ark egress (decision 2026-11-04). The server therefore sees the pool host's network address, which is operator-owned infrastructure rather than a miner's. What matters is the visibility below: the server already sees the pool's wallet, destinations, amounts and timing (§11.7), and no network control hides the wallet.
 - **Orders are authenticated and capped.** `payout` signs each order with a dedicated order-signing key — secp256k1 BIP340 Schnorr, CSPRNG-generated (independent of the `ark` seed and all SPc keys; resolved 2026-10-14, `docs/research/output/ark-order-key-spec-recommendation.md`), stored hex-encoded 32-byte secret at `order_key_path` (default `/run/secrets/spc/ark-order-key`) with `0o600` file / `0o700` dir perms (bark `fs_perms` convention), x-only pubkey distributed to the `ark` role via config (`[ark] order_pubkey`), validated at startup; the signed message is defined in `WIRE-FORMATS.md` §3.4. Rotation is operator-driven: generate new keypair on `payout` host, update `order_pubkey` on `ark` host, restart `ark`; in-flight orders on rotation follow the existing retry/`failed_to_pending` logic (orders are short-lived, max `retry_blocks` = 6). **Order verification (`ark`)**: (1) parse per WIRE-FORMATS §3.4; (2) reject `sats == 0` or `sats > max_order_sats`; (3) hold (send nothing) while `not_before_height > tip`, per the send rule below; (4) reject if `ark_id` parsed from `ark_address` != configured `ark_id`; (5) reject duplicate `order_id` within the retry window; (6) verify BIP340 `sig` over `hash_SPc/ArkSendOrder(...)` against configured `order_pubkey`; any rejection increments `spc_ark_orders_rejected_total{reason}` and sends nothing. Rationale: `ark_address` binds the server (and thus network); `order_id` + `not_before_height` prevent replay; no identity or block-hash field is bound (privacy, §11.3).
 
@@ -1008,32 +1451,224 @@ _Operator policy (defaults given; deployments MAY change them):_
 
 **Fees.** 0 % on sends/receives at Second today; the pool absorbs refresh and boarding costs out of its own fee. Nothing is deducted from miners for the tier.
 
-### 11.4 Delivery capabilities — the SPc extension
+### 11.4 Delivery capabilities - the SPc extension
 
-**Identity vs delivery capability (§0).** `user_identity` is the SP address and nothing else; it alone keys the account. What the pool additionally needs to *deliver* on the Ark tier is a **delivery capability**: static, private, per-`sp_id` registration data, sent once per Ark server over SV2 and never published. "Registration" here is pool↔miner bookkeeping only — **there is no server-side registration endpoint**; the Ark server only unblinds. The per-block destination is always **derived** (§2.3, §11.8); the miner never sends a per-payout address, and there is **no literal-address registration** — a static reused Ark address is the ArkPool model DESIGN.md calls strictly worse, so silent-pool does not offer it.
+**Identity vs delivery capability (section 0).** `user_identity` is the SP
+address and nothing else; it alone keys the account. The optional delivery
+capability is private, per-`sp_id`, per-Ark-server data and is never published.
+There is no Ark-server-side registration endpoint; the Ark server only
+unblinds. Per-block destinations are always derived (sections 2.3, 11.8); a
+literal-address registration does not exist.
 
-Project-defined SV2 extension negotiated via `0x0001` (identifier `0x5350` — "SP"; renumber if assigned):
+Extension identifier `0x5350` is negotiated through `0x0001`. Every v1
+message payload starts `U8 version = 1`; old unversioned bytes and trailing
+bytes are invalid. Message IDs are `0x01 SetArkIdentity`,
+`0x02 SetArkIdentity.Success`, `0x03 SetArkIdentity.Error`,
+`0x04 RegisterEpochMailboxes`, `0x05 RegisterEpochMailboxes.Success`,
+`0x06 RegisterEpochMailboxes.Error`, `0x07 ArkPayoutNotice`. Exact fields are
+in WIRE-FORMATS section 3.7.
 
-| Msg | Dir | Fields | Semantics |
-|---|---|---|---|
-| `SetArkIdentity` | C→S | `ark_id: B004`, `b_ark_pub: B033` (**required**), `mailbox_mode: U8` (0 `none`, 1 `static`, 2 `epoch_derived`, 3 `epoch_registered`), `mailbox_pubkey: B0_33` (`M`; empty iff `none`), `mailbox_dh: B0_33` (`D = b_ark·S_mb`; empty iff `none`), `epoch_fallback: U8` (0 `static`, 1 `hold`; `epoch_registered` only), `sig: B064` | Register or replace the Ark delivery capability for this connection's `sp_id`. `sig` is BIP340 by **`b_scan`** over `hash_SPc/ArkIdentity(sp_id ‖ all preceding fields)` — the Noise session authenticates the pool, not the miner, and anyone can open a channel with a public SP address, so without this signature anyone could redirect a miner's Ark payouts. Applies to distributions built after acceptance (the destination is derived at build time, §4.7). |
-| `SetArkIdentity.Success` | S→C | — | Stored in `ark_delivery` (§5.1). |
-| `SetArkIdentity.Error` | S→C | `error_code: STR0_255` | `bad-signature`, `invalid-point`, `ark-key-is-spend-key` (`B_ark = B_spend`; DESIGN.md requires separate keys), `wrong-ark-server` (`ark_id` ≠ the pool's configured server; `D` is server-specific), `bad-mailbox-fields`, `unsupported-mailbox-mode`. Fail closed: nothing is derived for a rejected registration; earnings accrue as pending. |
-| `RegisterEpochMailboxes` | C→S | `entries: SEQ0_64K[B037]` (`ser32(i) ‖ ser_P(M_i)`, MAILBOX.md `EpochRegistration`), `sig: B064` (by `b_scan`, as above) | `epoch_registered` mode only: supply `M_i` for found or upcoming heights (MAILBOX.md "Registration timing": after the find, within ~100 blocks, or a pre-registration window ≈ 5.3 KB/day). |
-| `ArkPayoutNotice` | S→C | `block_hash: U256, sats: U64, vtxo_id: B0_64, expiry_height: U32` | Sent after each successful send. A convenience in the mailbox modes (the agent finds payouts by scanning, §2.5); **the delivery path** in `none` mode (§11.8). Also served at `GET /api/sp/me`. |
+`SetArkIdentity` carries `ark_id`, `b_ark`, `mailbox_mode`, `mailbox_pubkey`,
+`mailbox_dh`, `epoch_fallback`, `sig`, and finally `request_id`. Mailbox modes
+are 0 none, 1 static, 2 epoch_derived, 3 epoch_registered; fallback is 0
+static or 1 hold. M and D are empty iff `none` and are valid compressed points
+otherwise. `B_ark` MUST be valid and MUST differ from `B_spend`; `ark_id` MUST
+match `ArkId::from_server_pubkey(server_pubkey)`. `hold` is accepted only in
+`epoch_registered` mode; every other mode with `hold` is `bad-mailbox-fields`.
+Invalid fallback byte/field combinations fail closed.
 
-`D` cannot be checked by the pool (it would need a DLEQ proof); a wrong `D` only dead-letters the registering miner's own payouts, and the `b_scan` signature makes that the only party who can submit it. No 32-byte cap, no overloading of `user_identity`, no `0x0002` dependency.
+**Signed correlation amendment (Fable review required).** BIP340 by `b_scan`
+authenticates the following digest, with the counter included even though it
+follows `sig` on the wire:
+
+```
+hash_SPc/ArkIdentity(
+  sp_id || version || ark_id || b_ark || mailbox_mode ||
+  B0_33(mailbox_pubkey) || B0_33(mailbox_dh) || epoch_fallback || request_id)
+```
+
+The immutable `signed_fields_digest` is this digest. Unlike the earlier draft,
+an old signed payload cannot be replayed with a larger unsigned counter to
+roll back new delivery. `RegisterEpochMailboxes` signs the corresponding
+`sp_id || version || count || entries || request_id` preimage under the
+separate tag `SPc/EpochMailboxes`. The AP-3 client's local payload-reuse digest
+MAY exclude `request_id` to identify one attempt; that comparator is distinct
+from the signed wire digest and never substitutes for it.
+
+The request is scoped `(sp_id, request_id)`. IDs start at 1, increase strictly
+per identity, and never wrap; zero/exhaustion is `request-id-exhausted`. Two
+users may each use ID 1. Retries of one attempt keep its ID; changing signed
+fields requires a new ID. Same ID/different fields is
+`registration-mismatch`. A journal-matching older request returns
+`superseded` but has no effect; a different-digest older request is mismatch.
+`stale-request` is a lower request ID that was never applied (including a
+concurrent reorder loser or an old/pruned journal row), not a claim that the
+pool has pruned a record.
+
+`Success` carries `request_id`, payout-assigned `registration_rev`, `ark_id`,
+and state 0 applied, 1 already_applied, or 2 superseded. `Error` carries
+`request_id`, retryable, `error_code`, and detail. Terminal codes are
+`bad-signature`, `invalid-point`, `ark-key-is-spend-key`, `wrong-ark-server`,
+`bad-mailbox-fields`, `unsupported-mailbox-mode` (raw mode > 3, new),
+`registration-mismatch`, `stale-request`, and `request-id-exhausted`.
+`registration-commit-unknown` and `store-unavailable` are retryable;
+`registration-busy` and `rate-limited` are reserved v1 error names and no
+current path emits them. A structurally bad frame is `invalid-message`.
+
+**Durable atomic resolution (migration 0006).** Only payout writes. The
+`sp_identity` row is locked `FOR UPDATE`, then a strictly newer request
+upserts identity, `ark_delivery` or epoch mailboxes,
+`ark_registration_state`, the applied journal row and commit revision in one
+transaction. State stores `last_request_id`, the digest and revision; the
+journal is keyed `(sp_id, request_id)` and stores digest, outcome and
+revision. No duplicate, mismatch, stale or superseded resolution applies an
+older effect. The digest and revision never come from Redis or the client.
+Before `is_new`, that same locked transaction first replays any existing
+`(sp_id, request_id)` journal outcome. Existing different-digest rows resolve
+`registration-mismatch` without INSERT or any effect. Equal-digest rows replay
+their stored resolution: `rejected` keeps the original terminal error,
+currently-applied rows are `already_applied`, and an older applied row remains
+`superseded` after newer current state. A missing row alone may proceed through
+the existing counter-check; a lower never-applied/pruned ID remains stale.
+A validly parsed/signed request that fails semantic validation has outcome
+`rejected` and its exact terminal code (`bad-mailbox-fields`, `invalid-point`,
+`invalid-message`, `bad-signature`, `wrong-ark-server`, or another v1 terminal
+code) plus a payout revision, not a delivery effect or current-counter update.
+When an identity row exists this rejection is also journaled atomically, so
+the stream entry resolves and its PEL entry can be acknowledged. Without an
+identity row the FK-safe `invalid-message` rejection has no journal row but is
+still terminal and replays deterministically. Actual database and Redis
+failures leave entries unacknowledged as unknown/retryable; no semantic reject
+is silently dropped as unknown commit.
+
+The `spc:arkreg` stream has a new trailing request ID. `ArkRegApplied` carries
+full current identity/delivery/fallback and changed epoch mailboxes together
+with `request_id`, `registration_rev` and state. Superseded replay never
+restores old fields. Bootstrap carries the same registrations and identity
+keys plus `ark_epoch_mailbox` state. A committed but not propagated or
+explicitly held destination routes pending (section 11.1), never forfeit.
+
+Redis `spc:arkreg:ack` is a **3600 second notification cache, never durable
+authority**. Each handle generates a fresh random `B016 attempt` only on the
+internal `spc:arkreg` stream (after `request_id`), not on client wire and not
+signed/digested. The ack key `reg:<sp_id_hex>:<request_id>:<attempt_hex>`
+includes this nonce and its JSON echoes `attempt`. Acknowledgment therefore
+requires identity, request ID, immutable digest, nonce and `expires_at` to
+match. Every handle triggers the durable Postgres resolver even if an older
+cached field is live: an old cached `Applied` can never bypass `superseded`.
+Distinct concurrent handles cannot overwrite/steal each other's ack; attempt is
+not a durable operation ID or an additional registration effect. On a miss
+the same stream entry is published and resolved from Postgres.
+
+Front waits at most five seconds for that exact acknowledgment. Timeout emits
+retryable `registration-commit-unknown`, never an unregistered verdict. The
+agent retries the same ID with 1, 2, 4, 8, 16, 30 second backoff (cap 30),
+surfaces local `registration_unavailable` after six attempts while continuing
+at 30 seconds, and does not mine until success/current guidance. A late commit
+is valid; the next identical retry resolves from cache or Postgres. No success
+is sent before successful durable commit.
+
+`SetArkIdentity` has a real handler and advertisement only together: when the
+handler or `[ark]` is disabled, API/RequestExtensions omit `0x5350`, and a
+negotiated direct frame receives `unsupported-extension`, never synthetic
+success. Registration carries no identity fields into the `ark` role; its
+order/receipt contract in WIRE section 3.4 is unchanged.
+
+`D` is not independently provable by the pool (that needs a DLEQ proof); a
+wrong D dead-letters only the registering miner's payouts and remains signed
+by that miner. For `epoch_derived`, D is still required for
+`M_i + D + t_ark*S_mb`; an AP-3 semantic helper MUST NOT substitute `None`.
+`RegisterEpochMailboxes` remains variant-A only and uses the same durable
+request resolution. A validly signed registration for a non-`epoch_registered`
+identity returns terminal `bad-mailbox-fields` and resolves the stream entry;
+it does not retry forever as commit-unknown. A registration event without
+valid identity keys is logged and skipped rather than aborting front.
+`SPc/JobEntriesV1(sp_id || rail || dest_id length || dest_id)` is tracked
+beside the coinbase fingerprint: a destination or rail-only change rolls the
+job ID even when coinbase outputs are identical. Work from the previous job is
+stale; snapshot `ON CONFLICT DO NOTHING` cannot conflate those generations.
+
+`ArkPayoutNotice` retains block hash/sats/vtxo id/expiry
+with a leading version byte.
 
 ### 11.5 Miner side (`spc-agent`)
 
+**Ladder recovery clarification (2026-11-09).** A coinbase output does not
+close the block's Ark mailbox: a kept miner can still be owed a remainder.
+Recovery returns every owned `(k, vout, amount, tweak)`. Amount audit requires
+an explicit source-format binding; historical exact-k0/JD blocks are never
+claimed to follow current ladder policy merely because recovery found them.
+
 One binary (§1). Holds **`b_scan`** (to verify its own `P` in every job/distribution, §3.6, to scan both tiers, §2.5, and to sign registrations, §11.4), the mailbox key(s) for its mode, and **`b_ark`** unless running watch-only; it MUST NOT hold `b_spend` or the master seed. Compromise of the agent therefore exposes privacy and unrefreshed Ark-tier VTXOs only — never a coinbase output.
 
-- **Keys (DESIGN.md / MAILBOX.md paths, one master seed).** `b_spend` `m/352'/0'/0'/0'/0` (cold), `b_scan` `m/352'/0'/0'/1'/0`, `b_ark` `m/352'/0'/0'/2'/0`, per-epoch `m_i` `m/352'/0'/0'/3'/i'` (`epoch_registered`; the agent may hold only the `…/3'` account xpriv). The agent's bark wallet — whose `m/350'/1'` key is the static mailbox `M` — runs on a **child seed** of the master (BIP 85-style), not on the master itself, so that holding the bark wallet does not mean holding `b_spend`. One backup (the master) recovers both tiers. The `spc_ark_client` prototype derives everything from one seed for test convenience; production MUST split as above.
+**Key derivation, exactly (AP-3a, normative).** The agent's material is provisioned offline (the provisioner owns the master seed; `spc_crypto::provision` is its pure core and exists for fixtures):
+
+- the **BIP 85 child wallet** is defined, not "BIP85-style": `child_mnemonic = BIP85(master, m/83696968'/39'/0'/12'/0')` (application 39, English, 12 words, index 0), `child_seed = BIP39(child_mnemonic).to_seed("")` — 64 bytes. The BIP 85 test vectors are pinned in-tree;
+- the agent receives only the **branch account xprvs** `m/352'/0'/0'/1'` (scan) and `m/352'/0'/0'/2'` (ark), the 64-byte child-seed file, and the `sp_address` — never a master, never the spend branch. It validates: exact branch child index (not merely depth-4 hardened), matching network magic, the shared **parent fingerprint** between the two branch files (a required provisioning-metadata consistency check — the 4-byte fingerprint does not cryptographically prove the derivation path), `B_scan` against the `sp_address`, `B_ark != B_spend`, and the child seed's stock bark fingerprint against the in-tree derivation. Any failure is fatal at load; nothing is regenerated.
+
+**Persistence layout (AP-3a, normative).** One wallet datadir holds two databases, fail closed on every ambiguity:
+
+- `<datadir>/state.sqlite` — the agent's own store (schema version 2): the SP-aware `U_i → u_i` keystore (§11.8 item 2), owned VTXO records with expiry provenance (never a finding height), the per-identity monotonic registration counter/journal, and the chain scan cursor. Bound to one `(wallet_fingerprint, sp_id, network)` at creation; a reopen with different material, a schema-version mismatch, or a foreign non-empty sqlite file is refused — state is never wiped or recreated to make a mismatch go away;
+- `<datadir>/bark/db.sqlite` — the **stock** bark persister (pinned `SqliteClient`, migrations included), initialized through the stock `BarkPersister::init_wallet` with `WalletProperties(network, fingerprint, server_pubkey = none, server_mailbox_pubkey = none)` and re-validated on reopen (same child-seed fingerprint and network, bytes untouched on refusal). Directories are 0700 and files 0600, created private **before** sqlite opens them. A missing database is the only genuinely-fresh case; a claimed-but-broken initialization is damage, never re-initialized. This is the persister **foundation**: opening the full stock bark `Wallet` (live chain source), balances, refresh and offboard are AP-3b.
+
+**Registration client journal and terminal policy (AP-3a, normative).** The request id is reserved durably **before** any send; retries of the same attempt (same payload digest) reuse it, a changed payload allocates a fresh id (no self-wedge), and `u32::MAX` is refused without a wrap. Registration liveness is the **effective binding**: the payload is registered only while it matches the single most recent acknowledged `applied`/`already_applied` state — a historical journal row is not proof (applied A → B → A does not re-register A), and a `superseded` verdict clears the binding it names. Terminal handling: hard terminal refusals (`bad-signature`, `ark-key-is-spend-key`, `wrong-ark-server`, `bad-mailbox-fields`, `unsupported-mailbox-mode`, unknown codes) and counter exhaustion are **fatal immediately** — attempts cease, the exact code is surfaced, and recovery requires an explicit operator restart; the wedge kinds (`mismatch`/`stale`/`superseded`) get at most **one** fresh same-payload retry, then fatal. Every non-success outcome participates in the backoff schedule (1, 2, 4, 8, 16, 30 s, cap 30 s); after six failed attempts local `registration_unavailable` is surfaced while the 30 s retries continue.
+
+**Status honesty (AP-3a, normative).** The loopback status JSON (§4.7; loopback enforced at bind, not only in config) reports `registered` (the effective-binding answer) and the role state as **distinct questions**: without a registration transport the role is **`dormant`** — a persistent registration ack is durable journal state, not a live connection, and a connection is never invented. Unknown aggregates are `null`, never zero; no key material, `sp_id`, `U` or VTXO id crosses the status surface. The scan cursor is monotonic-only in AP-3a: a chain reorg requires a journaled rewind (record the fork point, replay forward, then advance) before live scanning — an explicit AP-3b dependency, not implemented here.
+
+- **Keys (DESIGN.md / MAILBOX.md paths, one master seed).** `b_spend` `m/352'/0'/0'/0'/0` (cold), `b_scan` `m/352'/0'/0'/1'/0`, `b_ark` `m/352'/0'/0'/2'/0`, per-epoch `m_i` `m/352'/0'/0'/3'/i'` (`epoch_registered`; the agent may hold only the `…/3'` account xpriv). The agent's bark wallet — whose `m/350'/1'` key is the static mailbox `M` — runs on the BIP 85 **child seed** above, not on the master itself, so that holding the bark wallet does not mean holding `b_spend`. One backup (the master) recovers both tiers. The `spc_ark_client` prototype derives everything from one seed for test convenience; production MUST split as above.
 - **Hot/cold posture (DESIGN.md).** Scanning and recognising `U_i` watch-only need only `b_scan` and `B_ark`; signing for a VTXO (status attestation, refresh, spend, exit) needs `u_i = b_ark + t_ark`. `b_ark` MAY be held hot by the agent (default: refresh is unattended) or by an external signer, which MUST then come online inside the refresh window. `b_ark` is never `b_spend`, and `b_spend` is never used on the Ark tier.
 - **Register (mandatory).** On connect, once per Ark server: `SetArkIdentity` (§11.4) with `D = b_ark·S_mb` computed by whoever holds `b_ark`. In `epoch_registered` mode, also `RegisterEpochMailboxes` per MAILBOX.md — with sends at `H_f + 6`, after-the-find registration has only ~6 blocks, so pre-register a height window instead. (Default mode is `epoch_derived`, which needs no per-epoch registration; resolved 2026-10-14.) The agent MUST NOT submit shares until `SetArkIdentity.Success`: unregistered earnings below `C` are forfeited (§11.1), so a registration failure is a hard stop, not a warning.
 - **Receive.** For each pool block found while scanning (§2.5): insert `U_i → u_i` (or `U_i` watch-only) into the SP-aware keystore (§11.8 item 2), then fetch per mailbox mode — `static`: bark's normal sync of `M`; `epoch_*`: MAILBOX.md §3 on-demand reads of `M_i` at `H_f + 6 + [0, 6, 36, 144, 1008]`, closing the epoch when the VTXO for `U_i` arrives or an SPc output for that block is found; `none`: `ArkPayoutNotice` / API `vtxo_id` → `GetVtxosByIds` → `import_vtxos`. Validate each VTXO (ARK #2) and record it against the notice.
 - **Refresh.** Auto-refresh at `vtxo_refresh_expiry_threshold` (bark default 144 blocks before expiry, inside the free window). Optional `refresh_on_receive_above_sats`: refresh immediately (`refresh/counterparty`) for payouts above a size the miner cares about, shedding the sender+server trust early at 0.2–0.5 %.
 - **Dormancy.** The agent runs while the miner mines; a miner that stops for > 28 days with unrefreshed VTXOs is swept (ToS: "no obligation to return"). The agent MUST warn at shutdown if unrefreshed VTXOs exist or Ark payouts are still scheduled, and SHOULD offer `--offboard-on-exit <address>` (cooperative on-chain payment of the whole Ark balance, one tx) for anyone going dark.
+
+**Live adapter invariants (AP-3b).** A wallet process MUST hold an exclusive
+writer lock for its datadir. A new connection MUST obtain a fresh durable
+registration resolution before reporting `connected`; a stored acknowledgment
+alone is insufficient. Revalidation of an unchanged acknowledged payload uses
+its original signed request id, provided no newer request is pending. An
+acknowledgment MUST match both the reserved payload digest and wallet identity;
+`registration-mismatch` invalidates the effective binding it names.
+
+The full stock `Wallet::open` MUST use the existing validated Bark persister
+and provisioned BIP85 child seed, with `create_if_not_exists = false`. Actual
+ArkInfo server and mailbox keys MUST match configured pins before first-use
+server-key persistence; fees MUST pass stock validation. Opening an unfunded
+wallet does not establish a received balance. Real VTXO identifiers are the
+stock 36-byte outpoints, never the AP-3a synthetic 32-byte test identifiers.
+Synthetic persisted identifiers MUST be refused rather than truncated, padded
+or promoted to live receipts. Raw receipt proofs and mailbox checkpoints live
+in the existing agent SQLite database; checkpoints MUST advance only after
+validated receipts and the sole SP balance ledger commit. Canonical block and
+anchor proof, rederived owner key, mailbox key and server spend state are
+required before a live receive becomes spendable. An unavailable proof remains
+unknown, never a zero balance or guessed expiry.
+
+Implementation evidence and outstanding runtime/maintenance work are recorded
+in `reviews/2026-11-09-ark-wallet-bridge-implementation.md`; these invariants do
+not assert that funded receive, refresh or offboard has been exercised.
+
+**Runtime and maintenance (AP-3b).** Lab `wallet_agents` declarations are
+independent of miner, worker, identity and hash-budget counts. Every Ark mining
+connection MUST have one configured wallet writer in its pool before runtime
+effects. Initial miner launch, dynamic miner addition and dynamic connection
+addition MUST use the same current-registration/owned-process predicate. A
+wallet startup hook MUST NOT activate miners before other startup prerequisites
+(including native funding) complete. Unknown balance or float shortage does
+not invalidate a current registration.
+
+The wallet MUST journal canonical scan hash history and a reorg rewind before
+replay; displaced receipt freshness MUST remain unknown until revalidated.
+SP-owned maintenance signatures remain in the client adapter. Delegated round
+outputs MUST match the requested policy, amount and unlock hash and pass
+canonical funding and exitability checks before input forfeits are sent.
+Cooperative offboard MUST validate the stock offboard/forfeit context and actual
+fees. Requests and input reservations MUST persist before mutating RPCs;
+ambiguous replies MUST retain uncertainty and MUST NOT trigger blind duplicate
+spends. An initial delegated-round reply lost before learning its unlock hash
+has no standard client-id lookup and remains unknown. Owner commands are
+strictly scoped to the wallet's private command queue; secrets MUST NOT appear
+in argv, public JSON, hub projections or Ark-role streams.
 
 ### 11.6 Audit across both tiers
 
@@ -1081,6 +1716,10 @@ The address is `ark::Address::builder().server_pubkey(..).pubkey_policy(U_i).del
 - Unit: `SetArkIdentity` matrix — bad `b_scan` signature, signature over another `sp_id`, `B_ark = B_spend`, invalid points, wrong `ark_id`, unknown mode, `none` with `M`/`D` present, `static` without them → exact error codes; nothing derived for a rejected registration. DESIGN/MAILBOX frozen vectors per §8.1.
 - Property: §4.6 (a)–(f) hold with the tier enabled (Ark-tier ids have no coinbase output); separately, per settled block `pay_P = fee_P + rounding + Σ ark_due' + Σ forfeited + Δpending`, where `fee_P` is the pool's own fee share (§4.5 `pool` minus rounding), `Σ ark_due'` includes kept ids' remainders (§4.6), and `Δpending = Σ pending' − Σ pending` (error rail only). Ladder-specific: every coinbase output's value ∈ `{500_000, 1_000_000, 3_000_000, 5_000_000}` (constant); the greedy decomposition is canonical (largest-first, repeated rungs allowed); per kept id `Σ_k paid == owed − (owed mod 500_000)` and `rem < 500_000`; total outputs `≤ T/500_000 < max_payout_slots`; a fee-heavy block (`T ≫ subsidy`) leaves the ladder unchanged — it depends on the amount only — and costs output count, bounded by the same value rule.
 - Integration (regtest, `captaind` as the *third-party* role, `confirmation_depth = 6`): five agents; block found at `H_f`; the above-`C` miner gets a coinbase output; three registered below-`C` miners in `static`, `epoch_derived` and `none` modes get **nothing before `H_f + 6`**, then exactly one VTXO each from the float — in `M`, in `M_i` (static `M` stays empty), and via notice + `import_vtxos` respectively — with a full expiry window; an unregistered below-`C` miner (hand-rolled client) is booked `forfeit`, its sats in `pay_P`, nothing pending; agents reconcile §11.6 to zero; a `SetArkIdentity` for another miner's `sp_id` without its `b_scan` signature is rejected; `spc-agent` against a pool that rejects its registration submits no shares; kill the Ark server → sends fail → retried → `failed_to_pending` after `retry_blocks` (never forfeit); reorg of `H_f` before `due_height` cancels its Ark payouts; two competing same-height pool blocks → ark boards exactly one outpoint; at `H_f + 100` the pool output is found by its height-indexed script and only `float_target_sats − float_balance` is boarded, the remainder left on-chain under `ark`; with the float already at target nothing is boarded; `--offboard-on-exit` produces one on-chain tx.
+- Registration v1: exact message IDs/layouts/version/trailing-byte rejection; bad signature/other identity, replaying an old signature with a bumped request ID, invalid points, wrong server, unknown mode, `none` with M/D, and non-`none` missing M/D return exact errors. Two identities each apply ID 1. A fresh per-handle internal attempt nonce prevents cached `Applied`/`already_applied` from bypassing durable `superseded`, even with no expiry or intervening mismatch; concurrent identical requests cannot steal acks; same ID/different digest is mismatch. An older request after a newer one is superseded or stale and never restores delivery; counter wrap/zero is refused. A five-second miss is retryable commit-unknown, and a late durable commit followed by an identical retry succeeds. Concurrent same/higher requests serialize on the identity row lock, preserve one journal row per applied ID, and leave the greatest counter current. Redis cache expiry and front/payout/Postgres restarts recover from Postgres, not global/unscoped cache state. A signed static-mode epoch request returns terminal bad-mailbox-fields with its journal entry and clears PEL rather than looping forever; subsequent records still apply. Destination/rail-only changes roll job ID and make old work stale while coinbase output/fingerprint stays unchanged. Success is observed only after durable apply.
+
+- Registration publication: actual raw Noise/SV2 negotiation and response, API advertisement matching a constructible handler, and disabled negotiation/request never succeeding. Real events plus bootstrap restore full identity/delivery/epoch state. All four destination modes bind the registered U_i, Ark server public metadata and current job generation; frozen block events retain `dest_id`. `epoch_registered + hold` without its height key and registration committed but underived route pending, not forfeit. Captured Ark order/receipt payloads contain no `sp_id`, `B_scan`, `B_spend`, `P_i` or block hash; these AP-2 fields never cross the `ark` role boundary. Wire/durability/derivation tests use synthetic public server keys only and make no actual Ark-service or refresh/offboard claim.
+
 - Negative: pool configured with its own `captaind` on mainnet → refuses to start (`ark.server_is_self = true` requires `network ∈ {regtest, signet}`); `pool_payout_descriptor` with an xprv, a hardened step, multipath, no wildcard, or a non-`tr()` wrapper → refuses to start.
 - Separation (§11.3): `ark` with only its own config and Redis ACL can execute orders but cannot read any Postgres table or identity-bearing Redis key (connection attempts fail); a captured `spc:ark:orders` stream contains no `sp_id`, `B_scan`, `B_spend`, `P_i` or block hash (schema test); unsigned, wrong-`ark_id` and over-`max_order_sats` orders are rejected and nothing is sent; the SPc-side processes hold no private key for `pool_payout_descriptor`; `ark` refuses to start if its seed file is readable from the SPc-side secret store path; mainnet config with `ark` in the same process as `front`/`payout` refuses to start.
 
@@ -1091,7 +1730,9 @@ The address is `ark::Address::builder().server_pubkey(..).pubkey_policy(U_i).del
 [ark]
 enabled = true
 server = "https://ark.second.tech"       # third-party; pinned ark_id below
-ark_id = "…"                              # first 4 bytes of SHA256(server pubkey)
+ark_id = "…"                              # first 4 bytes of SHA256(server_pubkey), cross-checked on startup
+server_pubkey = "…"                      # ArkInfo server pubkey (66 hex chars); REQUIRED for selected front role
+mailbox_pubkey = "…"                     # ArkInfo mailbox pubkey (66 hex chars); REQUIRED for selected front role
 float_target_sats = 0                     # REQUIRED: board up to this at each matured pool output; size = ark_flow_per_find x finds per 94-block refill lag x >=1.5 margin (§11.3; m=1000 identities at u=10k ≈ 5.0e6 sats/find — see the 2026-11-03 record)
 max_order_sats = 0                        # 0 = 5_000_000 sats circuit-breaker default: any single remainder is < 500k and an aggregated sum rarely exceeds 5M; over-cap orders alarm and wait, they are never dropped (§11.3)
 min_overage_sats = 10000                  # remainders below this aggregate per sp_id across blocks (§11.3); 0 = send every row
@@ -1114,6 +1755,15 @@ epoch_fallback = "static"                 # epoch_registered only: "static" | "h
 signer = "local"                          # "local" (b_ark hot) | "external" (watch-only U, §11.5)
 refresh_on_receive_above_sats = 0         # 0 = never; else refresh/counterparty immediately
 offboard_on_exit = ""                     # optional on-chain address
+# Wallet role (§11.5; AP-3a). Paths and ids only - key material lives in
+# the referenced 0600 files, never inline:
+seed_child = "/run/secrets/spc/child.seed" # 64-byte BIP 85 APP-39 child seed (§11.5 derivation)
+scan_xprv = "/run/secrets/spc/scan.xprv"  # m/352'/0'/0'/1' branch account xprv (0600)
+ark_xprv = "/run/secrets/spc/ark.xprv"    # m/352'/0'/0'/2' branch account xprv (0600)
+datadir = "/var/lib/spc-agent/wallet"     # state.sqlite + bark/ (dirs 0700, files 0600)
+status_listen = "127.0.0.1:34256"         # loopback-only status JSON (default; enforced at bind)
+network = "regtest"                       # when the sp_address HRP cannot tell (tsp is ambiguous)
+ark_id = "…"                              # target Ark server id (8 hex chars, registration)
 ```
 
 `spc-agent` carries its upstream SV2 and JDP traffic through `[net] proxy` when it is set (§3.8). Ark traffic is direct for both binaries (decision 2026-11-04). `[net]` is defined once in §6.3 and is not repeated here.

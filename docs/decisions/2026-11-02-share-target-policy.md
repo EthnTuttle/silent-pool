@@ -1,5 +1,14 @@
 # 2026-11-02 - Share target and share-credit policy
 
+> **Superseded in part (2026-11-05).** The v2 opt-in exact-reference work
+> profile and `network_block_work` window are governed by
+> `docs/decisions/2026-11-05-lab-share-work-units.md`,
+> `docs/decisions/2026-11-05-window-network-block-work.md` and their integration
+> record `docs/decisions/2026-11-05-lab-lp1-integration.md`. This 2026-11-02
+> record's v1 integer `share_difficulty`, `max(share, network)` target and
+> `N * d` policy remain valid and frozen for v1; its historical text is not
+> rewritten.
+
 **Trigger.** Implementing the front and both ingresses exposed that share
 difficulty had no pool-level definition. The front credited every accepted
 share at the *network* difficulty (`difficulty_from_bits(template.bits)`), the

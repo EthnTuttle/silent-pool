@@ -44,8 +44,46 @@ Every upstream commit is pinned by SHA in `UPSTREAM_DEPS.md` (with a verificatio
 - **Cross-references**: cite sections as `§x.y`; when you edit a section, grep for inbound references and fix them.
 - **Plain ASCII punctuation** in Markdown: hyphen-minus `-`, not U+2011 or other lookalikes. They have broken links here before.
 - **Privacy constraints are load-bearing.** No identity field (`sp_id`, `B_scan`, `B_spend`, `P_i`, block hash) may cross into the `ark` role or its streams (`SPEC.md` §11.3). Tests in ROADMAP Phase 7 assert this; do not weaken them.
+- **Vanilla Ark interoperability is required.** Silent-pool must work with
+  unmodified Second.tech/Bark (`captaind`) servers through their standard
+  interfaces (SPEC §11.3 and O17). SPc-specific registration, derivation and
+  wallet handling belong in the pool/client adapters, not in an Ark-server
+  fork, plugin or custom RPC. Normal regtest configuration is allowed for
+  tests; discover real server policy/fees through the supported interfaces.
+  Verify send/receive/refresh/offboard against the unmodified server before
+  claiming end-to-end readiness. Lab Bitcoin-node RPC profiles are separate
+  from Ark-server compatibility and do not authorize server modifications.
+- **Lab Ark is self-hosted.** Build the lab's Ark server and tooling from
+  pinned source repositories using Nix. The lab owns the server, storage,
+  wallets, private configuration and process lifecycle; hosted-provider
+  endpoints are not the expanded lab deployment target.
 - **Fail closed.** Address/descriptor parsing, order verification, and distribution validation reject on any ambiguity. There is no donation fallback.
 - Do not git-commit on behalf of a human unless explicitly asked in the current task.
+
+## Build disk budget
+
+- Before a Rust/Nix build or test invocation, check available space on the
+  actual target/store filesystem. Do not start below 50 GiB available, or if
+  estimated peak growth would leave less than 20 GiB. Report the blocked step;
+  continue lightweight source/review work rather than retrying into ENOSPC.
+- Run only one heavy build across cooperating agents. Coordinate with the
+  parent and hold `/tmp/opencode/silent-pool-heavy-build.lock` with nonblocking
+  `flock` for the build's lifetime; check space after acquiring the lock.
+- Respect `/tmp/opencode/silent-pool-build-priority.json` when present: only
+  its named session may acquire the next build slot. Other sessions finish
+  any already-held invocation, then yield; the parent clears the reservation.
+- Reuse the existing target directory for a topic and its reviews. Do not
+  create another target per revision or repeat passing broad checks without a
+  new change or unresolved verification requirement.
+- Source snapshots must exclude `.git`, all `target` directories, runtime
+  datadirs and generated caches. Record snapshot size before Nix ingestion;
+  never feed a multi-gigabyte build tree to a raw `path:` source.
+- Reclaim completed build caches only with explicit cleanup authorization,
+  after checking ownership, active users and executable/evidence references.
+  Preserve referenced binaries by hash and keep sources, frozen manifests,
+  receipts and user feedback. Age or filesystem owner alone is not proof that
+  another session's artifacts are disposable. No unapproved shared-cache or
+  Nix-store garbage collection.
 
 ## Current status (2026-10-15)
 

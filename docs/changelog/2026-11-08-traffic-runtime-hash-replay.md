@@ -1,0 +1,1 @@
+  - "2026-11-08: controller CommandLog traffic-strict mode adds finite boot-bound hash reservations and idempotent no-refund reconciliation, fail-stopped writes and strict complete-record replay while preserving legacy bytes and principal-bound outcome replay. See docs/decisions/2026-11-08-traffic-runtime-hash-replay.md; verification is pending."

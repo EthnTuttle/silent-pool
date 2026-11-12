@@ -113,9 +113,15 @@ f=10 % ⇒ **≈ 29.4 BTC** (before margin). Means for the decided ladder:
 m=100 ⇒ ≈ 3.4e7 sats (0.34 BTC) at f=1 %; m=1 000 ⇒ ≈ 1.9-2.0e8
 (1.9-2.0 BTC); m=10 000 ⇒ ≈ 3.2-3.9e8 (3.2-3.9 BTC) — near the worst-case
 bound, because the 500k base exiles most of a large pool by design.
-Funding closure is unchanged: `pay_P` carries `fee + Σ ark_due +
-error-held`, so the H+100 board refills exactly what the H+6 sends spent;
-a short float fails the send and retries it — never the entitlement.
+Funding closure is net, not a per-block gross reserve (clarified 2026-11-10
+in `2026-11-10-net-pool-pending-correction.md`, following the binding
+2026-10-12 PR203 conservation correction). With `K=T-sum(raw)`,
+`pay_P = K + sum(ark_due) + sum(forfeit) + sum(E-P)`. This includes rounding
+in K and the signed change in error-held liabilities. Prior holdings and
+liability reductions participate in funding; an H+100 pool output need not
+equal the gross fee plus that block's H+6 sends and ending held balance.
+A short float holds the same send for retry before authorization; it never
+reduces the entitlement or blocks mining.
 The earlier draft's "100x flow per block" phrasing is superseded by the
 94-block lag formula everywhere.
 
