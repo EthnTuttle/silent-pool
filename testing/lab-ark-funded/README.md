@@ -107,6 +107,7 @@ bundle and runtime outputs using a reviewed QA source descriptor:
 
 ```sh
 nix run "$CONSUMER_REF#ap5-tools" -- portable prepare-shared \
+  --consumer-tools "$(nix eval --raw "$CONSUMER_REF#packages.x86_64-linux.ap5-tools.outPath")/bin/ap5-tools" \
   --bundle "$PWD/.ap5/qualified/bundle.json" \
   --outputs "$PWD/.ap5/runtime-inputs/outputs.json" \
   --qa-source "$QA_SOURCE" --qa-source-sha256 "$QA_SHA" \
@@ -120,6 +121,15 @@ source-key env and wallet public profiles, and derives migration checksums
 from the actual runtime SQL source. Its fullrail selector, source profiles and
 public identity reader must be supported by the reviewed execution QA release.
 The generated execution plan is not a QA admission or live verdict.
+
+Input recipe `spc.lab.ap5.prepared-inputs/2-explicit-metadata-tools` binds Git
+from that immutable AP5 tools closure, including its native executable, actual
+Nix deriver and source archive. Only its bin directory is added to the explicit
+runtime PATH. Both preparation and shared prelaunch execute the installed
+probe's file-only manifest writer under that exact PATH. Missing/shadowed Git,
+changed dependency seals or a failed writer prevent actor startup. A null Git
+base commit is the normal installed-source result, not an approval claim.
+See [RUNTIME-METADATA-TOOLS.md](RUNTIME-METADATA-TOOLS.md) for the subprocess census.
 
 ```sh
 QA_SOURCE=$(nix eval --raw "$REF#packages.x86_64-linux.ap5-qa-source.outPath")/qa-source.json

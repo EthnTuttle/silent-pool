@@ -1,0 +1,11 @@
+{
+  "run_token": "METADATA-ONLY-NO-NODE",
+  "node_description": {
+    "label": "public-metadata-writer-fixture",
+    "source_name": "not-an-observed-node",
+    "network": "regtest"
+  },
+  "node_exit": {
+    "note": "No node was started; this fixture only exercises manifest serialization"
+  }
+}

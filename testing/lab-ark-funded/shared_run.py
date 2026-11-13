@@ -249,6 +249,10 @@ def validate_shared_binding(qa, ap5):
             and qa.binding['binaries']['traffic-probe']['sha256'] == probe['program']['sha256']
             and qa.binding['probe_script']['path'] == probe['script']['path']
             and qa.binding['probe_script']['sha256'] == probe['script']['sha256'], 'shared executed probe tuple differs')
+    from metadata_tools import validate_binding
+    metadata = validate_binding(qa.binding, probe, qa.priv / 'runtime-metadata-preflight')
+    qa.capture.add('runtime_metadata_preflight', metadata)
+    ap5.ev.save('runtime-metadata-preflight', metadata)
     ap5.deadline = min(ap5.deadline, qa.deadline)
     qa.deadline = ap5.deadline
 

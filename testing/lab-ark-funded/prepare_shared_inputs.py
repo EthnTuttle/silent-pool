@@ -11,6 +11,7 @@ from portable import ref
 from portable_verifier import nix_source
 from scenario import scenario
 from shared_sources import load_qa
+from metadata_tools import git_binding, runtime_path, preflight
 
 
 def write(path, value):
@@ -37,6 +38,10 @@ def prepare(args):
     run_out = Path(args.run_out).absolute()
     require(run_out == run_out.resolve() and not run_out.exists(), 'fresh canonical run output required')
     root = fresh_root(args.out)
+    metadata = git_binding(args.consumer_tools)
+    path_env = runtime_path(path_env, metadata['git']['path'])
+    write(root / 'runtime-metadata.json', metadata)
+    preflight(bundle['probe_invocation'], path_env, metadata, root / 'metadata-preflight')
     _, _, source, _ = nix_source(bundle['binaries']['lab']['path'])
     _, _, node_source, _ = nix_source(bundle['binaries']['node']['path'])
     template_path = source / 'testing/lab-traffic/inputs.template.json'
@@ -85,6 +90,8 @@ def prepare(args):
         item, seal = ref(program), ref(manifest)
         binaries[name] = {**item, 'source_manifest': seal['path'], 'source_manifest_sha256': seal['sha256']}
 
+    bind('git', metadata['git']['path'], root / 'runtime-metadata.json')
+
     node_manifest = Path(outputs['binaries']['node']).parent.parent / 'share/rbitcoin-lab/source.json'
     bind('node', bundle['binaries']['node']['path'], node_manifest)
     captaind = Path(bundle['binaries']['captaind']['path'])
@@ -120,8 +127,10 @@ def prepare(args):
     mapping.update(target_spacing='pow_target_spacing', target_timespan='pow_target_timespan')
     subsidy_source = node_source / 'crates/rbitcoin-consensus/src/block/mod.rs'
     binding = {'schema': 'spc-lab-funded-acceptance-inputs/1', 'base_revision': bundle['base_revision'],
+        'input_recipe': 'spc.lab.ap5.prepared-inputs/2-explicit-metadata-tools',
         'source_snapshot_sha256': joined['sha256'], 'payout_policy': 'design-fixed-ladder', 'path_env': path_env,
         'binaries': binaries, 'definitive_rejection_binding': template['definitive_rejection_binding'],
+        'runtime_metadata': ref(root / 'runtime-metadata.json'),
         'probe_script': probe['script'], 'policy': policy, 'consensus_field_map': mapping,
         'consensus_source_facts': {'subsidy_initial_sats': {'value': policy['subsidy_initial_sats'],
             'source_path': str(subsidy_source), 'source_sha256': sha(subsidy_source)}},
@@ -140,6 +149,9 @@ def prepare(args):
         'runtime_source_root': str(source), 'template': ref(template_path), 'node_source_root': str(node_source),
         'migration_sources': migration_sources, 'scenario_validation': {'exit': result.returncode,
             'stdout': ref(root / 'scenario-validation.stdout'), 'stderr': ref(root / 'scenario-validation.stderr')},
+        'input_recipe': 'spc.lab.ap5.prepared-inputs/2-explicit-metadata-tools',
+        'metadata_preflight': ref(root / 'metadata-preflight/receipt.json'),
+        'runtime_metadata': ref(root / 'runtime-metadata.json'),
         'required_order': 'one Runtime bootstrap; common first block; maturity; 96 allocations; four transfers at depth 3 on both nodes; measured/manual/witness/fault/reorg; Ark lifecycle; audit_live; final_drain; final_audit_after_drain; close; one AP5 stop/reap',
         'original_operation': 'ap5-native-bootstrap', 'bootstrap_deadline_secs': 3600,
         'aggregate_hashes_per_second': 40, 'ordinary_transactions_per_second': 0.2,
@@ -150,7 +162,7 @@ def prepare(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('bundle', 'outputs', 'qa-source', 'out', 'run-out'):
+    for name in ('bundle', 'outputs', 'qa-source', 'out', 'run-out', 'consumer-tools'):
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--qa-source-sha256', required=True)
     parser.add_argument('--run-id', required=True)

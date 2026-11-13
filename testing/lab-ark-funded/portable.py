@@ -333,7 +333,7 @@ def main():
     p = sub.add_parser('assemble'); p.add_argument('--outputs', type=Path, required=True); p.add_argument('--out', type=Path, required=True)
     p = sub.add_parser('check-contract'); p.add_argument('--source', type=Path, required=True)
     p = sub.add_parser('prepare-shared')
-    for name in ('bundle', 'outputs', 'qa-source', 'out', 'run-out'):
+    for name in ('bundle', 'outputs', 'qa-source', 'out', 'run-out', 'consumer-tools'):
         p.add_argument('--' + name, type=Path, required=True)
     p.add_argument('--qa-source-sha256', required=True)
     p.add_argument('--run-id', required=True); p.add_argument('--seed', type=int, required=True)
