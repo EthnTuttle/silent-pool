@@ -251,6 +251,14 @@ persisted ownership records; it never kills by PID alone. A run whose final
 state is `completed_with_errors` needs the manifest inspected before starting
 another run.
 
+For a traffic run, `reap` also works when the run stopped before the traffic
+capability was granted (FAILED/INCOMPLETE provisioning): cleanup never grants
+or exercises a capability, so the absent projection does not block resource
+cleanup, while a recorded-but-invalid projection still rejects
+(`docs/decisions/2026-11-12-lab-reap-cleanup-never-granted.md`). Traffic nodes
+that were never launched are reported as exited (expected-not-launched) rather
+than vanishing from the cleanup report.
+
 For a topology run, normal stop also drops the namespace broker and its owned
 holders. The controller is never re-executed, so its original `flock`, HTTP
 listener and `Child`/stdio handles stay intact. Each real actor is exec'd by an

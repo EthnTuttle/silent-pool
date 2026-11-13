@@ -381,6 +381,10 @@ impl RunEngine {
     /// verbatim: `reap` stops what is actually ours and reports
     /// expected-but-absent nodes as exited, without the live-process proof a
     /// live adopt demands. A run stopped before this call attaches cleanly.
+    /// A traffic run whose capability projection was never recorded (the
+    /// probe stopped before the grant) attaches too: cleanup never grants or
+    /// exercises a capability, while a recorded-but-invalid projection still
+    /// rejects.
     pub fn attach_for_cleanup(
         run_dir: impl AsRef<Path>,
         owner_instance: &str,
@@ -407,19 +411,38 @@ impl RunEngine {
             .map_err(|e| EngineError::new("runtime_load", e.to_string()))?;
         let config = LabConfig::from_json(&config_json)
             .map_err(|e| EngineError::new(e.code(), e.detail()))?;
-        let preflight = if mode != AttachMode::ReadOnly {
-            let preflight = preflight(&scenario, &config)
-                .map_err(|e| EngineError::new(e.code(), e.detail()))?;
-            // Traffic gate (plan Section 14, T0) on the adopt path,
-            // BEFORE the owner lock is taken: a traffic-bearing scenario
-            // whose recorded projection is missing, unapproved,
-            // tampered or unrecognized rejects here without any lock,
-            // filesystem or authority effect - exactly as at prepare.
-            check_traffic_capability(&scenario, manifest.traffic_capability.as_ref())
-                .map_err(|e| EngineError::new(e.code(), e.detail()))?;
-            preflight
-        } else {
-            PreflightReport::default()
+        let preflight = match mode {
+            AttachMode::ReadOnly => PreflightReport::default(),
+            AttachMode::Live => {
+                let preflight = preflight(&scenario, &config)
+                    .map_err(|e| EngineError::new(e.code(), e.detail()))?;
+                // Traffic gate (plan Section 14, T0) on the adopt path,
+                // BEFORE the owner lock is taken: a traffic-bearing scenario
+                // whose recorded projection is missing, unapproved,
+                // tampered or unrecognized rejects here without any lock,
+                // filesystem or authority effect - exactly as at prepare.
+                check_traffic_capability(&scenario, manifest.traffic_capability.as_ref())
+                    .map_err(|e| EngineError::new(e.code(), e.detail()))?;
+                preflight
+            }
+            // Cleanup never grants or exercises a traffic capability, and it
+            // never enables commands, hashing or resume: it validates the
+            // persisted manifest/config and only stops what the recorded
+            // census actually identifies as ours. A run that stopped before
+            // the probe granted the capability (FAILED/INCOMPLETE
+            // provisioning) has no record to verify - that absence is not a
+            // persisted contradiction and must not block resource cleanup.
+            // A record that IS present is verified exactly as strictly as
+            // Live, so cleanup still refuses rewritten history.
+            AttachMode::Cleanup => {
+                let preflight = preflight(&scenario, &config)
+                    .map_err(|e| EngineError::new(e.code(), e.detail()))?;
+                if let Some(record) = manifest.traffic_capability.as_ref() {
+                    check_traffic_capability(&scenario, Some(record))
+                        .map_err(|e| EngineError::new(e.code(), e.detail()))?;
+                }
+                preflight
+            }
         };
         let attached_lock = if mode != AttachMode::ReadOnly {
             Some(
@@ -3264,9 +3287,28 @@ impl RunEngine {
         // manifest actually recorded, BEFORE reap_owned mutates records:
         // an expected node with no process record at all is reported as
         // exited rather than silently vanishing from the cleanup report.
-        let expected_nodes: BTreeSet<NodeId> = {
-            let manifest = self.manifest.lock().unwrap();
-            manifest.traffic_launch_profiles.keys().cloned().collect()
+        // The expectation is the scenario's node census itself: a node with
+        // a launch profile but no process record stopped before launch,
+        // and a node with neither was never provisioned (FAILED/INCOMPLETE
+        // provisioning) - both are reported as expected-not-launched.
+        // Non-traffic runs keep reporting only their recorded processes.
+        let expected_nodes: BTreeSet<String> = if self.scenario.traffic.is_some() {
+            let profiled: Vec<String> = {
+                let manifest = self.manifest.lock().unwrap();
+                manifest
+                    .traffic_launch_profiles
+                    .keys()
+                    .map(|id| id.as_str().to_string())
+                    .collect()
+            };
+            self.scenario
+                .nodes
+                .iter()
+                .map(|node| node.id.as_str().to_string())
+                .chain(profiled)
+                .collect()
+        } else {
+            BTreeSet::new()
         };
         let recorded_nodes: BTreeSet<String> = {
             let manifest = self.manifest.lock().unwrap();
@@ -3284,7 +3326,7 @@ impl RunEngine {
             .reap_owned(Duration::from_secs(2));
         for node in &expected_nodes {
             if !recorded_nodes.contains(node.as_str()) {
-                results.push(("node".to_string(), node.to_string(), ProcessState::Exited));
+                results.push(("node".to_string(), node.clone(), ProcessState::Exited));
             }
         }
         let mut manifest = self.manifest.lock().unwrap();

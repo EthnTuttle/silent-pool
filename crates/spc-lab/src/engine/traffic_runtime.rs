@@ -1198,26 +1198,30 @@ impl RunEngine {
     /// `reap` reports it as expected-but-absent), while a persisted
     /// contradiction - a recorded process whose argv or binary no longer
     /// matches the recorded launch profile, or a changed driver config -
-    /// rejects so cleanup never trusts rewritten history.
+    /// rejects so cleanup never trusts rewritten history. A scenario node
+    /// with no recorded process was never launched; the absence of its
+    /// launch profile is the same expected-not-launched state, reported by
+    /// `reap`, not a contradiction.
     pub(super) fn validate_persisted_traffic_bindings(&self) -> Result<(), EngineError> {
         if self.scenario.traffic.is_none() {
             return Ok(());
         }
         let manifest = self.manifest.lock().unwrap();
         for node in &self.scenario.nodes {
+            let Some(record) = manifest.process("node", node.id.as_str()) else {
+                // Reported by reap as an expected-but-absent
+                // (expected-not-launched) node.
+                continue;
+            };
             let profile = manifest
                 .traffic_launch_profiles
                 .get(&node.id)
                 .ok_or_else(|| {
                     EngineError::new(
                         "traffic_launch_profile_mismatch",
-                        "missing recorded profile",
+                        "recorded node process without recorded profile",
                     )
                 })?;
-            let Some(record) = manifest.process("node", node.id.as_str()) else {
-                // Reported by reap as an expected-but-absent node.
-                continue;
-            };
             if record.args != profile.argv || record.executable_sha256 != profile.binary_sha256 {
                 return Err(EngineError::new(
                     "traffic_launch_profile_mismatch",

@@ -1,13 +1,22 @@
 //! Cleanup-purpose traffic binding validation (`attach_for_cleanup` /
 //! `validate_persisted_traffic_bindings`): the persisted-only checks that
 //! let `reap` reopen a stopped traffic run. Manifest state is constructed
-//! directly here; the capability-record lineage gate is exercised by the
-//! projection tests and the live adopt path, which cleanup deliberately
-//! skips (a stopped run's capability record is unchanged on disk).
+//! directly here. The capability-record lineage gate is exercised by the
+//! projection tests and the live adopt path; cleanup verifies a record
+//! that IS present exactly as strictly as Live (rewritten history still
+//! rejects) and tolerates only the never-granted ABSENCE: a run whose
+//! probe stopped before granting the capability (FAILED/INCOMPLETE
+//! provisioning) has no record to verify, and that absence is not
+//! permission to block resource cleanup.
 use super::*;
 use crate::supervisor::{ControlTransport, ProcessRecord, ProcessState, Readiness};
+use crate::traffic::projection::TrafficCapabilityRecord;
 
-fn traffic_engine() -> Arc<RunEngine> {
+/// Build a traffic engine over the one-pool fixture with `node_count`
+/// nodes on net-a (extra nodes are copies of node-a with a fresh id and
+/// no links; a link-less node is valid, which is exactly the shape a
+/// partially provisioned run leaves behind).
+fn traffic_engine_with_nodes(node_count: usize) -> Arc<RunEngine> {
     let mut s: Value = serde_json::from_str(include_str!(
         "../../tests/fixtures/scenario_v1_one_pool_two_miners.json"
     ))
@@ -19,6 +28,16 @@ fn traffic_engine() -> Arc<RunEngine> {
         "driver":{"actors":[{"id":"txd-0","network_wallets":8,"user_payment_wallets":2,"hosts_bootstrap_funding":true}],"user_payment_wallets":2,"history":"traffic/"},
         "rate":{"ordinary_tx_per_sec":0.2,"pacing":"fixed_jitter"},"fees":{"rate_sats_vb":{"min":1,"max":20},"max_fee_sats_per_tx":100000},"sizes":{"classes_vb":[{"vb":220,"mix":1.0}],"max_vb":1000},
         "spend_types":["p2pkh"],"ark":{"enabled":false,"registration_before_mining":true,"chain_effect_budget_tx_per_sec":0.0},"caps":{"max_inflight_broadcasts":1,"max_unknown_retries":3,"max_mempool_backlog_tx":1000,"reorg_resubmit_max":3},"pause_semantics":"no_broadcast_after_ack"});
+    {
+        let mut nodes = s["nodes"].as_array().unwrap().clone();
+        while nodes.len() < node_count {
+            let mut extra = nodes[0].clone();
+            extra["id"] =
+                serde_json::json!(format!("node-{}", (b'a' + nodes.len() as u8) as char));
+            nodes.push(extra);
+        }
+        s["nodes"] = Value::Array(nodes);
+    }
     s["phases"] = serde_json::json!([{"id":"bootstrap","commands":[{"kind":{"type":"bootstrap_fund","driver_id":"txd-0","node_id":s["nodes"][0]["id"]}}]}]);
     let scenario: Scenario = serde_json::from_value(s).unwrap();
     let adapter: crate::config::AdapterConfig = serde_json::from_value(serde_json::json!({"program":"/bin/true","args":[],"fixture":true,"capabilities":["fixture.scripted","spc.node.regtest.mempool_rpc.v1","spc.pool.work_unit_v2","spc.pool.network_block_work"],"effective_profile":{
@@ -60,6 +79,16 @@ fn traffic_engine() -> Arc<RunEngine> {
         },
     )
     .unwrap()
+}
+
+fn traffic_engine() -> Arc<RunEngine> {
+    traffic_engine_with_nodes(1)
+}
+
+/// Two traffic nodes: node-a and node-b on net-a, node-b unlinked. A run
+/// that stopped mid-provisioning leaves exactly this shape behind.
+fn traffic_engine_two_nodes() -> Arc<RunEngine> {
+    traffic_engine_with_nodes(2)
 }
 
 /// A peered launch profile for node-a, as a host-ring launch would record.
@@ -248,13 +277,237 @@ fn missing_process_record_is_not_a_cleanup_failure() {
 }
 
 #[test]
-fn persisted_bindings_reject_missing_profile() {
+fn never_launched_nodes_are_not_a_cleanup_failure() {
+    // The other half of the AP5 reap blocker: a traffic run whose nodes
+    // were never launched (the probe stopped before bootstrap, before any
+    // profile or process was recorded) has nothing to contradict. The
+    // absence is not a persisted contradiction: validation accepts, and
+    // reap reports the node as expected-not-launched.
     let engine = traffic_engine();
+    engine.validate_persisted_traffic_bindings().unwrap();
+    let results = engine.reap().unwrap();
+    assert_eq!(
+        results,
+        vec![(
+            "node".to_string(),
+            "node-a".to_string(),
+            ProcessState::Exited
+        )],
+        "never-launched nodes report as expected-not-launched"
+    );
+}
+
+#[test]
+fn persisted_bindings_reject_record_without_profile() {
+    // The inverse absence is a contradiction: a recorded node process
+    // whose launch profile is gone is rewritten history, and cleanup
+    // fails closed on it.
+    let engine = traffic_engine();
+    let profile = peered_profile();
+    let record = node_record(&profile);
     install_driver_config(&engine, "{}");
-    // Traffic scenario, but no launch profile was ever recorded.
+    {
+        let mut manifest = engine.manifest.lock().unwrap();
+        // Process record persisted, but no launch profile was recorded.
+        manifest.upsert_process(record);
+        manifest.save(&engine.manifest_path).unwrap();
+    }
     let error = engine.validate_persisted_traffic_bindings().unwrap_err();
     assert_eq!(error.code(), "traffic_launch_profile_mismatch");
-    assert!(error.to_string().contains("missing recorded profile"));
+    assert!(error.to_string().contains("without recorded profile"));
+}
+
+#[test]
+fn partial_provisioning_reaps_the_never_launched_node_too() {
+    // INCOMPLETE provisioning: node-a was launched and stopped, node-b
+    // was never reached. The persisted validation must not demand
+    // node-b's launch profile (its absence is expected-not-launched, not
+    // a contradiction), and reap must report node-b alongside node-a.
+    let engine = traffic_engine_two_nodes();
+    let profile = peered_profile();
+    let record = node_record(&profile);
+    install_driver_config(&engine, "{}");
+    {
+        let mut manifest = engine.manifest.lock().unwrap();
+        manifest
+            .traffic_launch_profiles
+            .insert(NodeId::trusted("node-a"), profile);
+        manifest.upsert_process(record);
+        manifest.save(&engine.manifest_path).unwrap();
+    }
+    engine.validate_persisted_traffic_bindings().unwrap();
+    let run_dir = engine.run_dir.clone();
+    drop(engine); // Release the owner lock.
+    let reaper = RunEngine::attach_for_cleanup(&run_dir, "partial-provision-reap").unwrap();
+    let results = reaper.reap().unwrap();
+    assert_eq!(
+        results,
+        vec![
+            (
+                "node".to_string(),
+                "node-a".to_string(),
+                ProcessState::Exited
+            ),
+            (
+                "node".to_string(),
+                "node-b".to_string(),
+                ProcessState::Exited
+            ),
+        ],
+        "node-a reports from its record; node-b reports expected-not-launched"
+    );
+}
+
+#[test]
+fn cleanup_attaches_a_never_granted_capability_run() {
+    // The AP5 r22 shared-run reap blocker, pinned end-to-end at the engine
+    // boundary: the run stopped before the traffic capability was granted
+    // (prepare state - no capability record, no launch profiles, no
+    // processes, zero command bytes). Live attach refuses that manifest
+    // before the owner lock; cleanup attach accepts it, reaps without
+    // inventing a capability, a command or a process, and a second
+    // cleanup behaves identically.
+    let engine = traffic_engine();
+    let before = engine.manifest_snapshot();
+    assert!(before.traffic_capability.is_none());
+    assert_eq!(before.state, RunState::Created);
+    assert!(before.processes.is_empty());
+    let commands = engine.run_dir.join("private").join("commands.jsonl");
+    let commands_before = std::fs::read(&commands).unwrap();
+    let run_dir = engine.run_dir.clone();
+    drop(engine); // Release the owner lock.
+
+    // The live gate stays strict: no capability record, no adopt.
+    let live = RunEngine::attach(&run_dir, "ap5-blocker-live").unwrap_err();
+    assert_eq!(live.code(), "traffic_capability_unrecorded");
+
+    // Cleanup accepts the never-granted run and reaps it.
+    let reaper = RunEngine::attach_for_cleanup(&run_dir, "ap5-blocker-reap").unwrap();
+    let results = reaper.reap().unwrap();
+    assert_eq!(
+        results,
+        vec![(
+            "node".to_string(),
+            "node-a".to_string(),
+            ProcessState::Exited
+        )],
+        "the never-launched node reports expected-not-launched"
+    );
+    let after = reaper.manifest_snapshot();
+    assert!(
+        after.traffic_capability.is_none(),
+        "cleanup must not invent a capability record"
+    );
+    assert_eq!(after.state, RunState::Created);
+    assert!(after.processes.is_empty());
+    drop(reaper); // Release the owner lock again.
+
+    // Cleanup logged no command: the command log is byte-identical.
+    assert_eq!(std::fs::read(&commands).unwrap(), commands_before);
+
+    // Idempotent: a second cleanup reports the same thing.
+    let again = RunEngine::attach_for_cleanup(&run_dir, "ap5-blocker-reap-2").unwrap();
+    assert_eq!(
+        again.reap().unwrap(),
+        vec![(
+            "node".to_string(),
+            "node-a".to_string(),
+            ProcessState::Exited
+        )]
+    );
+}
+
+#[test]
+fn reap_never_signals_a_process_it_does_not_own() {
+    // Safe PID identity: a live foreign process recorded with a stale
+    // start-time tick fails verification as PidReused. Cleanup reports
+    // the node as OrphanUnverified without signalling the foreign
+    // process, which survives untouched.
+    let engine = traffic_engine();
+    let profile = peered_profile();
+    let mut record = node_record(&profile);
+    let mut foreign = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+    record.pid = foreign.id();
+    record.pgid = foreign.id();
+    record.start_time_ticks = 1; // Never this process's real start time.
+    record.state = ProcessState::Running; // Force the verify path.
+    install_driver_config(&engine, "{}");
+    {
+        let mut manifest = engine.manifest.lock().unwrap();
+        manifest
+            .traffic_launch_profiles
+            .insert(NodeId::trusted("node-a"), profile);
+        manifest.upsert_process(record);
+        manifest.save(&engine.manifest_path).unwrap();
+    }
+    let run_dir = engine.run_dir.clone();
+    drop(engine); // Release the owner lock.
+    let reaper = RunEngine::attach_for_cleanup(&run_dir, "foreign-pid-reap").unwrap();
+    let results = reaper.reap().unwrap();
+    assert_eq!(
+        results,
+        vec![(
+            "node".to_string(),
+            "node-a".to_string(),
+            ProcessState::OrphanUnverified
+        )],
+        "a reused or foreign PID is never signalled"
+    );
+    assert!(
+        foreign.try_wait().unwrap().is_none(),
+        "the foreign process must survive cleanup untouched"
+    );
+    let _ = foreign.kill();
+    let _ = foreign.wait();
+}
+
+#[test]
+fn cleanup_rejects_a_present_but_invalid_capability_record() {
+    // A capability record that IS present is verified exactly as strictly
+    // as Live: cleanup refuses rewritten history even though it never
+    // grants or exercises the capability itself.
+    let engine = traffic_engine();
+    let record: TrafficCapabilityRecord = serde_json::from_value(serde_json::json!({
+        "schema_version": 0,
+        "probe": "not-the-canonical-probe",
+        "probe_version": "reap-cleanup-test",
+        "report_schema_version": 1,
+        "report_sha256": format!("{:0>64}", "a"),
+        "contract_hash": format!("{:0>64}", "b"),
+        "generated_utc": "2026-01-01T00:00:00Z",
+        "run_token": "reap-cleanup-test",
+        "target_label": "reap-cleanup-test",
+        "target_kind": "owned-fresh-regtest-node",
+        "profile_name": "reap-cleanup-test",
+        "expected_network": "regtest",
+        "expected_genesis": format!("{:0>64}", "c"),
+        "node_binary_sha256": null,
+        "traffic_consumer": null,
+        "consumer_model_failures": [],
+        "methods": {},
+        "foundational": {},
+        "check_states": {},
+        "observations": {},
+        "verdict": {
+            "status": "unknown",
+            "funded_state": "unknown",
+            "full_acceptance": false
+        },
+        "recognized": false,
+        "behavior_proven": false,
+        "unproven_check_ids": []
+    }))
+    .unwrap();
+    {
+        let mut manifest = engine.manifest.lock().unwrap();
+        manifest.traffic_capability = Some(record);
+        manifest.save(&engine.manifest_path).unwrap();
+    }
+    let run_dir = engine.run_dir.clone();
+    drop(engine); // Release the owner lock.
+    let error =
+        RunEngine::attach_for_cleanup(&run_dir, "invalid-capability-reap").unwrap_err();
+    assert_eq!(error.code(), "traffic_capability_record_invalid");
 }
 
 #[test]
