@@ -1305,7 +1305,7 @@
         "test_one_runtime_bootstrap_and_lifecycle_before_exact_final_drain_order (test_shared_run.SharedRunTests.test_one_runtime_bootstrap_and_lifecycle_before_exact_final_drain_order)",
         "test_original_deadline_caps_acquisition_and_bounds_cannot_be_self_selected (test_readiness_v3.V3Readiness.test_original_deadline_caps_acquisition_and_bounds_cannot_be_self_selected)",
         "test_over_bound_raw_collections_are_rejected_not_truncated (test_readiness_v3.V3Readiness.test_over_bound_raw_collections_are_rejected_not_truncated)",
-        "test_portable_QA_r21_import_and_descriptor_tamper_refusal (test_shared_run.SharedRunTests.test_portable_QA_r21_import_and_descriptor_tamper_refusal)",
+        "test_portable_QA_r22_import_and_descriptor_tamper_refusal (test_shared_run.SharedRunTests.test_portable_QA_r22_import_and_descriptor_tamper_refusal)",
         "test_post_EOF_drain_failure_does_not_claim_pass_or_skip_cleanup (test_shared_run.SharedRunTests.test_post_EOF_drain_failure_does_not_claim_pass_or_skip_cleanup)",
         "test_preflight_failure_never_starts_runtime_and_cleanup_still_runs (test_shared_run.SharedRunTests.test_preflight_failure_never_starts_runtime_and_cleanup_still_runs)",
         "test_public_R4_review_relocates_but_changed_bytes_reject (test_portability.Portability.test_public_R4_review_relocates_but_changed_bytes_reject)",
