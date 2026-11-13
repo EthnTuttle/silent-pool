@@ -144,6 +144,9 @@ pub struct Ark {
 #[serde(deny_unknown_fields)]
 pub struct NativeAudit {
     pub run_id: String,
+    /// Controller-generated SHA256 of the supervisor's exact opaque token.
+    /// Required private config provenance, never a wallet-agent profile input.
+    pub run_token_hash: String,
     pub identity_id: String,
     pub pool_id: String,
     pub front_id: String,
@@ -152,7 +155,21 @@ pub struct NativeAudit {
     pub collector_pubkey: String,
 }
 impl NativeAudit {
+    pub fn expected_run_token(&self) -> Result<[u8; 32], ConfigError> {
+        if self.run_token_hash.len() != 64 {
+            return Err(ConfigError::NativeAudit);
+        }
+        let digest: [u8; 32] = hex::decode(&self.run_token_hash)
+            .map_err(|_| ConfigError::NativeAudit)?
+            .try_into()
+            .map_err(|_| ConfigError::NativeAudit)?;
+        if digest == [0; 32] || hex::encode(digest) != self.run_token_hash {
+            return Err(ConfigError::NativeAudit);
+        }
+        Ok(digest)
+    }
     pub fn validate(&self, address: &str, network: Network) -> Result<(), ConfigError> {
+        self.expected_run_token()?;
         let valid = |s: &str| {
             !s.is_empty()
                 && s.len() <= 128

@@ -75,6 +75,8 @@ stream_isolation = true
 # authorities, separate from ark.aggregate_api.order_pubkey and Ark server keys.
 # [ark.native_audit]
 # run_id = "actual-run-id"
+# run_token_hash = "<controller-generated SHA256 of Supervisor's exact token>"
+# This required private digest is not a wallet_agents[].native_audit input.
 # identity_id = "alice"
 # pool_id = "pool-a"
 # front_id = "front-a1"

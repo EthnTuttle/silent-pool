@@ -304,6 +304,7 @@ pub fn launch(engine: &RunEngine, binary: &Path) -> Result<()> {
             config["ark"]["native_audit"] = native;
         }
         let config_path = dir.join("agent.toml");
+        native_render::validate_before_write(engine, agent, &identity.address, &config_path)?;
         private_file(&config_path, toml::to_string(&config)?.as_bytes())?;
         aggregate_binding::validate_persisted(engine, agent)?;
         let adapter = crate::config::AdapterConfig {
@@ -358,6 +359,7 @@ pub fn require_ready(engine: &RunEngine, connections: &[ConnectionSpec]) -> Resu
     for c in connections {
         if let Some(agent) = validate_connection(&engine.scenario, c).map_err(|e| e.to_string())? {
             aggregate_binding::validate_persisted(engine, agent).map_err(|e| e.to_string())?;
+            validate_native_run_binding(engine, agent).map_err(|e| e.to_string())?;
             {
                 let supervisor = engine.supervisor.lock().map_err(|_| "supervisor lock")?;
                 let records = supervisor.records();
@@ -386,6 +388,23 @@ pub fn require_ready(engine: &RunEngine, connections: &[ConnectionSpec]) -> Resu
         }
     }
     Ok(())
+}
+
+pub(crate) fn validate_native_run_binding(
+    engine: &RunEngine,
+    agent: &WalletAgentSpec,
+) -> Result<()> {
+    if agent.native_audit.is_none() {
+        return Ok(());
+    }
+    let private = engine.run_dir.join("private");
+    let identity = public_identity(&private, &agent.identity_id)?;
+    native_render::validate_persisted(
+        engine,
+        agent,
+        &identity.address,
+        &private.join(format!("wallet-{}/agent.toml", agent.identity_id)),
+    )
 }
 
 pub fn status_ready(status: &Value, now: u64) -> bool {

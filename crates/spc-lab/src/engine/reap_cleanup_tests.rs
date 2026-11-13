@@ -32,8 +32,7 @@ fn traffic_engine_with_nodes(node_count: usize) -> Arc<RunEngine> {
         let mut nodes = s["nodes"].as_array().unwrap().clone();
         while nodes.len() < node_count {
             let mut extra = nodes[0].clone();
-            extra["id"] =
-                serde_json::json!(format!("node-{}", (b'a' + nodes.len() as u8) as char));
+            extra["id"] = serde_json::json!(format!("node-{}", (b'a' + nodes.len() as u8) as char));
             nodes.push(extra);
         }
         s["nodes"] = Value::Array(nodes);
@@ -426,7 +425,10 @@ fn reap_never_signals_a_process_it_does_not_own() {
     let engine = traffic_engine();
     let profile = peered_profile();
     let mut record = node_record(&profile);
-    let mut foreign = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+    let mut foreign = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .unwrap();
     record.pid = foreign.id();
     record.pgid = foreign.id();
     record.start_time_ticks = 1; // Never this process's real start time.
@@ -505,8 +507,7 @@ fn cleanup_rejects_a_present_but_invalid_capability_record() {
     }
     let run_dir = engine.run_dir.clone();
     drop(engine); // Release the owner lock.
-    let error =
-        RunEngine::attach_for_cleanup(&run_dir, "invalid-capability-reap").unwrap_err();
+    let error = RunEngine::attach_for_cleanup(&run_dir, "invalid-capability-reap").unwrap_err();
     assert_eq!(error.code(), "traffic_capability_record_invalid");
 }
 

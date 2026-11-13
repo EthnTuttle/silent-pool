@@ -12,6 +12,14 @@ use spc_scan::source_feed::{Checkpoint, Frame, TraceSeal};
 use std::io::{BufRead, Write};
 use std::process::{Command, Stdio};
 include!("joint_test.rs");
+#[path = "startup_tests.rs"]
+mod startup_tests;
+
+// Deliberately synthetic traffic-shaped marker. Actual engine generation and
+// Supervisor export are covered by wallet_native_render's joined startup test.
+fn fixture_run_token() -> zeroize::Zeroizing<String> {
+    zeroize::Zeroizing::new(hex::encode(io::hash(b"test-run:fixture")))
+}
 
 fn key(n: u8) -> Keypair {
     Keypair::from_secret_key(&Secp256k1::new(), &SecretKey::from_slice(&[n; 32]).unwrap())
@@ -248,7 +256,7 @@ impl Fixture {
                     .trim()
                     .into(),
                 executable_sha256: [9; 32],
-                run_token_sha256: io::hash(b"test-run:fixture"),
+                run_token_sha256: io::hash(fixture_run_token().as_bytes()),
                 config_sha256: io::hash(&std::fs::read(&config).unwrap()),
             },
             config_path: config.to_str().unwrap().into(),
@@ -326,6 +334,15 @@ impl Fixture {
 }
 
 fn cpu(context: &ContextState, r: &CandidateRequest, registered: bool) -> std::process::Child {
+    cpu_with_token(context, r, registered, fixture_run_token().as_str())
+}
+
+fn cpu_with_token(
+    context: &ContextState,
+    r: &CandidateRequest,
+    registered: bool,
+    token: &str,
+) -> std::process::Child {
     let config = context.private.join("cpu.toml");
     private_write(
         &config,
@@ -345,7 +362,7 @@ fn cpu(context: &ContextState, r: &CandidateRequest, registered: bool) -> std::p
             &context.instance.socket_path,
             &hex::encode(frame),
         ])
-        .env("SPC_LAB_RUN_TOKEN", "test-run:fixture")
+        .env("SPC_LAB_RUN_TOKEN", token)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -363,7 +380,7 @@ fn cpu(context: &ContextState, r: &CandidateRequest, registered: bool) -> std::p
         context.instance.process.uid,
         &context.private,
         Some(&config),
-        "test-run",
+        &io::hash(token.as_bytes()),
     )
     .unwrap();
     let registry = PeerRegistry {
@@ -513,7 +530,7 @@ async fn unregistered_cpu_and_stale_wallet_instance_never_reach_auditor() {
 
 #[test]
 fn native_profile_scope_is_regtest_and_confined() {
-    let profile:crate::config::NativeAudit=serde_json::from_value(serde_json::json!({"run_id":"r","pool_id":"p","front_id":"f","identity_id":"i","collector_socket":"/private/collector.sock","pool_pubkey":key(9).x_only_public_key().0.to_string(),"collector_pubkey":key(10).x_only_public_key().0.to_string()})).unwrap();
+    let profile:crate::config::NativeAudit=serde_json::from_value(serde_json::json!({"run_id":"r","run_token_hash":hex::encode(io::hash(b"r:fixture")),"pool_id":"p","front_id":"f","identity_id":"i","collector_socket":"/private/collector.sock","pool_pubkey":key(9).x_only_public_key().0.to_string(),"collector_pubkey":key(10).x_only_public_key().0.to_string()})).unwrap();
     let address = spc_crypto::address::encode_sp_address(
         spc_crypto::Network::Regtest,
         &key(7).public_key(),

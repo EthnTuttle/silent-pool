@@ -384,7 +384,11 @@ impl RunEngine {
     /// A traffic run whose capability projection was never recorded (the
     /// probe stopped before the grant) attaches too: cleanup never grants or
     /// exercises a capability, while a recorded-but-invalid projection still
-    /// rejects.
+    /// rejects. A native-audit run whose wallet failed before any lease was
+    /// published attaches too: cleanup never requires a live wallet,
+    /// instance or lease, while a present-but-foreign or rewritten lease
+    /// projection still rejects
+    /// (`validate_persisted_native_audit_bindings`).
     pub fn attach_for_cleanup(
         run_dir: impl AsRef<Path>,
         owner_instance: &str,
@@ -578,24 +582,19 @@ impl RunEngine {
             }
             AttachMode::Cleanup => {
                 engine.validate_persisted_traffic_bindings()?;
+                engine.validate_persisted_native_audit_bindings()?;
                 let records = engine.manifest.lock().unwrap().processes.clone();
                 engine.supervisor.lock().unwrap().load_census(records);
             }
             AttachMode::ReadOnly => {}
         }
-        // A non-adopt (fresh) open of a scenario with native-audit wallet
-        // agents validates the persisted native-audit binding before the
-        // engine is handed out, exactly as the wallet-service direction
-        // requires (the adopt path checks it above after adoption).
-        if mode != AttachMode::ReadOnly
-            && engine
-                .scenario
-                .wallet_agents
-                .iter()
-                .any(|wallet| wallet.native_audit.is_some())
-        {
-            engine.validate_native_audit_attach()?;
-        }
+        // Native-audit attach validation is factored by the same purpose:
+        // the Live arm above demands the live wallet socket, instance and
+        // ownership proof (`validate_native_audit_attach`), while Cleanup
+        // validates only the persisted lease projection
+        // (`validate_persisted_native_audit_bindings`) and never requires
+        // a wallet, lease or instance that a partial startup never
+        // created. Read-only never validates (unchanged).
         // The wallet-service direction removed the UI-source
         // reconstruction on attach (`rebind_ui_registry`): attach never
         // fabricates wallet bindings; the strict persisted-binding

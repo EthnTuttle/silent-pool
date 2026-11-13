@@ -259,6 +259,15 @@ cleanup, while a recorded-but-invalid projection still rejects
 that were never launched are reported as exited (expected-not-launched) rather
 than vanishing from the cleanup report.
 
+The same holds for a native-audit wallet that failed before any miner bound
+(partial startup): the lease projection is published by the miner bind, not by
+wallet startup, so its absence is expected-not-launched and never blocks
+cleanup. A lease projection that IS present is verified as persisted metadata
+only - recorded process/config/registry bindings must still match the
+persisted records, fail closed on anything foreign or rewritten - with no live
+wallet, socket, instance or ownership proof required
+(`docs/decisions/2026-11-13-lab-reap-cleanup-native-audit-attach.md`).
+
 For a topology run, normal stop also drops the namespace broker and its owned
 holders. The controller is never re-executed, so its original `flock`, HTTP
 listener and `Child`/stdio handles stay intact. Each real actor is exec'd by an

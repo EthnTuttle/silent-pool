@@ -247,7 +247,7 @@ impl ContextState {
             kernel.uid,
             &self.private,
             Some(Path::new(&peer.config_path)),
-            &self.instance.run_id,
+            &self.instance.process.run_token_sha256,
         )?;
         ensure!(
             observed.run_token_sha256 == self.instance.process.run_token_sha256,
@@ -527,7 +527,7 @@ impl NativeRuntime {
             uid,
             &private,
             Some(config_path),
-            &profile.run_id,
+            &profile.expected_run_token()?,
         )?;
         ensure!(
             process.config_sha256 == *config_hash,
@@ -545,6 +545,9 @@ impl NativeRuntime {
                     && old.pool_id == profile.pool_id
                     && old.front_id == profile.front_id
                     && old.process.uid == uid
+                    && old.process.run_token_sha256 == process.run_token_sha256
+                    && old.process.config_sha256 == *config_hash
+                    && Path::new(&old.config_path) == config_path
                     && Path::new(&old.socket_path) == socket_path,
                 "native stale instance ownership"
             );

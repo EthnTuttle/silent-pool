@@ -190,6 +190,18 @@ impl RunEngine {
         if !self.supervisor.lock().unwrap().verify(&record).is_owned() {
             return Err(failure("native peer ownership mismatch"));
         }
+        if role == "wallet" {
+            let agent = self
+                .scenario
+                .wallet_agents
+                .iter()
+                .find(|agent| agent.identity_id.as_str() == id)
+                .ok_or_else(|| failure("native wallet profile missing"))?;
+            // Includes persisted expected hash vs recorded supervisor marker.
+            // Shared by bind and live attach; never rewrites config on adopt.
+            crate::wallet_bridge::validate_native_run_binding(self, agent)
+                .map_err(|e| failure(e.to_string()))?;
+        }
         let paths: Vec<_> = record
             .args
             .windows(2)
@@ -606,6 +618,106 @@ impl RunEngine {
         }
         Ok(())
     }
+
+    /// Cleanup-purpose validation of the persisted native-audit bindings.
+    /// The live adopt path ([`Self::validate_native_audit_attach`]) demands
+    /// a live wallet socket, instance file and ownership proof; cleanup
+    /// must not. A wallet that failed before any miner bound never
+    /// publishes a lease projection, and that absence on a never-started
+    /// wallet is expected (FAILED/INCOMPLETE provisioning), not a
+    /// contradiction that blocks resource cleanup. A lease projection that
+    /// IS present is verified exactly as persisted metadata: the recorded
+    /// process identity and config path must still match the persisted
+    /// supervisor records and the recorded config bytes, and the recorded
+    /// registry must still hash and decode to the same run and wallet
+    /// instance - but no live process, socket, instance or ownership proof
+    /// is required, because cleanup only reports and signals processes the
+    /// recorded census actually identifies as ours. Nothing here creates a
+    /// wallet, lease, capability or command, and no key, signer or hash
+    /// authority is exercised.
+    pub(super) fn validate_persisted_native_audit_bindings(&self) -> Result<(), EngineError> {
+        let path = self.run_dir.join("private/native-audit-leases.json");
+        if !path.exists() {
+            // Expected-not-launched: the wallet never reached the bind that
+            // publishes a lease. Never fabricated, never a failure.
+            return Ok(());
+        }
+        let uid = std::fs::metadata("/proc/self")
+            .map_err(|e| failure(e.to_string()))?
+            .uid();
+        let leases: Leases =
+            wire::decode_private_json(&private_read(&path, uid)?).map_err(failure)?;
+        if leases.run_id != self.run_id.as_str() || leases.schema != "spc.native-audit-leases/1" {
+            return Err(failure("native lease projection foreign"));
+        }
+        for lease in leases.leases.values() {
+            lease.instance.validate().map_err(failure)?;
+            lease.instance.process.validate().map_err(failure)?;
+            let (record, config) =
+                self.persisted_native_record("wallet", &lease.instance.identity_id)?;
+            if lease.instance.process.pid != record.pid
+                || lease.instance.process.start_time_ticks != record.start_time_ticks
+                || hex::encode(lease.instance.process.executable_sha256) != record.executable_sha256
+                || hash(record.run_token.as_bytes()) != lease.instance.process.run_token_sha256
+                || config != Path::new(&lease.instance.config_path)
+                || hash(&private_read(&config, lease.instance.process.uid)?)
+                    != lease.instance.process.config_sha256
+            {
+                return Err(failure("native wallet record replaced"));
+            }
+            let bytes = private_read(&lease.registry_path, uid)?;
+            if hash(&bytes) != lease.registry_sha256 {
+                return Err(failure("native registry projection mismatch"));
+            }
+            let registry = wire::decode_registry(&bytes).map_err(failure)?;
+            if registry.wallet_instance != lease.instance.instance_id
+                || registry.run_id != self.run_id.as_str()
+            {
+                return Err(failure("native registry foreign"));
+            }
+            for peer in &registry.peers {
+                peer.process.validate().map_err(failure)?;
+                let (record, config) = self.persisted_native_record("miner", &peer.miner_id)?;
+                if peer.process.pid != record.pid
+                    || peer.process.start_time_ticks != record.start_time_ticks
+                    || hex::encode(peer.process.executable_sha256) != record.executable_sha256
+                    || hash(record.run_token.as_bytes()) != peer.process.run_token_sha256
+                    || config != Path::new(&peer.config_path)
+                    || hash(&private_read(&config, peer.process.uid)?) != peer.process.config_sha256
+                {
+                    return Err(failure("native peer record replaced"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Persisted-only manifest lookup for the cleanup validation above: the
+    /// recorded process fields and the single recorded `--config`
+    /// argument, with no live `/proc`, ownership, socket or token check.
+    fn persisted_native_record(
+        &self,
+        role: &str,
+        id: &str,
+    ) -> Result<(ProcessRecord, PathBuf), EngineError> {
+        let record = self
+            .manifest
+            .lock()
+            .unwrap()
+            .process(role, id)
+            .cloned()
+            .ok_or_else(|| failure("native record missing from manifest"))?;
+        let paths: Vec<_> = record
+            .args
+            .windows(2)
+            .filter(|w| w[0] == "--config")
+            .map(|w| PathBuf::from(&w[1]))
+            .collect();
+        if paths.len() != 1 {
+            return Err(failure("native record config ambiguous"));
+        }
+        Ok((record, paths[0].clone()))
+    }
 }
 
 #[cfg(test)]
@@ -652,3 +764,7 @@ mod tests {
         assert!(atomic_private(&path, &serde_json::json!({"generation":4}), uid).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "native_audit_cleanup_tests.rs"]
+mod native_audit_cleanup_tests;

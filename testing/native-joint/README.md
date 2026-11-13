@@ -122,3 +122,41 @@ N1/N2, independent QA or funded Ark acceptance. Earlier counts retain their scop
 Historical fbef source/commands/receipts remain frozen separately. To replay
 that historical scenario use its frozen test source and wrapper together; it
 is not a default input or an accepted alternate kind in this portable check.
+
+## Opaque runtime marker regression gate
+
+`startup-gate.py` is an additional focused gate to invoke inside the same Nix
+build hooks with the same source and Cargo profile. It compiles the actual agent
+libtest harness, obtains its path from Cargo's compiler-artifact output, hashes
+it, and compiles those anchors into the lab tests before invoking the joined
+test. No new crate dependency or Ark/node daemon is required:
+
+```sh
+python3 -B testing/native-joint/startup-gate.py
+```
+
+The lab uses actual `RunEngine::prepare` (traffic and nontraffic), the production
+native renderer, and the real Supervisor's unmodified environment export. The
+agent helper calls actual `AgentConfig::load` and `NativeRuntime::start`, verifies
+publication, and retires on its parent's release. Infrastructure adapters and
+the public wallet profile are fixtures; this is not full Runtime start/funding.
+The native profile's required `run_token_hash` is generated from the supervisor,
+not accepted in the user's `wallet_agents[].native_audit` profile.
+
+New pending scopes: four normal agent regression tests, two normal renderer
+tests, one joined gate (two positive startups, one wrong-digest startup, two
+stale-instance startups), and one separate host namespace test. The ignored
+agent probe is a subprocess helper, not another pass. The gate explicitly
+selects the ignored joined test and fails on missing compiled artifact anchors.
+
+The host namespace case requires working `unshare --user --map-root-user --net`
+and Python. Run it in the assigned host gate, not a restricted Nix sandbox:
+
+```sh
+cargo test --offline --locked -p spc-agent --features ark --lib \
+  wallet::native_audit::tests::startup_tests::foreign_network_namespace_is_rejected_before_token_authorization \
+  -- --ignored --exact --nocapture
+```
+
+Unavailable namespace creation is an explicit failure, not a passing skip. All
+new cases remain unexecuted until the primary assigns and runs the build gate.

@@ -409,9 +409,17 @@
               pname = "wallet-native-joint";
               version = "0.1.0";
               doCheck = true;
+              # The startup-gate agent tests spawn `python3` (the reviewed
+              # fixture-CPU interpreter), which is not on the buildRustPackage
+              # sandbox PATH by default - same provision as test-ark. The
+              # /tmp/opencode scratch root is provisioned for the same
+              # workstation-convention reason; no host path is read.
+              nativeBuildInputs = common.nativeBuildInputs ++ [ pkgs.python3 ];
+              preConfigure = "mkdir -p /tmp/opencode";
               inherit (joint) preBuild preCheck;
               buildPhase = ''
                 runHook preBuild
+                cargo check --offline --locked -p spc-agent
                 cargo test --offline --locked -p spc-agent --features ark --lib --no-run
                 runHook postBuild
               '';
@@ -423,6 +431,11 @@
                 cargo test --offline --locked -p spc-agent --features ark --lib \
                   wallet::native_audit::tests::sealed_native_cpu_waits_for_actual_wallet_collector_commit_before_first_hash \
                   -- --exact --nocapture
+                # Opaque run-token startup gate (testing/native-joint/README.md):
+                # invoked inside the same hooks so the same-source anchors are
+                # exported before Cargo compiles the lab test binary; the joined
+                # test fails closed if the option_env anchors were not baked in.
+                ${pkgs.python3}/bin/python3 -B testing/native-joint/startup-gate.py
                 runHook postCheck
               '';
               installPhase = joint.installResults;

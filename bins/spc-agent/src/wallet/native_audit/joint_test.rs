@@ -190,7 +190,7 @@ async fn sealed_native_cpu_waits_for_actual_wallet_collector_commit_before_first
         let mut cpu = tokio::process::Command::new(&binary)
             .arg("--config")
             .arg(&config)
-            .env("SPC_LAB_RUN_TOKEN", "test-run:fixture")
+            .env("SPC_LAB_RUN_TOKEN", fixture_run_token().as_str())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -233,7 +233,7 @@ async fn sealed_native_cpu_waits_for_actual_wallet_collector_commit_before_first
             context.instance.process.uid,
             &context.private,
             Some(&config),
-            "test-run",
+            &context.instance.process.run_token_sha256,
         )
         .unwrap();
         assert_eq!(hex::encode(observed.executable_sha256), binary_hash);
@@ -511,6 +511,7 @@ async fn sealed_native_cpu_waits_for_actual_wallet_collector_commit_before_first
         );
         let receipt = serde_json::json!({"scope":"actual sealed retention-enabled native CPU + actual typed wallet service; fixture wallet startup metadata and independent-key synthetic empty-history collector; not actual controller/full-history/funded acceptance or separate N1/N2 coverage",
             "native_binary_sha256":binary_hash,"build_artifact":artifact,
+            "run_token_contract":"exact expected digest; synthetic traffic-shaped fixture marker (actual engine startup tested separately)",
             "startup_snapshot":startup,"capture_config":capture,"capture_locator":locator,"capture_manifest":manifest,
             "capture_manifest_sha256":manifest_hash,"retained_handle":handle,"retained_record_sha256":evidence::sha256_hex(&record_bytes),
             "request_sha256":record.request_sha256,"response_sha256":record.response_sha256,

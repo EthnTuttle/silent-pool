@@ -118,7 +118,7 @@ pub(super) fn process(
     expected_uid: u32,
     private: &Path,
     expected_config: Option<&Path>,
-    run_id: &str,
+    expected_run_token: &[u8; 32],
 ) -> anyhow::Result<(ProcessIdentity, PathBuf)> {
     let before = start_ticks(pid)?;
     let proc = PathBuf::from(format!("/proc/{pid}"));
@@ -148,15 +148,14 @@ pub(super) fn process(
         "native config scope mismatch"
     );
     let config = private_read(&path, expected_uid)?;
-    let env = zeroize::Zeroizing::new(bounded(&proc.join("environ"), 1024 * 1024)?);
-    let tokens = env
-        .split(|b| *b == 0)
-        .filter_map(|v| v.strip_prefix(b"SPC_LAB_RUN_TOKEN="))
-        .collect::<Vec<_>>();
-    ensure!(
-        tokens.len() == 1 && tokens[0].starts_with(format!("{run_id}:").as_bytes()),
-        "native process run scope"
-    );
+    // Read directly into zeroizing storage, including error/oversize paths.
+    let mut env = zeroize::Zeroizing::new(Vec::new());
+    std::fs::File::open(proc.join("environ"))?
+        .take(1024 * 1024 + 1)
+        .read_to_end(&mut env)?;
+    ensure!(env.len() <= 1024 * 1024, "native proc bound");
+    let run_token_sha256 = observed_run_token(&env, expected_run_token)?;
+    drop(env);
     let mut executable = std::fs::File::open(proc.join("exe"))?;
     let mut engine = sha256::Hash::engine();
     let mut chunk = [0u8; 65536];
@@ -175,7 +174,7 @@ pub(super) fn process(
             .trim()
             .into(),
         executable_sha256: sha256::Hash::from_engine(engine).to_byte_array(),
-        run_token_sha256: hash(tokens[0]),
+        run_token_sha256,
         config_sha256: hash(&config),
     };
     observed.validate().map_err(anyhow::Error::msg)?;
@@ -184,4 +183,21 @@ pub(super) fn process(
         "native process changed during observation"
     );
     Ok((observed, path))
+}
+
+pub(super) fn observed_run_token(env: &[u8], expected: &[u8; 32]) -> anyhow::Result<[u8; 32]> {
+    let mut tokens = env
+        .split(|b| *b == 0)
+        .filter_map(|entry| entry.strip_prefix(b"SPC_LAB_RUN_TOKEN="));
+    let token = tokens.next().context("native process run scope")?;
+    ensure!(
+        !token.is_empty() && token.len() <= 1024 && tokens.next().is_none(),
+        "native process run scope"
+    );
+    let actual = hash(token);
+    ensure!(
+        *expected != [0; 32] && actual == *expected,
+        "native process run scope"
+    );
+    Ok(actual)
 }
