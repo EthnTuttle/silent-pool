@@ -6,9 +6,15 @@
     flake-utils.url = "github:numtide/flake-utils";
     rust-overlay.url = "github:oxalica/rust-overlay";
     rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
+    # Staged dependency-reuse pilot (Phase 1 of
+    # /tmp/opencode/nix-artifact-reuse-plan-20261112/). Crane at this
+    # exact pin declares `inputs = { }`, so there is no nixpkgs follows
+    # edge to add. No production output references crane yet; only the
+    # opt-in spc-ark-deps-crane-pilot package below consumes it.
+    crane.url = "github:ipetkov/crane/79fd63528501446749c09f08cad486a58c7d173e";
   };
 
-  outputs = { self, nixpkgs, flake-utils, rust-overlay }:
+  outputs = { self, nixpkgs, flake-utils, rust-overlay, crane }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs {
@@ -83,6 +89,10 @@
           SPC_TEST_MODE = "1";
         };
         arkPackages = import ./nix/lab/ark.nix { inherit pkgs rust; };
+        # Crane for the staged dependency-reuse pilot: same locked nixpkgs,
+        # same pinned Rust 1.93 toolchain (never rbitcoin's Rust cache).
+        # The pilot package in `packages` is its only consumer.
+        craneLib = (crane.mkLib pkgs).overrideToolchain rust;
       in {
         packages = rec {
           rbitcoin-node-ark-lab = import ./nix/lab/ark-node.nix { inherit pkgs; };
@@ -123,11 +133,15 @@
           });
           inherit (arkPackages) captaind bark;
           # Portable AP5 harness/verifier/qualification set (packet
-          # AP5-portable-integration-r1). The qualified derivation reuses the
-          # joined spc-lab-ark-tools build (same dependency/target layout) and
-          # only adds the source-contract preBuild check and the gate-plan
-          # installCheck; it is a second OUTPUT of the same build inputs, not a
-          # second application build. Until the real source-contract.json is
+          # AP5-portable-integration-r1). The qualified derivation is an
+          # INDEPENDENT full compilation: labTools.overrideAttrs creates a
+          # new derivation with its own compiler deriver, sharing only the
+          # vendored dependency sources (fetchCargoVendor) and build hooks
+          # with spc-lab-ark-tools - no compiled target artifacts are
+          # reused. Verified against the actual Nix derivation graph
+          # (/tmp/opencode/ap5-plan-capture/
+          # qualified-closure-reuse-verification.json). Until the real
+          # source-contract.json is
           # committed (state source-bound-not-tested), evaluating
           # spc-lab-ap5-qualified/ap5-inputs fails the contract assertion by
           # design - the shipped template cannot qualify.
@@ -307,6 +321,50 @@
             meta.mainProgram = "spc-lab";
           });
           default = mkBinary "spc-pool" "rpc";
+          # ----------------------------------------------------------------
+          # Crane dependency-reuse pilot (STAGED, OPT-IN, NOT BUILT).
+          #
+          # Phase 1 of the staged Nix artifact-reuse plan
+          # (/tmp/opencode/nix-artifact-reuse-plan-20261112/REPORT.md,
+          # PROPOSED-DIFF.md): one shared compiled-dependency derivation
+          # for the Ark product family, keyed exactly on the Cargo
+          # manifests/lock, .cargo config, the target-discovery layout
+          # (crane's mkDummySrc stubs crate roots at evaluation time and
+          # re-filters the source to cargo-relevant files), the pinned
+          # Rust 1.93 toolchain, this profile/feature selection and the
+          # native inputs. NO SPC_BUILD_SOURCE_ID, no self.rev, no
+          # QA/contract/report anchors enter the key, so documentation or
+          # pure Rust-source edits must not rekey the dependency
+          # artifact. This is NOT per-crate caching: any Cargo.lock edit
+          # can rekey the whole group (whole-lock vendoring plus one
+          # buildDepsOnly), and no --all-features or profile superset is
+          # warmed.
+          #
+          # Never referenced by any other output: production aliases,
+          # the joined spc-lab-ark-tools build and the frozen e4
+          # qualified runtime stay untouched until the pilot's actual
+          # reuse is validated in an assigned build slot. The pilot has
+          # NOT been built: at the first pilot build, crane's git-dep
+          # vendoring fails closed and prints the sha256 output hashes
+          # required for the pinned git dependencies (bark c419159 et
+          # al.); record them via outputHashes, build once under the
+          # heavy-build rules, and measure derivation identity across a
+          # doc-only and a Rust-only change per the plan's acceptance
+          # section before replacing any alias. Phase 2 (real
+          # application/test artifact multi-output) and Phase 3
+          # (compile/qualification source-identity split) are separate
+          # reviewed changes; labTools.overrideAttrs is not artifact
+          # reuse.
+          spc-ark-deps-crane-pilot = craneLib.buildDepsOnly {
+            pname = "spc-ark-deps-pilot";
+            version = "0.1.0";
+            inherit src;
+            CARGO_PROFILE = "release";
+            cargoExtraArgs = "--locked -p spc-lab-cli -p spc-pool -p spc-cpu-miner -p spc-scan -p spc-agent -p spc-lab-txd --features spc-pool/rpc,spc-pool/ark,spc-agent/ark";
+            nativeBuildInputs = [ rust pkgs.pkg-config pkgs.protobuf ];
+            buildInputs = [ pkgs.openssl pkgs.sqlite ];
+            PROTOC = "${pkgs.protobuf}/bin/protoc";
+          };
         };
 
         checks = {
