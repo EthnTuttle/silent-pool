@@ -332,6 +332,11 @@ def main():
     p = sub.add_parser('gate'); p.add_argument('--source', type=Path, required=True); p.add_argument('--installed', type=Path, required=True); p.add_argument('--out', type=Path, required=True)
     p = sub.add_parser('assemble'); p.add_argument('--outputs', type=Path, required=True); p.add_argument('--out', type=Path, required=True)
     p = sub.add_parser('check-contract'); p.add_argument('--source', type=Path, required=True)
+    p = sub.add_parser('prepare-shared')
+    for name in ('bundle', 'outputs', 'qa-source', 'out', 'run-out'):
+        p.add_argument('--' + name, type=Path, required=True)
+    p.add_argument('--qa-source-sha256', required=True)
+    p.add_argument('--run-id', required=True); p.add_argument('--seed', type=int, required=True)
     args = parser.parse_args()
     if args.command == 'package-qa':package_qa(args.repo, args.out)
     elif args.command == 'inspect-qa':
@@ -340,6 +345,9 @@ def main():
     elif args.command == 'source-contract':make_contract(args.repo, args.plan, args.out)
     elif args.command == 'gate':run_gate(args.source, args.installed, args.out)
     elif args.command == 'check-contract':check_contract(args.source)
+    elif args.command == 'prepare-shared':
+        from prepare_shared_inputs import prepare
+        print(prepare(args))
     else:assemble(args.outputs, args.out)
 
 

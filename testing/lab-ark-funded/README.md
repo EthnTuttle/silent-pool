@@ -102,6 +102,25 @@ and private files must be generated for that run; do not copy developer wallets,
 seeds, cookies, grants or private captures. Runtime generates the local node,
 server, wallet and access credentials in its new private tree.
 
+`portable prepare-shared` can generate these inputs from the selected admitted
+bundle and runtime outputs using a reviewed QA source descriptor:
+
+```sh
+nix run "$CONSUMER_REF#ap5-tools" -- portable prepare-shared \
+  --bundle "$PWD/.ap5/qualified/bundle.json" \
+  --outputs "$PWD/.ap5/runtime-inputs/outputs.json" \
+  --qa-source "$QA_SOURCE" --qa-source-sha256 "$QA_SHA" \
+  --out "$PWD/.ap5/fresh-inputs" --run-out "$PWD/.ap5/shared-run" \
+  --run-id UNIQUE_RUN_ID --seed UNIQUE_INTEGER_SEED
+```
+
+This invokes only the actual CLI's scenario validator, creates fresh private
+collector/front attestation keys through the reviewed QA codec, binds front
+source-key env and wallet public profiles, and derives migration checksums
+from the actual runtime SQL source. Its fullrail selector, source profiles and
+public identity reader must be supported by the reviewed execution QA release.
+The generated execution plan is not a QA admission or live verdict.
+
 ```sh
 QA_SOURCE=$(nix eval --raw "$REF#packages.x86_64-linux.ap5-qa-source.outPath")/qa-source.json
 QA_SHA=$(nix hash file --type sha256 --base16 "$QA_SOURCE")

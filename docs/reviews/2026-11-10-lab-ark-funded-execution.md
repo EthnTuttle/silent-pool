@@ -1164,3 +1164,44 @@ actual qualified manifest. QA-R22-NATIVE-SOURCE-GAP.json retains every exact old
 and current row and the observed MissingComponent. No controller or actor was
 constructed for this check. QA's reviewed r22 must cover this native-source
 profile too; AP5 did not replace those hashes or bypass the native audit.
+
+## Selected c03 one-run input preparation
+
+Primary selected the independently admitted c03 bundle for the fresh run.
+Prepared /tmp/opencode/AP5-c03-inputs-r1 from that exact bundle and existing
+7ik2mr4j outputs, preserving all earlier input sets. The original e4 application
+manifest remains 2085d16d. Actual qualified spc-lab validate returned valid=true;
+the planned /tmp/opencode/AP5-c03-shared-r1 directory remains absent.
+
+Added a portable prepare-shared entrypoint. It generates three fresh source
+attestation keys using the reviewed QA codec (two front signers and one
+collector), pins their public keys into four wallet routes, and uses the
+existing FrontSpec.env -> SPC_SOURCE_EVIDENCE_KEY_FILE startup interface.
+These are independent attestation authorities, not Ark order/Noise/wallet keys;
+no wallet secrets, source-key body or fixture private key was imported.
+Keys remain mode 0600 in their fresh owned mode-0700 directory.
+
+The new inputs include the complete e5283a85 fullrail SQL selector and actual
+SHA384 checksums for all ten pre-checkpoint SQLx migrations. All six fullrail
+decision source rows already match the qualified runtime. QA's existing
+require_source still assumes nix_src_root in its files-only manifest; this is
+another consumer root-resolution site, not a runtime source change.
+
+Source inspection also found source_feed_runtime.start expects a public SP
+address under address_source.explicit, while the actual Rust untagged
+AddressSource::Explicit serializes address_source.address. Exact source paths
+and hashes were supplied to QA for the reviewed r22 correction. No old QA
+admission was retried, and no controller or actor was constructed.
+
+Completed consensus binding from actual immutable node source/RPC field names:
+the attainable-target floor is 207fffff while the initial overlay remains
+200fffff. Initial subsidy 5000000000 is bound to actual block_subsidy source;
+the other twelve policy fields are mapped to the actual consensus RPC keys.
+The former empty mapping/null floor template is not used as an observed fact.
+
+Preparation checks verified every executable/manifest reference, c03 source
+policies/verifier references, four native audit profiles, key privacy, roster,
+single original operation, 40 H/s, 0.2 tx/s, 100-block maturity and 96 declared
+allocations. RUN.md retains the one-run command; only the reviewed r22 source
+and primary's immutable new consumer artifact remain to be bound before launch.
+No application build, Runtime launch, block generation, cleanup or Git write ran.
