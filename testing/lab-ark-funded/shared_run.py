@@ -303,6 +303,14 @@ def main():
     parser.add_argument('--timeout-secs', type=int, default=7200)
     args = parser.parse_args()
     require(0 < args.timeout_secs <= 7200, 'shared run deadline bound')
+    consumer_root = Path(__file__).resolve().parent
+    require(consumer_root.is_relative_to('/nix/store'), 'shared live consumer must be an independently immutable Nix source')
+    consumer_files = {}
+    for path in sorted(consumer_root.rglob('*')):
+        require(not path.is_symlink(), 'shared consumer source alias')
+        if path.is_file():
+            consumer_files[str(path.relative_to(consumer_root))] = {'sha256': sha(path), 'bytes': path.stat().st_size,
+                                                                'executable': bool(path.stat().st_mode & 0o111)}
     root = fresh_root(args.out)
     qa_module, descriptor = load_qa(args.qa_source, args.qa_source_sha256, root / 'qa-source')
     require(descriptor['api'] == 't3-controller-r21', 'shared live runner requires exact r21 portable source and final audit exports')
@@ -311,6 +319,8 @@ def main():
     spec = strict_json(args.scenario.read_bytes())
     ap5_root = fresh_root(root / 'ap5')
     evidence = Evidence(ap5_root)
+    evidence.save('shared-ap5-consumer-source', {'root': str(consumer_root), 'files': consumer_files,
+        'scope': 'independent immutable Python consumer source; runtime compiler source is bound separately by the bundle'})
     evidence.save('verified-bundle', {'bundle': bundle, 'source_manifest_sha256': sha(source), 'validation_receipt_sha256': sha(receipt)})
     evidence.save('scenario', spec)
     evidence.save('probe-invocation', bundle['probe_invocation'])

@@ -66,6 +66,35 @@ its fresh installed program/source/fixture manifests are required.
 
 ## Run the shared campaign
 
+### Independently released consumers with an already qualified runtime
+
+Runtime and Python consumer releases can be pinned independently. The full
+application source contract, six application executables and qualification
+receipts stay bound to the runtime release. The explicit QA descriptor binds
+the separately reviewed consumer release; it does not claim membership in the
+runtime compiler source. For the already qualified runtime use:
+
+```sh
+RUNTIME_REF=github:EthnTuttle/silent-pool/e4ed6fbd8455dfc710ce8f476d88368f6727226b
+CONSUMER_REF=github:EthnTuttle/silent-pool/REVIEWED_CONSUMER_COMMIT
+mkdir -m 700 .ap5
+nix build --max-jobs 1 "$RUNTIME_REF#ap5-inputs" --out-link .ap5/runtime-inputs
+nix build "$CONSUMER_REF#ap5-tools" "$CONSUMER_REF#ap5-qa-source" --no-link
+nix run "$CONSUMER_REF#ap5-tools" -- portable assemble \
+  --outputs "$PWD/.ap5/runtime-inputs/outputs.json" --out "$PWD/.ap5/qualified"
+QA_SOURCE=$(nix eval --raw "$CONSUMER_REF#packages.x86_64-linux.ap5-qa-source.outPath")/qa-source.json
+QA_SHA=$(nix hash file --type sha256 --base16 "$QA_SOURCE")
+REF=$CONSUMER_REF
+```
+
+On a machine with the qualified runtime closure present, this reuses it; only
+the separately selected Python packages need realization. A fresh machine must
+obtain or build that exact runtime release. Select `ap5-inputs` from RUNTIME_REF,
+not CONSUMER_REF. QA inputs use the runtime outputs' actual manifest, base
+revision, binaries and PATH. Use CONSUMER_REF for the shared command below when
+using this split-release flow. RELEASE_COMMIT placeholders must name published,
+reviewed commits; an unreviewed source snapshot is not a release.
+
 QA supplies a **fresh per-run** scenario and input file using its supported
 provisioning interface. Its binary/source references and immutable `path_env`
 must come from these new Nix outputs, not a historical run. Collector authorities

@@ -95,7 +95,8 @@ for row in manifest['files']:
     def test_public_R4_review_relocates_but_changed_bytes_reject(self):
         original = HERE / 'provenance/pool-control-r4-review.md'
         self.assertEqual(sha(original), POOL_CONTROL_R4_REVIEW['sha256'])
-        stall_review = HERE.parents[1] / 'docs/reviews/2026-11-12-pool-wallet-stall-coverage.md'
+        runtime_source = Path(os.environ.get('AP5_RUNTIME_TEST_SOURCE', str(HERE.parents[1])))
+        stall_review = runtime_source / 'docs/reviews/2026-11-12-pool-wallet-stall-coverage.md'
         self.assertEqual(sha(stall_review), POOL_CONTROL_STALL_COVERAGE_REVIEW['sha256'])
         with tempfile.TemporaryDirectory(prefix='ap5-portable-') as tmp:
             target = Path(tmp) / 'public-review.md';shutil.copyfile(original, target)

@@ -59,7 +59,8 @@ def check(bundle, validation, manifest, root, source_identity, files, paths):
     package = Path("/nix/store") / paths["pool"].relative_to("/nix/store").parts[0]
     drv = subprocess.check_output(["nix-store", "-q", "--deriver", str(package)], text=True).strip()
     require(drv == identity["pool_deriver"], "pool source identity names different real deriver")
-    env = next(iter(json.loads(subprocess.check_output(["nix", "derivation", "show", drv], text=True)).values()))["env"]
+    from nix_derivation import derivation_record
+    env = derivation_record(subprocess.check_output(["nix", "derivation", "show", drv], text=True), drv)["env"]
     env = json.loads(env["__json"]) if "__json" in env else env
     require(env["src"] == source_identity and env.get("doCheck") == "1", "received Nix source/check phase binding")
     flags = env["cargoBuildFlags"]

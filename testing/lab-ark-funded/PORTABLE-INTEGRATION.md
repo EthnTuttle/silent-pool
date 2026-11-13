@@ -26,11 +26,28 @@ inherit (ap5Packages) ap5-tools ap5-vtxo-verifier ap5-qa-source
   spc-lab-ap5-qualified ap5-inputs;
 ```
 
-The qualified derivation overrides the existing joined build, reusing its
-dependency/target layout. The generated runtime wrapper points to that same
-qualified output; it does not add a second application build as a dependency.
+The qualified derivation overrides the joined package and is an independent
+application compilation; overrideAttrs does not reuse compiled target artifacts.
+The generated runtime wrapper points directly to that qualified output and
+does not add the unqualified application build as a dependency.
 The verifier is a standalone pinned-lock package. Existing node/bark/probe
 packages are parameters, so primary's published source recipes apply directly.
+
+For consumer-only revisions, select only `ap5-tools` and `ap5-qa-source` from
+the new release. Retain the already built runtime release's `outputs.json` and
+use it as `portable assemble --outputs`. Do not reevaluate `ap5-inputs` against
+the new consumer revision. Full admission derives the source root from the six
+actual runtime executables and verifies that root's original source contract,
+manifest and 15 executed gate receipts. It does not compare the runtime against
+the consumer checkout's HEAD. QA's explicit source descriptor is separately
+verified and retained by the shared runner. Thus consumer changes need no
+runtime recompilation when runtime inputs are unchanged.
+
+The independently released consumer parses both the legacy exact-deriver Nix
+JSON map and the actual Nix 2.34 version-4 envelope. It verifies the sole exact
+queried derivation, version and output basename before normalizing output paths.
+Unknown versions, extra/foreign derivations and path escapes reject. This is a
+metadata format correction, not a source or executable admission exception.
 
 The node Git publication c1505776117b1d4d42489f309af33978bbe124cc preserves the
 f159 source/t6LQ NAR and bba binary. The portable probe's root-independent runtime

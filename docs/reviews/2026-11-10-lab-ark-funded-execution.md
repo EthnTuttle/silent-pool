@@ -1115,3 +1115,52 @@ test and Nix-parse receipts are retained in the portable integration handoff.
 No build, Git index operation, commit, push, runtime launch or cleanup ran.
 TIME/current-clock, full compiled readiness regression and funded acceptance
 remain pending the producer's complete qualified source/build/live evidence.
+
+## 2026-11-12 existing e4 qualified closure: build-free full admission
+
+Consumed primary's exact existing outputs file under the 7ik2mr4j outputs.json
+directory. The six applications remain in qualified output s982068z and the
+runtime wrapper in khw8grb2; compiler source is x2n9ncav at full revision
+e4ed6fbd8455dfc710ce8f476d88368f6727226b. No base or qualified build was needed.
+
+Executed the immutable e4 portable assembler. Its wrapper first failed before
+artifact generation because Nix 2.34 emits a version-4 derivation envelope while
+the frozen reader expects the older absolute-path map. Executing that SAME
+immutable Python assembler with the existing immutable Nix 2.27 tool succeeded:
+canonical full bundle c03c9ab4c4a4fa6ee85c067ed2d6f5ca30f753d0b5722a031aa16d31c29972e5.
+All 1153 source rows and all 15 zero-exit gate records/logs were independently
+rechecked. Assembly is source/test qualification, not a live funded verdict.
+
+QA review inputs are in /tmp/opencode/AP5-e4-qualified-assembly-r1/QA-R22-REVIEW-INPUTS.json.
+The exact runtime/CLI/manifest tuple is:
+- 78c81ae25b7794d93ab88a1842ab2fe45a5e2a3c3e0c1ac978944cedea8283e0
+- ad07689dca3f0b90fca7fb8ffc44af136a664e7d3b1e0e18a6fed6b7ceb75d39
+- 2085d16dc957451547d96d995a52d55302a6581e23fbd3af710f927d9e586524
+This manifest has files only, without the old QA nix_src_root field. QA must
+review the actual source/test/binary binding and return the actual new bundle
+hash; AP5 has not added an unreviewed runtime tuple to QA's admission table.
+
+The independent Python consumer now strictly parses both real Nix formats,
+retaining exact queried-deriver census and output checks. The primary's e4
+stall-coverage review/source policy is carried forward unchanged. Its full
+admission and original runtime source-contract check both pass with Nix 2.34
+against the same existing bundle. Runtime source remains e4; new Python
+consumer sources do not claim membership in that old compiler source.
+The shared runner records its own independent immutable consumer source census.
+
+Metadata/portability/joined/verifier checks: 22 passed. The first combined test
+command used host Python 3.10, which could not import tomllib for source-scope
+tests; those 11 tests then passed under the Nix Python 3.14 tool. A post-check
+display command also indexed the three-item admission return as a dict; the
+admission itself passed, and the corrected full receipt completed successfully.
+No Rust compilation, runtime launch, manual block or Git write occurred.
+The reviewed frozen QA r22 descriptor and primary's independently built new
+consumer package remain required before the one fresh shared campaign.
+
+Read-only r21 native applicability preflight identified a second stale source
+profile after the runtime tuple gate: native_capture.require_audited_sources,
+called at prerequisites line 228, rejects 10 of its 13 source rows against the
+actual qualified manifest. QA-R22-NATIVE-SOURCE-GAP.json retains every exact old
+and current row and the observed MissingComponent. No controller or actor was
+constructed for this check. QA's reviewed r22 must cover this native-source
+profile too; AP5 did not replace those hashes or bypass the native audit.

@@ -5,6 +5,7 @@ import subprocess
 
 from common import artifact, encoded, fresh_root, require, sha
 from gate_inventory import rust_cases
+from nix_derivation import derivation_record
 
 CRYPTO_CASES = {
     'vectors::synthetic_signed_board_positive_is_unconditional',
@@ -26,10 +27,9 @@ def nix_source(program):
     package = Path('/nix/store') / program.relative_to('/nix/store').parts[0]
     drv = subprocess.check_output(['nix-store', '-q', '--deriver', str(package)], text=True).strip()
     require(drv.endswith('.drv'), 'actual Nix deriver unavailable')
-    data = json.loads(subprocess.check_output(['nix', '--extra-experimental-features', 'nix-command', 'derivation', 'show', drv], text=True))
-    require(set(data) == {drv}, 'actual Nix derivation census')
-    require(any(v.get('path') == str(package) for v in data[drv]['outputs'].values()), 'actual Nix output differs from program package')
-    env = next(iter(data.values()))['env']
+    data = derivation_record(subprocess.check_output(['nix', '--extra-experimental-features', 'nix-command', 'derivation', 'show', drv], text=True), drv)
+    require(any(v.get('path') == str(package) for v in data['outputs'].values()), 'actual Nix output differs from program package')
+    env = data['env']
     env = json.loads(env['__json']) if '__json' in env else env
     source = Path(env['src'])
     require(source.is_relative_to('/nix/store') and source.is_dir(), 'actual immutable Nix source required')

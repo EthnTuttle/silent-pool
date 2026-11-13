@@ -35,7 +35,8 @@ def admit_compiled_verifier(record):
     package = Path("/nix/store") / executable.relative_to("/nix/store").parts[0]
     drv = subprocess.check_output(["nix-store", "-q", "--deriver", str(package)], text=True).strip()
     require(drv == expected["deriver"] == binding["deriver"], "verifier actual deriver mismatch")
-    env = next(iter(json.loads(subprocess.check_output(["nix", "derivation", "show", drv], text=True)).values()))["env"]
+    from nix_derivation import derivation_record
+    env = derivation_record(subprocess.check_output(["nix", "derivation", "show", drv], text=True), drv)["env"]
     env = json.loads(env["__json"]) if "__json" in env else env
     require(env.get("src") == binding["source"] and env.get("doCheck") == "1", "verifier actual source/check binding mismatch")
     source = Path(binding["source"])

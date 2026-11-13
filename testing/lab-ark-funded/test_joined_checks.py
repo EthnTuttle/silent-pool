@@ -12,10 +12,13 @@ from common import POOL_CONTROL_R4_FILES, POOL_CONTROL_R4_REVIEW, POOL_CONTROL_S
 
 class JoinedChecks(unittest.TestCase):
     def test_r4_source_layer_requires_exact_review_code_and_approved_rows(self):
-        stall = Path(__file__).parents[2] / 'docs/reviews/2026-11-12-pool-wallet-stall-coverage.md'
+        import os
+        source = Path(os.environ.get('AP5_RUNTIME_TEST_SOURCE', str(Path(__file__).parents[2])))
+        stall = source / 'docs/reviews/2026-11-12-pool-wallet-stall-coverage.md'
+        original = Path(__file__).parent / 'provenance/pool-control-r4-review.md'
         policy = {"source_snapshot_sha256": "d00299c259aaa5e8098542f48f5c3c90c66737be3f965f5d65e5fd2a763914b2",
                   "tested_code_snapshot_sha256": "f764900419db45901f558c367b5485938ed1b20b5ee5abdc039e3b66c230ae0c",
-                  "same_auditor_review": copy.deepcopy(POOL_CONTROL_R4_REVIEW),
+                  "same_auditor_review": {"path": str(original.resolve()), "sha256": sha(original)},
                   "stall_coverage_review": {"path": str(stall.resolve()), "sha256": sha(stall)},
                   "files": dict(POOL_CONTROL_R4_FILES)}
         # Layer eligibility only. Canonical bundle admission separately requires

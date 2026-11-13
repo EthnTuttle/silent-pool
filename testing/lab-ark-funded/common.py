@@ -24,20 +24,13 @@ APPROVED_POOL_CONTROL_SNAPSHOTS = frozenset({"d00299c259aaa5e8098542f48f5c3c90c6
 POOL_CONTROL_R4_REVIEW = {"path": "/tmp/opencode/pool-wallet-control-source-review-r4.md",
                           "sha256": "956ba9ab524b8946b5d367c7e814abefafd75cfd523fa5bcae129cd9155e5d0b"}
 POOL_CONTROL_R4_FILES = {
-    # Re-pinned 2026-11-12 by the same-auditor stall-coverage recheck
-    # (docs/reviews/2026-11-12-pool-wallet-stall-coverage.md, bound below):
-    # the R4 review approved 53f5e789...; the bounded correction
-    # (process_key_with_capacity helper + deadline-true stall coverage)
-    # is approved by that recheck, not by the R4 review itself.
+    # Primary's e4 runtime policy: bounded stall correction, separately reviewed.
     "bins/spc-pool/src/ark/wallet_control.rs": "7a3b3ff91883899038c13d745d918aa168b34825ccc03922480710b2d0fb9423",
     "bins/spc-pool/src/ark/wallet_control_io.rs": "c0db03a8925f2a0f8849e00fd2e6271815a8b24e496db13bf6be861b0f13b3e6",
     "bins/spc-pool/src/ark/wallet_control_proof.rs": "1e5a273e0aa279bf87370e47613d642f56ee5c480e411d2d901f4e605043bd94",
     "bins/spc-pool/src/bin/pool-wallet-executor.rs": "81d712ceab685c8097ef2e980fe5216f07c8101c5e0cde5267f72c75cee117d9",
 }
-# Same-auditor recheck approving the re-pinned wallet_control.rs row above.
-# The tracked in-source copy is docs/reviews/2026-11-12-pool-wallet-stall-
-# coverage.md; this path points at the preserved reviewed packet bytes.
-POOL_CONTROL_STALL_COVERAGE_REVIEW = {"path": "/tmp/opencode/pool-wallet-stall-coverage-20261112/source/docs/reviews/2026-11-12-pool-wallet-stall-coverage.md",
+POOL_CONTROL_STALL_COVERAGE_REVIEW = {"path": "docs/reviews/2026-11-12-pool-wallet-stall-coverage.md",
                                       "sha256": "bdeaf18fef0176a20f52a161a7f29a3a6bb0178ce5dae67dd4f6bb02073160af"}
 DENIED_POOL_CONTROL_SNAPSHOTS = frozenset({
     "55a488197a0e116ab4d229ba426a12acb551bf16f8313698590de8cf0a685678",
@@ -158,7 +151,7 @@ def validate_pool_control_admission(policy):
     stall = policy.get("stall_coverage_review")
     require(type(stall) is dict and set(stall) == {"path", "sha256"}
             and stall["sha256"] == POOL_CONTROL_STALL_COVERAGE_REVIEW["sha256"], "stall-coverage review binding mismatch")
-    artifact(stall)  # Same-auditor recheck approving the re-pinned wallet_control.rs row.
+    artifact(stall)
     require(all(policy.get("files", {}).get(name) == value for name, value in POOL_CONTROL_R4_FILES.items()), "R4 approved control rows missing or changed")
 
 
@@ -241,8 +234,8 @@ def check_bundle(bundle, full=False):
         package = Path("/nix/store") / executable.relative_to("/nix/store").parts[0]
         drv = subprocess.check_output(["nix-store", "-q", "--deriver", str(package)], text=True).strip()
         require(drv.endswith(".drv"), f"no source derivation for {name}")
-        derivation = json.loads(subprocess.check_output(["nix", "derivation", "show", drv], text=True))
-        env = next(iter(derivation.values()))["env"]
+        from nix_derivation import derivation_record
+        env = derivation_record(subprocess.check_output(["nix", "derivation", "show", drv], text=True), drv)["env"]
         env = json.loads(env["__json"]) if "__json" in env else env
         require("src" in env, f"joined {name} needs an explicit build-source binding")
         roots.add(env["src"])
@@ -268,7 +261,7 @@ def check_bundle(bundle, full=False):
         package = Path("/nix/store") / executor.relative_to("/nix/store").parts[0]
         drv = subprocess.check_output(["nix-store", "-q", "--deriver", str(package)], text=True).strip()
         require(drv.endswith(".drv"), "pool executor source derivation missing")
-        env = next(iter(json.loads(subprocess.check_output(["nix", "derivation", "show", drv], text=True)).values()))["env"]
+        env = derivation_record(subprocess.check_output(["nix", "derivation", "show", drv], text=True), drv)["env"]
         env = json.loads(env["__json"]) if "__json" in env else env
         require(env.get("src") == source_identity, "pool executor is not built from the admitted joined source")
     # Both executable profiles claim Ark-enabled agents/pools and a compiled
