@@ -21,7 +21,10 @@ PROFILES = {
     't3-controller-r20': (R20_ARCHIVE, R20_MANIFEST, 107, 'ap5_bound_t3_r20'),
     't3-controller-r21': ('59a0f849d7697b915a940855093709df39aed2c7ed4ca8894b30aecc1f282f8c',
                           '41dcb01b9f75ef6605773d5d2467c17024d768cf72b5605abdb135e0dca0494f', 123, 'ap5_bound_t3_r21'),
+    't3-controller-r22': ('0d580efb996615ac0889654b021068e7e5d77aa722a17c5da1f0fb66ed489671',
+                          '88a2e6d2f07936420041a8903133dcd1ec3932ca8ab3a44f42dc49bfc32715e8', 127, 'ap5_bound_t3_r22'),
 }
+PORTABLE_BYTES = {'t3-controller-r21': 1456511, 't3-controller-r22': 1493665}
 
 
 class BoundModules(importlib.abc.MetaPathFinder, importlib.abc.Loader):
@@ -55,7 +58,7 @@ def load_qa(descriptor, descriptor_sha256, output):
         require(type(value[name]) is dict and set(value[name]) == {'path', 'sha256'}, 'shared QA artifact descriptor shape')
     require(value['archive']['sha256'] == archive_hash and value['manifest']['sha256'] == manifest_hash,
             'shared QA source version requires reviewed exact API binding')
-    portable = value['api'] == 't3-controller-r21'
+    portable = value['api'] in PORTABLE_BYTES
     def resolve(ref, filename):
         if not portable:
             return artifact(ref)
@@ -70,7 +73,7 @@ def load_qa(descriptor, descriptor_sha256, output):
         require(set(manifest) == {'schema', 'recipe', 'api', 'roots', 'files', 'source_bytes'}
                 and manifest['schema'] == 'spc.qa.source-manifest/1' and manifest['recipe'] == 'spc.qa.source-tree/1'
                 and manifest['api'] == value['api'] and manifest['roots'] == ['testing/lab-traffic', 'testing/lab-witness']
-                and type(manifest['source_bytes']) is int and manifest['source_bytes'] == 1456511,
+                and type(manifest['source_bytes']) is int and manifest['source_bytes'] == PORTABLE_BYTES[value['api']],
                 'shared QA portable manifest schema/recipe/byte census')
     rows = {r['path']: r for r in manifest['files']}
     require(len(rows) == len(manifest['files']) == census, 'shared QA source census')
@@ -133,11 +136,11 @@ def import_content(value, content, output, module_name, rows=None):
     module = importlib.import_module(module_name)
     for name in ('prerequisites', 'start', 'bootstrap', 'measured', 'reorg', 'witness', 'audit', 'receipt', 'check', 'result'):
         require(callable(getattr(module.Controller, name, None)), 'shared QA Controller export missing: ' + name)
-    if value['api'] in {'t3-controller-r19', 't3-controller-r20', 't3-controller-r21'}:
+    if value['api'] in {'t3-controller-r19', 't3-controller-r20', 't3-controller-r21', 't3-controller-r22'}:
         require(callable(getattr(module, 'operator_arguments', None)), 'shared QA operator export missing')
         runtime = importlib.import_module('source_feed_runtime')
         require(callable(getattr(runtime, 'collector_socket_path', None)), 'shared QA collector-root export missing')
-    if value['api'] in {'t3-controller-r20', 't3-controller-r21'}:
+    if value['api'] in {'t3-controller-r20', 't3-controller-r21', 't3-controller-r22'}:
         for name in ('audit_live', 'final_audit_after_drain'):
             require(callable(getattr(module.Controller, name, None)), 'shared QA final API missing: ' + name)
         require(callable(getattr(runtime.CollectorRuntime, 'final_audit_after_drain', None)), 'shared QA final collector API missing')

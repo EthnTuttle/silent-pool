@@ -313,7 +313,7 @@ def main():
                                                                 'executable': bool(path.stat().st_mode & 0o111)}
     root = fresh_root(args.out)
     qa_module, descriptor = load_qa(args.qa_source, args.qa_source_sha256, root / 'qa-source')
-    require(descriptor['api'] == 't3-controller-r21', 'shared live runner requires exact r21 portable source and final audit exports')
+    require(descriptor['api'] == 't3-controller-r22', 'shared live runner requires exact r22 portable source and final audit exports')
     bundle = strict_json(args.bundle.read_bytes())
     paths, source, receipt = check_bundle(bundle, full=True)  # Before actor construction.
     spec = strict_json(args.scenario.read_bytes())
@@ -327,7 +327,10 @@ def main():
     evidence.save('shared-qa-source', {'descriptor': descriptor, 'descriptor_sha256': args.qa_source_sha256})
     ap5 = Controller(bundle, paths, ap5_root, evidence, spec, args.timeout_secs)
     qa_args = qa_arguments(root, args)
-    qa = coordinated_qa_class(qa_module)(qa_args)
+    qa = coordinated_qa_class(qa_module)(
+        qa_args,
+        runtime_bundle={'path': str(args.bundle.resolve()), 'sha256': sha(args.bundle)},
+    )
     qa.capture = MirrorCapture(qa.capture, evidence)
     coordinator = SharedCoordinator(qa, ap5, validate_shared_binding)
     previous = {}

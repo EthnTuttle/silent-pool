@@ -69,7 +69,7 @@ from shared_sources import load_qa
 from common import sha
 p=Path(sys.argv[1]);module,value=load_qa(p,sha(p),Path(sys.argv[2]))
 assert callable(module.Controller.audit_live) and callable(module.Controller.final_audit_after_drain)
-assert value['api']=='t3-controller-r21'
+assert value['api']=='t3-controller-r22'
 import json
 manifest=json.loads((p.parent/'manifest.json').read_text())
 for row in manifest['files']:
@@ -89,7 +89,9 @@ for row in manifest['files']:
             for row in manifest['files']:
                 target = repo / row['path'];target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(reference / row['path'], target)
-            with (repo / 'testing/lab-traffic/oracle.py').open('a') as stream:stream.write('\n# changed source\n')
+            changed = repo / 'testing/lab-traffic/oracle.py'
+            changed.chmod(changed.stat().st_mode | 0o200)  # Only the disposable mutation fixture.
+            with changed.open('a') as stream:stream.write('\n# changed source\n')
             with self.assertRaisesRegex(Blocked, 'differs from reviewed'):qa_manifest(repo)
 
     def test_public_R4_review_relocates_but_changed_bytes_reject(self):

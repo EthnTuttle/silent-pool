@@ -1,4 +1,4 @@
-"""Actual portable r21 final methods on signed synthetic QA fixtures, not live proof."""
+"""Portable final API regression cases, now run against frozen r22 (not live proof)."""
 from pathlib import Path
 import subprocess
 import sys
