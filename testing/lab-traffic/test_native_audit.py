@@ -301,7 +301,7 @@ class NativeAuditTests(unittest.TestCase):
             binary={"source_manifest":str(p),"source_manifest_sha256":sha_file(p)}
             from source_feed_codec import CONTRACT
             binding={"source_feed":{"contract":CONTRACT},"binaries":{"miner":binary,"lab":binary}}
-            self.assertEqual(require_audited_sources(binding)["scope"],"native_source_applicability_only")
+            with self.assertRaisesRegex(Inconclusive,'base_diagnostic'):require_audited_sources(binding)
             p.write_bytes(canonical_json({"files":[]}));binary["source_manifest_sha256"]=sha_file(p)
             with self.assertRaisesRegex(Inconclusive,"base_diagnostic"):require_audited_sources(binding)
 

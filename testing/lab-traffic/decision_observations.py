@@ -38,8 +38,11 @@ def require_source(binary):
     raw=Path(binary['source_manifest']).read_bytes();require(hashlib.sha256(raw).hexdigest()==binary['source_manifest_sha256'],"decision source manifest seal")
     value=strict_json(raw);rows={r['path']:r['sha256'] for r in value['files']};require(len(rows)==len(value['files']),"duplicate decision source rows")
     if any(rows.get(k)!=v for k,v in SOURCE_ROWS.items()):raise MissingComponent('fullrail_decision_source_binding_unavailable')
-    if 'nix_src_root' not in value:raise MissingComponent('fullrail_decision_compiled_source_root_unavailable')
-    for name,digest in SOURCE_ROWS.items():require(hashlib.sha256((Path(value['nix_src_root'])/name).read_bytes()).hexdigest()==digest,"decision source bytes changed")
+    if 'nix_src_root' in value:root=Path(value['nix_src_root'])
+    else:
+        from runtime_profile import verified_source_root
+        root,_=verified_source_root(binary,'pool')
+    for name,digest in SOURCE_ROWS.items():require(hashlib.sha256((root/name).read_bytes()).hexdigest()==digest,"decision source bytes changed")
 
 
 def front_event(kind,payload,session):

@@ -33,7 +33,7 @@ relative to the checked-out test files. Historical archive replayers require
 an explicitly supplied archive and are optional, not startup prerequisites.
 
 `portable_source.py` creates `source.tar.gz`, `manifest.json`, `qa-source.json`.
-The descriptor has schema `spc.lab.ap5.qa-source/v1`, API `t3-controller-r21`;
+The descriptor has schema `spc.lab.ap5.qa-source/v1`, API `t3-controller-r22`;
 its artifact paths resolve relative to the descriptor directory. Its printed
 SHA256 is the external descriptor pin supplied to AP5. The versioned snapshot
 recipe sorts all source paths, validates regular files/bytes/SHA256, preserves
@@ -42,6 +42,30 @@ Git's executable bit, normalizes private/read-only filesystem modes to Git
 It excludes build/cache/private directories. Archive modes/bytes/hashes must
 be checked by the AP5 loader; relative paths are not permission to traverse out
 of the descriptor root. Source modules must be loaded from this one bound tree.
+
+## r22 release against the already-qualified e4 applications
+
+Package this Python consumer independently using `portable_source.py snapshot`.
+Keep the qualified application package, compiler source, outputs aggregation and
+selected c03 bundle pinned. A new QA release does not require rebuilding them.
+See [RUNTIME-PROFILES.md](RUNTIME-PROFILES.md) for the complete reviewed profile.
+
+The AP5 loader must admit API `t3-controller-r22` and call:
+
+```python
+qa = coordinated_qa_class(qa_module)(
+    qa_args,
+    runtime_bundle={"path": str(args.bundle.resolve()), "sha256": sha(args.bundle)},
+)
+```
+
+The optional keyword preserves sealed prepared inputs. Standalone inputs may
+instead contain `runtime_bundle:{path,sha256}`. The keyword takes precedence;
+an explicitly invalid/empty binding is refused rather than replaced by a
+fallback. `test_controller` exercises the real constructor/prerequisite route.
+`test_runtime_profile` covers source census, mandatory outbound module, selected
+envelope binding, Nix v4 decoding and strict rendered public address handling.
+The descriptor pins this documentation and those tests through its manifest.
 
 ## Produce actual build/check inventory
 
@@ -124,11 +148,11 @@ snapshot substitutes for an original historical decision/checkpoint.
 
 ## Remaining live gates
 
-This source intake is not a funded pass. Final merged Runtime/native/wallet
-source applicability and the portable canonical bundle recipe still need the
-primary's completed tests/Nix binding. Readiness v3 requires the corrected
-locked pre-HashStart transition and strict deadline equality checks; its
-structural fixture is not admission. AP5 owns the one v3 parser/coordinator.
+This source intake is not a funded pass. The reviewed e4 profile admits compiled
+source/test provenance, with original supplemental Runtime-test scope recorded
+separately. Readiness v3 still requires actual run evidence of the corrected
+locked pre-HashStart transition and strict deadline checks. AP5 owns the one
+v3 parser/coordinator.
 Actual SPCA receipt/escape captures, all-output wallet/Ark policy proofs,
 current float, final prefix and exhaustive cleanup still need a qualified run.
 Missing/truncated/unsupported evidence remains INCONCLUSIVE.

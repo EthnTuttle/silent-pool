@@ -27,7 +27,7 @@ FIXED_BUNDLE_SHA256="4d3778e8d4c65cffa95af483828fe1013a1d4307da32b3469801ce1624f
 ADMITTED_RUNTIME_FIXES=frozenset({(FIXED_RUNTIME_SHA256,FIXED_CLI_SHA256,FIXED_MANIFEST_SHA256)})
 
 
-def source_admission(binary):
+def source_admission(binary,*,bundle=None):
     raw=Path(binary["source_manifest"]).read_bytes()
     require(hashlib.sha256(raw).hexdigest()==binary["source_manifest_sha256"],"Runtime source manifest seal")
     manifest=strict_json(raw);rows={r["path"]:r["sha256"] for r in manifest["files"]}
@@ -35,13 +35,19 @@ def source_admission(binary):
     runtime=rows.get("crates/spc-lab/src/runtime.rs")
     if runtime==G105_RUNTIME_SHA256:
         raise MissingComponent("g105_Runtime_phase_wait_bug_no_repeat_execution")
+    from runtime_profile import MANIFEST_SHA256 as QUALIFIED_MANIFEST, admit
+    if binary['source_manifest_sha256']==QUALIFIED_MANIFEST:
+        return admit(binary,bundle)
     if (runtime,binary["sha256"],binary["source_manifest_sha256"]) not in ADMITTED_RUNTIME_FIXES:
         raise MissingComponent("corrected_Runtime_phase_wait_source_and_tested_CLI_binding_pending")
     from storage import sha_file
     require(sha_file(Path(manifest["nix_src_root"])/"crates/spc-lab/src/runtime.rs")==runtime,
             "admitted Runtime source bytes changed")
     require(sha_file(binary["path"])==binary["sha256"],"admitted Runtime executable bytes changed")
-    return {"entrypoint":ENTRYPOINT,"runtime_source_sha256":runtime,"binary_sha256":binary["sha256"],"phase_owner":"runtime",
+    if bundle is not None:
+        require(set(bundle)=={'path','sha256'} and bundle['sha256']==FIXED_BUNDLE_SHA256
+            and sha_file(bundle['path'])==bundle['sha256'],'legacy Runtime selected bundle mismatch')
+    return {"entrypoint":ENTRYPOINT,"profile_id":"legacy-base-runtime-fix","runtime_source_sha256":runtime,"binary_sha256":binary["sha256"],"phase_owner":"runtime",
             "source_manifest_sha256":binary["source_manifest_sha256"],"verified_bundle_sha256":FIXED_BUNDLE_SHA256,
             "scope":"base_diagnostic_Runtime_entrypoint_only","full_native_audited_campaign":False}
 

@@ -185,7 +185,9 @@ def require_sources(binary):
     if any(rows.get(p)!=digest for p,digest in SOURCE_ROWS.items()):
         raise MissingComponent("native_public_evidence_durable_v1_source_binding_unavailable")
     root=value.get("nix_src_root")
-    if not isinstance(root,str):raise MissingComponent("native_retention_actual_Nix_source_root_missing")
+    if not isinstance(root,str):
+        from runtime_profile import verified_source_root
+        root,_=verified_source_root(binary,'miner');root=str(root)
     for path,digest in SOURCE_ROWS.items():
         require(sha((absolute(root)/path).read_bytes())==digest,"native retention source bytes changed")
     return {"rows":SOURCE_ROWS,"scope":"retention_source_applicability_not_compiled_admission"}

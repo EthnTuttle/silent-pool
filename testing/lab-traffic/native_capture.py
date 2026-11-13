@@ -47,15 +47,16 @@ def require_audited_sources(binding):
     if not binding.get("source_feed"):raise MissingComponent("full_native_campaign_source_feed_required")
     from source_feed_codec import CONTRACT
     require(binding["source_feed"]["contract"]==CONTRACT,"native campaign source-feed contract")
-    for role,paths in (("miner",[p for p in SOURCE_ROWS if not p.startswith("crates/spc-lab/")]),
-                       ("lab",[p for p in SOURCE_ROWS if p.startswith("crates/spc-lab/")])):
-        item=binding["binaries"][role];raw=Path(item["source_manifest"]).read_bytes()
-        require(hashlib.sha256(raw).hexdigest()==item["source_manifest_sha256"],"native binary source manifest changed")
-        rows=strict_json(raw)["files"];mapped={r["path"]:r["sha256"] for r in rows}
-        require(len(mapped)==len(rows),"native binary source manifest duplicate path")
-        if any(mapped.get(p)!=SOURCE_ROWS[p] for p in paths):
-            raise MissingComponent("native_audited_complete_bundle_pending_base_diagnostic_bundle_not_applicable")
-    return {"source_rows":SOURCE_ROWS,"scope":"native_source_applicability_only"}
+    from runtime_profile import verified_source_root
+    roots=set();profile=None
+    for role in ('lab','miner','agent'):
+        if role not in binding['binaries']:raise MissingComponent('native_audited_complete_bundle_pending_base_diagnostic_bundle_not_applicable')
+        try:root,profile=verified_source_root(binding['binaries'][role],role)
+        except MissingComponent as error:raise MissingComponent('native_audited_complete_bundle_pending_base_diagnostic_bundle_not_applicable') from error
+        roots.add(str(root))
+    require(len(roots)==1,'native applications have different compiler sources')
+    return {'source_rows':profile['critical_source_rows'],'verified_source_root':next(iter(roots)),
+        'runtime_profile':profile['id'],'scope':'native_source_applicability_only','live_activation_proved':False}
 
 
 def observe_process(record,root,binary,supervisor_pid):
@@ -88,7 +89,8 @@ class NativeCapture:
         require(not controller.run.exists(),"native observer must register before runtime startup")
         self.out=controller.priv/"native-source";self.out.mkdir(mode=0o700)
         controller.capture.add("native_capture_registered",{"miners":[m["id"] for m in controller.scenario["miners"]],
-            "source_rows":SOURCE_ROWS,"registered_monotonic_ns":time.monotonic_ns(),"authority":"observation_only"})
+            "source_binding":"separately verified native_source_applicability result; historical SOURCE_ROWS are not live admission",
+            "registered_monotonic_ns":time.monotonic_ns(),"authority":"observation_only"})
 
     def retain(self,path,raw):
         digest=hashlib.sha256(raw).hexdigest();out=self.out/(digest+".json")

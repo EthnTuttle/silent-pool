@@ -39,9 +39,9 @@ def config_fields(raw):
 
 
 def public_identity(address):
-    require(isinstance(address,str) and address==address.lower(),"canonical silent address required")
+    require(isinstance(address,str) and 1<=len(address.encode('utf-8'))<=255 and '1' in address and address==address.lower(),"canonical bounded silent address required")
     hrp,encoded=address.rsplit("1",1);alphabet="qpzry9x8gf2tvdw0s3jn54khce6mua7l"
-    require(hrp=="tsp" and all(c in alphabet for c in encoded),"test-network silent address encoding")
+    require(hrp=="tsp" and len(encoded)>=7 and all(c in alphabet for c in encoded),"test-network silent address encoding")
     values=[alphabet.index(c) for c in encoded];check=1
     for value in [ord(c)>>5 for c in hrp]+[0]+[ord(c)&31 for c in hrp]+values:
         top=check>>25;check=((check&0x1ffffff)<<5)^value
@@ -57,6 +57,14 @@ def public_identity(address):
     from signature_oracle import public_point
     public_point(bytes(raw[:33]));public_point(bytes(raw[33:]))
     return bytes(raw[1:33]).hex(),tagged("SPc/Id",bytes(raw)).hex()
+
+
+def rendered_address(value,expected=None):
+    """Actual qualified AddressSource::Explicit serde shape; no coercion."""
+    require(isinstance(value,dict) and set(value)=={'address'},'rendered identity requires the exact address field')
+    address=value['address'];public_identity(address)
+    if expected is not None:require(address==expected,'rendered public identity differs from bound wallet/declared identity')
+    return address
 
 
 def collector_socket_path(value,runtime_private):
@@ -136,14 +144,16 @@ class CollectorRuntime:
             executable_identity=[info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns,info.st_ctime_ns]
             env=Path(f"/proc/{process['pid']}/environ").read_bytes().split(b"\0")
             require([v.split(b"=",1)[1] for v in env if v.startswith(b"SPC_LAB_RUN_TOKEN=")]==[process["run_token"].encode()],"source verifier process ownership token")
-            config=config_fields(private_bytes(Path(option(process["args"],"--config")),c.run))
+            wallet_config=private_bytes(Path(option(process["args"],"--config")),c.run)
+            config=config_fields(wallet_config)
             require(config["collector_pubkey"]==signer.public_key and config["pool_pubkey"]==settings["pool_pubkeys"][row["front"]],"rendered source authority keys differ from pinned keys")
             # The owned rendered scenario provides the public identity binding,
             # independently of a job/trace. Optional parent pins are crosschecked;
             # no scan secret key file is read by the collector.
             require(identity in {i["id"] for i in c.scenario["identities"]},"source wallet identity outside declared roster")
-            require(set(actual_identities[identity])=={"explicit"},"actual wallet public identity missing")
-            scan,sp_id=public_identity(actual_identities[identity]["explicit"])
+            from native_capture import config_scalar
+            address=rendered_address(actual_identities[identity],config_scalar(wallet_config,'upstream','sp_address'))
+            scan,sp_id=public_identity(address)
             require(("scan_pubkey" not in row or scan==row["scan_pubkey"]) and ("sp_id" not in row or sp_id==row["sp_id"]),
                     "source ACK key/identity differs from actual provisioned wallet")
             miners=[m for m in c.scenario["miners"] if m["id"]==row["miner_id"]]

@@ -109,8 +109,9 @@ class Capture:
 class Controller:
     REQUIRED = COMMON | FUNDED
 
-    def __init__(self, args):
+    def __init__(self, args, *, runtime_bundle=None):
         self.args = args
+        self.runtime_bundle = runtime_bundle
         self.root = Path(args.run_root).absolute()
         # No adoption of a previous run, even one with the same scenario id.
         self.root.mkdir(mode=0o700, parents=False, exist_ok=False)
@@ -220,7 +221,9 @@ class Controller:
             require(digest(broker["path"]) == broker["sha256"], "broker script seal")
         if not required <= set(self.binaries):
             raise Inconclusive("missing sealed binary inputs: " + ",".join(sorted(required - set(self.binaries))))
-        self.result("runtime_entrypoint_binding", "PASSED", source_admission(self.binding["binaries"]["lab"]))
+        selected_bundle=getattr(self,'runtime_bundle',None)
+        if selected_bundle is None:selected_bundle=self.binding.get('runtime_bundle')
+        self.result("runtime_entrypoint_binding", "PASSED", source_admission(self.binding["binaries"]["lab"],bundle=selected_bundle))
         from base_network import reject_known_host_network_failure
         reject_known_host_network_failure(self.binding["binaries"]["lab"])
         if self.args.case == "funded":
@@ -1076,8 +1079,8 @@ class Controller:
                 front = connection["front_id"]
                 config = self.run / "private" / ("pool-" + front + ".toml")
                 source = identities[connection["identity_id"]]
-                if set(source) != {"explicit"}:
-                    raise Inconclusive("actual mining identity was not recorded explicitly")
+                from source_feed_runtime import rendered_address
+                address=rendered_address(source)
                 workers = []
                 for worker in miner["workers"]:
                     if worker["connection_id"] != connection["id"]:
@@ -1091,7 +1094,7 @@ class Controller:
                 host = endpoint["host"]
                 if ":" in host: host = "[" + host + "]"
                 items.append({"connection": {"id": connection["id"], "endpoint": host + ":" + str(endpoint["port"]),
-                              "identity": source["explicit"], "authority_public_key": scalar(config, "pool", "authority_public_key"),
+                              "identity": address, "authority_public_key": scalar(config, "pool", "authority_public_key"),
                               "min_extranonce_size": 4, "reconnect": {"enabled": True, "initial_backoff_ms": 100,
                                "max_backoff_ms": 5000, "handshake_timeout_ms": 10000}, "workers": workers}})
                 if self.native_capture is not None:

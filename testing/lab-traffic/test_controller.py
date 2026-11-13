@@ -8,7 +8,7 @@ import tempfile
 import threading
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 HERE = Path(__file__).resolve().parent
 TEMP_BASE = None
@@ -20,6 +20,28 @@ class ControllerBoundaryTests(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module.Controller
+
+    def test_constructor_bundle_reaches_prerequisites_without_mutating_inputs(self):
+        import hashlib
+        with tempfile.TemporaryDirectory(prefix='r22-kwargs-') as folder:
+            root=Path(folder);exe=root/'sealed-unit';exe.write_bytes(b'not executed');exe.chmod(0o700)
+            manifest=root/'manifest.json';manifest.write_text('{}')
+            digest=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
+            binding=json.loads((HERE/'inputs.template.json').read_bytes())
+            names=('lab','pool','miner','txd','node','scanner','traffic-probe','redis-server','redis-cli','initdb','postgres','pg_ctl','psql','createdb')
+            binding['binaries']={n:{'path':str(exe),'sha256':digest(exe),'source_manifest':str(manifest),'source_manifest_sha256':digest(manifest)} for n in names}
+            binding['source_snapshot_sha256']='00'*32;binding['probe_script']={'path':str(exe),'sha256':digest(exe)}
+            fallback={'path':'input-envelope','sha256':'11'*32};selected={'path':'selected-envelope','sha256':'22'*32}
+            binding['runtime_bundle']=fallback;inputs=root/'inputs.json';inputs.write_text(json.dumps(binding));before=inputs.read_bytes()
+            for index,keyword in enumerate((selected,None,{})):
+                args=SimpleNamespace(run_root=str(root/str(index)),timeout=10,inputs=str(inputs),scenario=str(HERE/'scenario.json'),case='funded')
+                controller=self.controller_class()(args,runtime_bundle=keyword)
+                try:
+                    with patch('runtime_bootstrap.source_admission',return_value={'scope':'unit-only'}) as admit,patch('native_capture.require_audited_sources'),patch('base_network.reject_known_host_network_failure'):
+                        controller.prerequisites()
+                        admit.assert_called_once_with(binding['binaries']['lab'],bundle=fallback if keyword is None else keyword)
+                    self.assertIsNone(controller.process);self.assertFalse(controller.run.exists());self.assertEqual(inputs.read_bytes(),before)
+                finally:controller.http_workers.shutdown(wait=True,cancel_futures=True);controller.capture.stream.close()
 
     def test_cleanup_cannot_stop_runtime_while_final_drain_owns_boundary(self):
         from oracle import Inconclusive
