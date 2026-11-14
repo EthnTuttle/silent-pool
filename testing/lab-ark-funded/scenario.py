@@ -38,7 +38,14 @@ def scenario(run_id, seed):
             "ark": {"enabled": True, "registration_before_mining": True, "chain_effect_budget_tx_per_sec": 0.1},
             "caps": {"max_inflight_broadcasts": 4, "max_unknown_retries": 3,
                      "max_mempool_backlog_tx": 1000, "reorg_resubmit_max": 3},
-            "pause_semantics": "no_broadcast_after_ack"},
+            "pause_semantics": "no_broadcast_after_ack",
+            # Declared in the runtime-normalized form: the QA controller's
+            # config_binding case requires the rendered private scenario to
+            # equal this traffic block exactly, and the runtime serde-defaults
+            # lab_acceptance. True is the funded-campaign opt-in (expanded
+            # operator access is declared above); it arms the reviewed
+            # acceptance adapters the funded cases require.
+            "lab_acceptance": True},
         # The engine requires this declaration to select the bootstrap route.
         # Runtime execution must wait on this same asynchronous operation id.
         "phases": [{"id": "native-bootstrap", "commands": [{"command_id": "ap5-native-bootstrap",
@@ -59,7 +66,7 @@ def scenario(run_id, seed):
                 "reference_target": "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
                 "share_work_multiplier": 2, "max_work_multiplier": 4294967296,
                 "max_window_target_units": "18446744073709551616", "window_rule": "network_block_work",
-                "window_n": 8, "max_slice_shares": 4},
+                "window_n": 8, "max_slice_shares": 4, "legacy_share_difficulty": None},
             "storage": {"redis_instance_id": "redis-" + pool, "postgres_database_id": "pg-" + pool}})
         value["fronts"].append({"id": front, "pool_id": pool, "roles": ["front", "payout", "api"],
             "listen": {"sv2": "127.0.0.1:0", "sv1": None, "jd": "127.0.0.1:0", "api": "127.0.0.1:0"}})
@@ -78,6 +85,9 @@ def scenario(run_id, seed):
         value["miners"].append({"id": "miner-" + user, "implementation": "spc-cpu-miner",
             "connections": [{"id": "conn-" + user, "front_id": front, "identity_id": user}],
             "workers": [{"id": "worker-" + user, "identity_id": user, "connection_id": "conn-" + user,
-                         "budget": {"hashes_per_second": "10"}}]})
+                         # total_hashes is declared because the runtime renders it
+                         # (serde default null) and config_binding compares the
+                         # budget dict for exact equality.
+                         "budget": {"hashes_per_second": "10", "total_hashes": None}}]})
         link(user + "-front", ("miner", "miner-" + user), ("front", front))
     return value

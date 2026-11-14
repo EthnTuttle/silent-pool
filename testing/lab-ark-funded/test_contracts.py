@@ -23,6 +23,23 @@ class Contracts(unittest.TestCase):
         self.assertEqual(s["traffic"]["bootstrap"]["mining_mode"], "native")
         self.assertFalse(any("fixture" in m["implementation"] for m in s["miners"]))
 
+    def test_scenario_declares_runtime_normalized_config_surface(self):
+        # The QA controller's config_binding case requires the runtime-rendered
+        # private scenario to equal the prepared input exactly for the traffic
+        # block, each miner worker budget and each pool work_profile. The
+        # qualified runtime serde-defaults omitted keys (lab_acceptance,
+        # total_hashes, legacy_share_difficulty) when it renders, so the input
+        # must declare them. lab_acceptance=True is also the funded-campaign
+        # opt-in that arms the reviewed acceptance adapters.
+        s = scenario("test", 123)
+        self.assertIs(s["traffic"]["lab_acceptance"], True)
+        self.assertIs(s["expanded_access"], True)
+        for miner in s["miners"]:
+            for worker in miner["workers"]:
+                self.assertIn("total_hashes", worker["budget"])
+        for pool in s["pools"]:
+            self.assertIn("legacy_share_difficulty", pool["work_profile"])
+
     def test_protected_run_and_ancestor_rejected_before_creation(self):
         for root in PROTECTED:
             for path in (root, root / "new", root.parent):
