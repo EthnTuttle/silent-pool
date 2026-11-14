@@ -27,6 +27,21 @@ def validate_socket_paths(run_out, identity, collector_name):
     require(len(os.fsencode(native)) < 108, 'native wallet Unix socket path exceeds platform bound')
 
 
+def validate_service_socket_paths(run_out, spec):
+    runtime = Path(run_out) / 'qa/runtime'
+    # PostgreSQL appends its actual port to the configured socket directory.
+    # Five digits covers every allocated TCP port; lock files are not sockets.
+    paths = []
+    for backend in spec.get('ark_backends', []):
+        if backend.get('local', {}).get('deployment') == 'self_hosted':
+            paths.append(('Ark PostgreSQL', runtime / 'private' / ('ark-server-' + backend['id']) / 'socket/.s.PGSQL.65535'))
+    for database in spec['resources']['postgres_databases']:
+        paths.append(('pool PostgreSQL', runtime / 'postgres' / database['id'] / 'socket/.s.PGSQL.65535'))
+    for name, path in paths:
+        require(len(os.fsencode(path)) < 108, name + ' Unix socket path exceeds platform bound')
+    return [{'service': name, 'path_with_max_port': str(path), 'bytes': len(os.fsencode(path))} for name, path in paths]
+
+
 def prepare(args):
     bundle_path = Path(args.bundle).resolve(strict=True)
     bundle = load(bundle_path); check_bundle(bundle, full=True)
@@ -44,6 +59,10 @@ def prepare(args):
                             for p in path_env.split(':')), 'immutable runtime PATH required')
     run_out = Path(args.run_out).absolute()
     require(run_out == run_out.resolve() and not run_out.exists(), 'fresh canonical run output required')
+    spec = scenario(args.run_id, args.seed)
+    socket_paths = validate_service_socket_paths(run_out, spec)
+    for wallet in spec['wallet_agents']:
+        validate_socket_paths(run_out, wallet['identity_id'], 'collector-' + wallet['identity_id'] + '.sock')
     root = fresh_root(args.out)
     metadata = git_binding(args.consumer_tools)
     path_env = runtime_path(path_env, metadata['git']['path'])
@@ -71,7 +90,6 @@ def prepare(args):
         return path, public
 
     collector_path, collector_public = key('collector')
-    spec = scenario(args.run_id, args.seed)
     public_keys = {}
     for front in spec['fronts']:
         require('ark' not in front['roles'], 'front source key must not enter Ark role')
@@ -158,6 +176,7 @@ def prepare(args):
         'input_recipe': 'spc.lab.ap5.prepared-inputs/2-explicit-metadata-tools',
         'metadata_preflight': ref(root / 'metadata-preflight/receipt.json'),
         'runtime_metadata': ref(root / 'runtime-metadata.json'),
+        'service_socket_path_preflight': socket_paths,
         'required_order': 'one Runtime bootstrap; common first block; maturity; 96 allocations; four transfers at depth 3 on both nodes; measured/manual/witness/fault/reorg; Ark lifecycle; audit_live; final_drain; final_audit_after_drain; close; one AP5 stop/reap',
         'original_operation': 'ap5-native-bootstrap', 'bootstrap_deadline_secs': 3600,
         'aggregate_hashes_per_second': 40, 'ordinary_transactions_per_second': 0.2,

@@ -59,6 +59,10 @@ Use a short canonical path. Preparation rejects a collector Unix-socket path of
 108 bytes or more; with an unusually long HOME, choose a shorter canonical
 user-owned workspace before running it. Preserve old run roots and use a new
 workspace for a new experiment.
+The corrected preflight also checks native-wallet, pool-PostgreSQL and
+Ark-PostgreSQL socket paths, including PostgreSQL's appended port suffix.
+See [N14A-ARK-POSTGRES-PATH-COUNTEREXAMPLE.md](N14A-ARK-POSTGRES-PATH-COUNTEREXAMPLE.md).
+Assembly receipts may use a longer durable path than the actual run root.
 
 Set `CONSUMER_REV` to the published 40-hex commit chosen for this campaign.
 It is intentionally required rather than silently selecting a moving branch,

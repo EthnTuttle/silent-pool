@@ -241,6 +241,11 @@ def validate_shared_binding(qa, ap5):
             and all(Path(p).is_absolute() and p.startswith('/nix/store/') for p in qa.binding['path_env'].split(':')),
             'shared actor PATH must be supplied by the immutable Nix closure')
     require(all(w.get('native_audit') for w in qa.scenario['wallet_agents']), 'shared wallet native audit profiles missing')
+    from prepare_shared_inputs import validate_service_socket_paths, validate_socket_paths
+    actual_output = qa.run.parent.parent
+    validate_service_socket_paths(actual_output, qa.scenario)
+    for wallet in qa.scenario['wallet_agents']:
+        validate_socket_paths(actual_output, wallet['identity_id'], wallet['native_audit']['collector_socket'])
     for name in ('lab', 'pool', 'miner', 'txd', 'node', 'scanner', 'agent', 'captaind', 'grpcurl', 'redis-server', 'redis-cli', 'psql'):
         left, right = qa.binding['binaries'][name], ap5.bundle['binaries'][name]
         require(left['sha256'] == right['sha256'] and Path(left['path']).resolve() == Path(right['path']).resolve(),
