@@ -126,6 +126,7 @@ class Controller:
         self.native_capture = None
         self.phase_bootstrap = None
         self.observation_lock = threading.RLock()
+        self.live_journal_readers = {}
         self.results = {}
         self.process = None
         self.url = None
@@ -403,7 +404,19 @@ class Controller:
 
     def audit_rows(self):
         from traffic_audit import read_commands
-        return read_commands(private(self.run / "private" / "commands.jsonl"))
+        return read_commands(self.journal_prefix("commands.jsonl"))
+
+    def journal_prefix(self, name):
+        from live_journal import LiveJournalPrefix
+        require(name in {"commands.jsonl", "evidence.jsonl"}, "live observer journal selection")
+        with self.observation_lock:
+            if name not in self.live_journal_readers:
+                self.live_journal_readers[name]=LiveJournalPrefix(self.run/"private"/name,self.run,
+                    maximum_record=16*1024*1024 if name=="commands.jsonl" else 128*1024*1024)
+            reader=self.live_journal_readers[name];previous=reader.observation
+            raw=reader.read()
+            if reader.observation!=previous:self.capture.add("live_journal_prefix",reader.observation)
+            return raw
 
     def current_incarnation(self, driver):
         sessions = [r["event"]["binding"] for r in self.audit_rows()
@@ -542,12 +555,27 @@ class Controller:
         return [(path, *read_records(path)) for path in paths]
 
     def bootstrap_status(self, require_phase=False):
-        from storage import private_bytes
-        raw = private_bytes(self.run / "private/commands.jsonl", self.run, 128 * 1024 * 1024)
-        evidence = private_bytes(self.run / "private/evidence.jsonl", self.run, 128 * 1024 * 1024) if require_phase else None
-        result = self.phase_bootstrap.observe(raw, evidence, require_phase)
-        self.capture.add("original_runtime_bootstrap_observation", result)
-        return result
+        with self.observation_lock:
+            raw = self.journal_prefix("commands.jsonl")
+            evidence = self.journal_prefix("evidence.jsonl") if require_phase else None
+            result = self.phase_bootstrap.observe(raw, evidence, require_phase)
+            self.capture.add("original_runtime_bootstrap_observation", result)
+            return result
+
+    def require_active_finalization(self):
+        """Read-only precondition for AP5's one ordinary-traffic quiescence."""
+        from source_jobs import MissingComponent
+        manifest=self.manifest()
+        stage=manifest.get("traffic_stage") if manifest is not None else None
+        if manifest is not None:require(manifest["run_id"]==self.run_id,"finalization actual run binding")
+        if stage!="active":
+            self.capture.add("finalization_stage_unavailable",{"run_id":self.run_id,"traffic_stage":stage,
+                "component":"traffic_not_active_no_final_quiescence","completed_funding_proved":False})
+            raise MissingComponent("traffic_not_active_no_final_quiescence")
+        result=self.bootstrap_status(require_phase=True)
+        if result["state"]!="succeeded":raise MissingComponent("original_bootstrap_incomplete_no_final_quiescence")
+        return {"run_id":self.run_id,"traffic_stage":stage,"operation_id":result["operation_id"],
+            "scope":"original_bootstrap_and_stage_precondition_only"}
 
     def bootstrap_operation(self):
         from source_jobs import MissingComponent

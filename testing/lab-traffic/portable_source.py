@@ -19,7 +19,7 @@ import time
 
 ROOTS=('testing/lab-traffic','testing/lab-witness')
 IGNORED={'.git','__pycache__','target','.venv','private','node_modules'}
-API='t3-controller-r23'
+API='t3-controller-r24'
 RECIPE='spc.qa.source-tree/1'
 
 

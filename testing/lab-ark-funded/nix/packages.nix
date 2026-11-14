@@ -20,7 +20,7 @@ let
     '';
   };
   ap5-vtxo-verifier = import ../verifier/package.nix { inherit pkgs rust; };
-  ap5-qa-source = pkgs.runCommand "ap5-qa-source-r23" { } ''
+  ap5-qa-source = pkgs.runCommand "ap5-qa-source-r24" { } ''
     ${pkgs.python3}/bin/python3 -B ${harness}/portable.py package-qa --repo ${src} --out "$out"
   '';
   # test_probe_package copies the reference with shutil.copytree, which

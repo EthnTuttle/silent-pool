@@ -15,10 +15,12 @@ ordinary non-root user for PostgreSQL. Follow `AGENTS.md`'s build disk budget
 The application reference documented here is the published immutable commit
 `98f0e6caa2482646e3c7073949f6388cd39f200b`. Its runtime artifacts remain independent
 of the separately released QA/AP5 Python consumer. Select a published, reviewed
-compatible consumer commit and its matching QA descriptor. The published
-reviewed compatible consumer is `ce7b703ac0c68e6738e5f4510f056cb1209fa982`:
-its shipped shared runner expects exactly the `t3-controller-r23` QA
-descriptor, packaged as `ap5-qa-source-r23`. The application pin remains
+compatible consumer commit and its matching QA descriptor. This source's shared
+runner requires exactly `t3-controller-r24`, packaged as `ap5-qa-source-r24`,
+including the pre-quiescence stage guard and append-safe observer. Select its
+published reviewed consumer release before execution. Historical consumer
+`ce7b703ac0c68e6738e5f4510f056cb1209fa982` instead requires r23; it is not the
+consumer for this r24 campaign. The application pin remains
 `98f0e6caa2482646e3c7073949f6388cd39f200b`; updating the consumer does not
 rebuild or reselect the application.
 
@@ -66,9 +68,9 @@ Assembly receipts may use a longer durable path than the actual run root.
 
 Set `CONSUMER_REV` to the published 40-hex commit chosen for this campaign.
 It is intentionally required rather than silently selecting a moving branch,
-the application commit, or an unpublished future QA release. For the
-`t3-controller-r23` descriptor that commit is
-`ce7b703ac0c68e6738e5f4510f056cb1209fa982`.
+the application commit, or an unpublished future QA release. Use the published
+combined r24 observer/AP5 stage-guard release, including safe failure diagnostics
+and the normalized scenario/socket preflight fixes.
 
 ```sh
 : "${CONSUMER_REV:?Set the published reviewed compatible QA/AP5 consumer commit}"

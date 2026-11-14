@@ -125,6 +125,7 @@ class SharedCoordinator:
                 self.qa_result(name, 'INCONCLUSIVE', 'earlier prefix is not a final-capture verdict')
 
     def quiesce_final_traffic(self):
+        self.qa.require_active_finalization()
         drivers = [a['id'] for a in self.qa.scenario['traffic']['driver']['actors']]
         for driver in drivers:
             if self.live_audit_finished and driver == self.qa.driver:
@@ -336,7 +337,7 @@ def main():
                                                                 'executable': bool(path.stat().st_mode & 0o111)}
     root = fresh_root(args.out)
     qa_module, descriptor = load_qa(args.qa_source, args.qa_source_sha256, root / 'qa-source')
-    require(descriptor['api'] == 't3-controller-r23', 'shared live runner requires exact r23 portable source and final audit exports')
+    require(descriptor['api'] == 't3-controller-r24', 'shared live runner requires exact r24 portable source, stage guard and final audit exports')
     bundle = strict_json(args.bundle.read_bytes())
     paths, source, receipt = check_bundle(bundle, full=True)  # Before actor construction.
     spec = strict_json(args.scenario.read_bytes())

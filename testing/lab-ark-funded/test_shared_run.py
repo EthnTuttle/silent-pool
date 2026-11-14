@@ -85,6 +85,10 @@ class Hooks:
         assert payload['type'] == 'pause_tx_driver'
         self.note('qa-final-traffic-pause')
 
+    def require_active_finalization(self):
+        # Call-order fixture only; test_shared_r24 exercises the frozen guard.
+        self.note('qa-final-stage-guard')
+
     def final_audit_after_drain(self):
         self.note('qa-final-audit')
         checks = {name: {'status': self.final_status, 'detail': 'unit-hook-only'} for name in FINAL_CASES}
@@ -173,7 +177,7 @@ class SharedRunTests(unittest.TestCase):
         names = [name for name, _ in qa.events]
         ordered = ['runtime-start', 'observe-original-bootstrap', 'ap5-observe', 'actual-allocation-destination',
                    'qa-measured', 'qa-manual', 'qa-witness', 'qa-fault-cases', 'qa-reorg', 'ap5-fund', 'ap5-board',
-                   'ap5-lifecycle', 'qa-audit', 'qa-final-traffic-pause', 'drain-enter', 'exact-checkpoints', 'economic-convergence',
+                   'ap5-lifecycle', 'qa-audit', 'qa-final-stage-guard', 'qa-final-traffic-pause', 'drain-enter', 'exact-checkpoints', 'economic-convergence',
                    'pool-writer-stop', 'source-EOF', 'final-raw-SQL', 'ap5:shared-final-drain-result',
                    'qa:shared-final-drain-result', 'qa-final-audit', 'ap5:shared-final-audit-result',
                    'capture-close', 'ap5-owned-teardown', 'http-workers-closed']
@@ -367,7 +371,7 @@ class SharedRunTests(unittest.TestCase):
             finally:
                 ev.close()
 
-    def test_portable_QA_r23_import_and_descriptor_tamper_refusal(self):
+    def test_portable_QA_r24_import_and_descriptor_tamper_refusal(self):
         # Fresh interpreter avoids global module-name collisions. Imports only;
         # no Controller construction, actors, services or source observer start.
         code = '''
@@ -388,8 +392,9 @@ with tempfile.TemporaryDirectory(prefix='ap5-qa-code-') as t:
  import source_feed_runtime
  assert callable(source_feed_runtime.CollectorRuntime.final_drain)
  assert callable(source_feed_runtime.CollectorRuntime.close)
- print('PORTABLE_R23_IMPORT_ONLY_PASS')
+ assert callable(module.Controller.require_active_finalization)
+ print('PORTABLE_R24_IMPORT_ONLY_PASS')
 '''
         result = subprocess.run([sys.executable, '-B', '-c', code], cwd=Path(__file__).parent, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertIn(b'PORTABLE_R23_IMPORT_ONLY_PASS', result.stdout)
+        self.assertIn(b'PORTABLE_R24_IMPORT_ONLY_PASS', result.stdout)

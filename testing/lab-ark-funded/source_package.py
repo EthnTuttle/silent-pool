@@ -1,4 +1,4 @@
-"""Invoke the reviewed source-owned r23 exporter; hashes grant no live capability."""
+"""Invoke the reviewed source-owned r24 exporter; hashes grant no live capability."""
 import hashlib
 from pathlib import Path
 import subprocess
@@ -7,19 +7,20 @@ import sys
 from common import require, sha
 from pool_control import strict_json
 
-QA_API = 't3-controller-r23'
-QA_MANIFEST_SHA256 = 'f9b93871aee0b7eea6ebfa7549577de7fce41384b147a565c6d522069e985253'
-QA_ARCHIVE_SHA256 = 'ab928bdbdced8a10b13fe0375dc11de24787ee370eaa634a1e9ca2956617f75d'
-QA_FILES = 141
-QA_BYTES = 1647413
-EXPORTER_SHA256 = '53e5b4af3e5dea058315b84a175cfd1a981a11bfb8467f27ff0e643020a957a6'
+QA_API = 't3-controller-r24'
+QA_MANIFEST_SHA256 = 'c0a6bfa3283b2976a8c3e7c5a6a042758bfbe6ddd4cf194a53f4336bf957531c'
+QA_ARCHIVE_SHA256 = '67d135e77e1acfca518dec21a411377d768ba245f39bed48c3783d1ce82c781b'
+QA_DESCRIPTOR_SHA256 = 'f16e80b93ca0ec0b9b407fcca217a78c5cef83e65d9e82c2dada305bf1063310'
+QA_FILES = 145
+QA_BYTES = 1676072
+EXPORTER_SHA256 = '68b7a61bd54e7764430b459e58afa309fcbca07a8ab8b4b8399f660edfb10364'
 
 
 def exporter(repo):
     repo = Path(repo).resolve(strict=True)
     path = repo / 'testing/lab-traffic/portable_source.py'
     require(not path.is_symlink() and path.resolve().is_relative_to(repo) and sha(path) == EXPORTER_SHA256,
-            'QA exporter differs from reviewed r23 source')
+            'QA exporter differs from reviewed r24 source')
     return repo, path
 
 
@@ -37,7 +38,7 @@ def qa_manifest(repo, require_approved=True):
     if require_approved:
         require(len(rows) == QA_FILES and value['source_bytes'] == QA_BYTES
                 and hashlib.sha256(raw).hexdigest() == QA_MANIFEST_SHA256,
-                'QA source differs from reviewed r23 source/mode/byte census')
+                'QA source differs from reviewed r24 source/mode/byte census')
     return value, raw
 
 
@@ -54,4 +55,5 @@ def package_qa(repo, output):
                      'manifest': {'path': 'manifest.json', 'sha256': QA_MANIFEST_SHA256}}, 'QA exporter descriptor differs')
     require(sha(root / 'source.tar.gz') == QA_ARCHIVE_SHA256 and sha(root / 'manifest.json') == QA_MANIFEST_SHA256,
             'QA snapshot differs from reviewed deterministic recipe')
+    require(sha(root / 'qa-source.json') == QA_DESCRIPTOR_SHA256, 'QA descriptor differs from reviewed r24 bytes')
     return value

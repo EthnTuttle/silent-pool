@@ -83,6 +83,7 @@ class CollectorRuntime:
         self.finalize_lock=threading.Lock();self.drain_attempted=False;self.drain_result=None
         self.final_boundary_ref=None
         self.sql_contract=CONTRACT
+        self.start_complete=False
 
     def capture_sql(self,front,key):
         c=self.controller
@@ -179,6 +180,7 @@ class CollectorRuntime:
         c.capture.add("source_feed_started",{"sockets":[str(p) for p in self.paths],"agents":bound,
             "collector_pubkey":signer.public_key,"additional_wallet_or_miner_processes":0,
             "signing_scope":"collector_attestations_only","native_activation_verified":False})
+        self.start_complete=True
 
     def audit_activation(self):
         if self.controller.native_capture is None:raise MissingComponent("actual_native_observer_not_registered")
@@ -232,7 +234,15 @@ class CollectorRuntime:
     def _stop_mining(self):
         c=self.controller
         from cleanup_proof import identity_observation
-        records=[r for r in c.manifest()["processes"] if r["role"]=="miner"]
+        manifest=c.manifest();stage=manifest.get("traffic_stage") if manifest is not None else None
+        reason=("collector_start_incomplete_no_final_economic_drain" if not self.start_complete else
+            "traffic_not_active_no_final_economic_drain" if stage!="active" else None)
+        if reason:
+            c.capture.add("economic_drain_precondition",{"component":reason,"traffic_stage":stage,
+                "collector_start_complete":self.start_complete,"converged":False,"additional_stop_authority":False})
+            raise MissingComponent(reason)
+        c.require_active_finalization()
+        records=[r for r in manifest["processes"] if r["role"]=="miner"]
         require({r["entity"] for r in records}=={m["id"] for m in c.scenario["miners"]},"drain miner process census")
         for miner in c.scenario["miners"]:
             if c.native_capture is not None:c.native_capture.expect_miner_stop(miner["id"])

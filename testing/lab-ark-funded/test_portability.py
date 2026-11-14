@@ -69,7 +69,7 @@ from shared_sources import load_qa
 from common import sha
 p=Path(sys.argv[1]);module,value=load_qa(p,sha(p),Path(sys.argv[2]))
 assert callable(module.Controller.audit_live) and callable(module.Controller.final_audit_after_drain)
-assert value['api']=='t3-controller-r23'
+assert value['api']=='t3-controller-r24'
 import json
 manifest=json.loads((p.parent/'manifest.json').read_text())
 for row in manifest['files']:

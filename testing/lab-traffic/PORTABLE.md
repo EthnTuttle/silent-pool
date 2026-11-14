@@ -33,7 +33,7 @@ relative to the checked-out test files. Historical archive replayers require
 an explicitly supplied archive and are optional, not startup prerequisites.
 
 `portable_source.py` creates `source.tar.gz`, `manifest.json`, `qa-source.json`.
-The descriptor has schema `spc.lab.ap5.qa-source/v1`, API `t3-controller-r23`;
+The descriptor has schema `spc.lab.ap5.qa-source/v1`, API `t3-controller-r24`;
 its artifact paths resolve relative to the descriptor directory. Its printed
 SHA256 is the external descriptor pin supplied to AP5. The versioned snapshot
 recipe sorts all source paths, validates regular files/bytes/SHA256, preserves
@@ -43,14 +43,14 @@ It excludes build/cache/private directories. Archive modes/bytes/hashes must
 be checked by the AP5 loader; relative paths are not permission to traverse out
 of the descriptor root. Source modules must be loaded from this one bound tree.
 
-## r23 release against the already-compiled 98f applications
+## r24 observer release against the already-compiled 98f applications
 
 Package this Python consumer independently using `portable_source.py snapshot`.
 Keep the qualified application package, compiler source, outputs aggregation and
 selected durable 3cf18a8e bundle pinned. A new QA release does not require rebuilding them.
 See [RUNTIME-PROFILES.md](RUNTIME-PROFILES.md) for the complete reviewed profile.
 
-The AP5 loader must admit API `t3-controller-r23` and call:
+The AP5 loader must admit API `t3-controller-r24` and call:
 
 ```python
 qa = coordinated_qa_class(qa_module)(
@@ -66,12 +66,20 @@ fallback. `test_controller` exercises the real constructor/prerequisite route.
 `test_runtime_profile` covers source census, mandatory outbound module, selected
 envelope binding, Nix v4 decoding and strict rendered public address handling.
 The descriptor pins this documentation and those tests through its manifest.
-The r23 manifest also pins the original public supplemental startup, namespace
+The manifest also pins the original public supplemental startup, namespace
 and cleanup logs and their reviewed source bindings. The full profile refuses
 missing, changed, truncated or ignored required test evidence. The private
 wallet config requires `ark.native_audit.run_token_hash`; no public native wire
 or SourceFeed2 field is added. The expected digest must match the actual wallet
 instance, process observation and controller-recorded marker census.
+
+r24 adds the read-only `qa.require_active_finalization()` precondition. AP5
+calls it before issuing final `pause_tx_driver` requests. A missing collector
+startup, inactive traffic stage or incomplete original bootstrap is recorded
+as incomplete finalization; no repeated active-only request or second drain is
+permitted. The collector independently applies the same precondition before
+miner removal. See [LIVE-JOURNAL-PREFIX.md](LIVE-JOURNAL-PREFIX.md) for the live
+prefix contract and the retained b14/b15 causal limits.
 
 ## Produce actual build/check inventory
 
