@@ -12,17 +12,17 @@ regtest only; type-32 remains v1-only and is refused, not advertised, in v2.
 A real-bitcoind regtest run (`testing/regtest-e2e.sh`) mines blocks and recovers
 a miner's coinbase output with `spc-scan`. The approved host lab adds a real
 two-pool runtime with rbitcoin, Redis and PostgreSQL (`docs/LAB-RUNTIME.md`).
-Ark settlement, the denomination ladder and full-window payout auditing remain
-separate gates. An isolated two-node/two-pool native-SV2 namespace lab has an
-implementation report under review; it does not inherit the host approval. See
-`docs/OPERATIONS.md` and `docs/reviews/` for exact scopes.
+The current tree also includes native funding/traffic, SP-aware wallet and
+Ark lifecycle implementations and their source/audit interfaces. Implementation
+and package qualification are not a full funded-campaign verdict. See the
+source-pinned lab setup below and `docs/reviews/` for exact executed scopes.
 
 ## The two ideas
 
 1. **SPc — silent payments in the coinbase.** BIP 352 cannot be used in a coinbase because the input has no public key. SPc supplies one: a per-height ephemeral key `A_send`, published in the coinbase itself (scriptSig pool tag in pool-template mode, `OP_RETURN` under Job Declaration), with the BIP 34 block height as the nonce. Each miner's output is `P = B_spend + hash_SPc/TierSpc(ecdh ‖ 0)·G`; a wallet finds it from the block header, the coinbase, and its scan key. The pool erases `a_send` once the coinbase is built. Public write-up: [delvingbitcoin t/2833](https://delvingbitcoin.org/t/silent-payments-coinbase/2833).
 2. **A sub-threshold rail that is not the pool's own ledger.** Earnings under the coinbase threshold are paid to a per-block Ark key derived from the same ECDH, once the block has 6 confirmations, from the pool's Ark float on a **third-party** Ark server — deliberately not one the pool runs, because arkoor's only security assumption is "sender or server honest." The block's single pool output (a fresh P2TR under the pool's hot Ark key) refills the float when it matures. Miners who don't register Ark delivery forfeit their below-threshold earnings to the pool.
 
-## Components (planned)
+## Components
 
 | Binary | Role |
 |---|---|
@@ -53,49 +53,38 @@ smoke run.
 
 ## Lab quick start
 
-The approved host slice is an operator/lab tool, not a production mode. From
-the approved host-runtime source:
+Use the source-pinned setup in [LAB-RUNTIME](docs/LAB-RUNTIME.md). The current
+application reference is
+`github:EthnTuttle/silent-pool/98f0e6caa2482646e3c7073949f6388cd39f200b`;
+Nix obtains the node, stock Ark server and application tools from published,
+immutable sources. A developer worktree or prebuilt local node is not required.
 
-```sh
-nix build \
-  .#packages.x86_64-linux.spc-lab \
-  .#packages.x86_64-linux.spc-pool \
-  .#packages.x86_64-linux.spc-cpu-miner \
-  .#packages.x86_64-linux.spc-scan \
-  --print-out-paths
+Choose the intended profile:
 
-/nix/store/...-spc-lab-0.1.0/bin/spc-lab runtime \
-  --scenario crates/spc-lab/scenarios/lab-live-v2-two-pools.json \
-  --run-dir /tmp/spc-lab-run-1 \
-  --node /path/to/rbitcoin-node \
-  --pool /nix/store/...-spc-pool-0.1.0/bin/spc-pool \
-  --miner /nix/store/...-spc-cpu-miner-0.1.0/bin/spc-cpu-miner \
-  --scanner /nix/store/...-spc-scan-0.1.0/bin/spc-scan \
-  --postgres-bin-dir /path/to/postgresql/bin \
-  --redis-server /path/to/redis-server \
-  --redis-cli /path/to/redis-cli \
-  --base-revision b0ab4ca34fda07c61a6335d05f598eaacc69678c \
-  --dirty-tree-hash <frozen-code-snapshot-sha256> \
-  --listen 127.0.0.1:0 --duration-secs 120
-```
+| Profile | What it supplies |
+|---|---|
+| `spc-lab-self-hosted-ark` wrapper | One node, two pools, four wallet agents/workers at 8 H/s total; no traffic population or full acceptance campaign. Requires an explicit fresh run directory and provenance arguments. |
+| [Prepared shared campaign](testing/lab-ark-funded/README.md) | Two nodes, two pools, four SP wallets/workers, eight background and four payment wallets, 40 H/s aggregate and 0.2 ordinary tx/s; native funding and audited lifecycle checks through the admitted runtime and a separately pinned QA/AP5 consumer. |
 
-The printed URL serves the browser controls at `/` and the read-only role /
-process hub at `/lab`; `spc-lab serve` exposes both for recorded read-only
-review. The hub links only actual routes and does not claim wallet or Ark
-services are running. See [`docs/LAB-ROLES.md`](docs/LAB-ROLES.md) for the
-current role map, missing role-native UIs and required next Ark/wallet
-integrations. A headless finite run uses
-`--duration-secs` without `--listen`. Private identities, credentials, node
-cookie and generated configs live under `<run_dir>/private` (`0700` dir,
-`0600` files); inspect with `spc-lab snapshot|events|manifest|command` and stop
-with `stop_run`/duration/`interactive`; `spc-lab reap` only uses persisted
-ownership records. The node is an explicit externally supplied pinned L2 build,
-not a Nix package. See [`docs/LAB-RUNTIME.md`](docs/LAB-RUNTIME.md) for the full
-command set, idempotency rules and known limits (no causal hashrate claim,
-runtime header/payout oracle `inconclusive`, fee/witness/Ark/ladder/SV1 not
-covered). Its namespace section documents actual actor/storage/control
-placement and the separate partition/heal/crash-cleanup proof path.
+The application pin and QA consumer release are independent. Supply a published,
+reviewed compatible consumer revision for the full campaign; a future consumer
+revision is not guessed by these docs. Build/qualification, source admission and
+a full funded campaign verdict are distinct results. Full funded acceptance is
+not asserted here.
 
+An operational controller started with `--listen 127.0.0.1:0` prints its actual
+origin after startup. `/` provides live controls and user wallet views; `/lab`
+is the operator directory. Expanded runs require the run-local token from the
+appropriate `private/access/*.json` claim file. See LAB-RUNTIME sections 5-6
+for exact token handling, live API stop, recorded review and ownership-bound
+recovery. Headless `runtime` means omitting `--listen`, usually with a finite
+`--duration-secs`; there is no `runtime --headless` switch. `nix run .` selects
+the pool package, not a lab.
+
+The separate design-feedback/mockup utility, often served on loopback port
+18481, is not an operational lab UI or proof that a simulation is running.
+It is not installed by this checkout's lab launcher. Preserve its feedback and
+lifecycle independently of lab run cleanup.
 ## Documents
 
 - [`DESIGN.md`](DESIGN.md) — the one-identity derivation: Ark-tier destination derived from the same per-block ECDH as the coinbase output (authoritative for the Ark-tier key scheme; spec §11.8 defers to it); prototype in [`spc_ark/`](spc_ark/)

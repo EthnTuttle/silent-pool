@@ -1,371 +1,319 @@
-# Lab runtime: host and isolated topology
+# Lab runtime: setup, live controls and recovery
 
-Status: operator guide for the approved host slice and the namespace-runtime
-candidate. This is a lab tool, not a production deployment mode. The host
-baseline `e891f34c` / tested code `d75ab391` is approved. The namespace runtime
-has a separate implementation report and requires its own exact Fable approval;
-do not inherit the host approval. The normative pool behavior remains
-`docs/SPEC.md`; `DESIGN.md` remains authoritative for payout derivation, tier
-policy and Ark delivery.
+This is a local regtest operator tool. The recipes below describe published
+application source `98f0e6caa2482646e3c7073949f6388cd39f200b` and its current
+CLI/API. They do not assert a full funded campaign verdict. `DESIGN.md` and
+`docs/SPEC.md` remain authoritative for payout, privacy and Ark behavior.
 
 ## 1. What it runs
 
-`spc-lab runtime` reads a versioned scenario and starts real child processes:
+`spc-lab runtime` owns the node/pool/miner processes, per-pool Redis/PostgreSQL,
+rendered configuration, process leases, durable commands and observation API.
+An Ark scenario also supplies a self-hosted stock `captaind`, distinct pool
+Ark wallets and SP-aware user wallet agents. A traffic scenario adds the native
+bootstrap/transaction driver. No browser is a miner or an independent signer.
 
-- rbitcoin node (externally supplied, pinned L2 build; see section 3);
-- one or two independent `spc-pool` fronts, each with its own Redis instance,
-  PostgreSQL cluster/database/role/password, listener set and Noise authority;
-- native `spc-cpu-miner` processes, controlled over the approved
-  `spc-cpu-miner-control` v1 JSONL protocol;
-- Redis and PostgreSQL from explicit binaries;
-- the scanner/collector side (node tip sampler, pool `spc_evidence` tail,
-  authenticated PostgreSQL/Redis reads, `spc_scan::scan_block`).
+The scenario selects the actual roster:
 
-With `--topology`, the controller stays in the host user/network namespaces and
-uses the same engine, run lock, listener and resource plan. Node/front/miner/
-Redis actors enter the broker user namespace and their endpoint network
-namespace at launch. Each pool has a separate storage network namespace.
+| Scenario/profile | Actual scope |
+|---|---|
+| `lab-live-v2-two-pools.json` | Older host-miner profile: one node, two pools, two CPU miners; no Ark or traffic population. |
+| `lab-ark-wallets.json` | Wrapper default: one node, two pools, four wallet agents/miners at 2 H/s each; no `traffic`, phases or acceptance assertions. |
+| `portable prepare-shared` output | Full shared profile: two nodes, two pools, four SP wallets/CPU miners, eight background/four payment wallets, 40 H/s and 0.2 ordinary tx/s, with native funding and audited source/lifecycle configuration. |
 
-The runtime renders every config itself. It does **not** merge an operator
-TOML or authority fragment. Private files are created under
-`<run_dir>/private` (mode `0700` for the directory, `0600` for files):
-identities, secrets, node cookie, Noise authority, generated pool/miner/Redis
-configs. Public/shareable output is under `<run_dir>/shareable`; logs are under
-`<run_dir>/logs`.
+Use the prepared profile for the full campaign. Adding `--txd` alone does not
+add traffic to a scenario. The wrapper hardcodes `lab-ark-wallets.json`; a
+second `--scenario` argument is not a supported override. The full campaign
+owner launches the admitted lab executable with its generated scenario instead.
 
-Two pools mean two isolated ledgers and storage resources. They currently share
-the same throwaway payout descriptor; that is a lab convenience, not two
-production payout destinations.
+Runtime private material is generated for a fresh run under `<run>/private`
+(0700 directory, 0600 files); logs and recorded/shareable artifacts belong to
+that run. Pool Ark float, SP/Ark earnings and T1 test-payment funds are separate
+accounts. No identity-bearing data is added to the Ark role's input streams
+(SPEC §11.3).
 
-## 2. Build the four binaries
+## 2. Fresh-machine source and Nix setup
 
-Run from the approved host-runtime source (the `lab-runtime` worktree of the
-approved packet, not this documentation worktree):
+Use x86_64 Linux, Nix with flakes enabled, Git and Python 3, and an ordinary
+non-root user (PostgreSQL does not run as root). Before building, follow
+`AGENTS.md`'s disk budget: at least 50 GiB available and projected peak growth
+leaving at least 20 GiB; one heavy build at a time. Reuse realized Nix outputs.
 
-```sh
-nix build \
-  .#packages.x86_64-linux.spc-lab \
-  .#packages.x86_64-linux.spc-pool \
-  .#packages.x86_64-linux.spc-cpu-miner \
-  .#packages.x86_64-linux.spc-scan \
-  --print-out-paths
-```
-
-The pool must be the package built with the `rpc` feature; the flake package
-does that. A locally rebuilt `target/debug/spc-pool` without `--features rpc`
-fails the rendered `template.source = "rpc"` startup, so prefer the Nix store
-paths recorded in the run manifest.
-
-Do not treat a debug binary hash as a source binding: debug hashes vary between
-otherwise identical builds. Use the Nix outputs and record their store paths
-and derivations.
-
-## 3. Node binary exception
-
-No Nix node output is required by the core package. The approved lab used the
-externally built, pinned L2 rbitcoin binary and recorded it separately:
-
-- binary path: explicit (`--node <absolute-path>`);
-- expected SHA-256: `eb257af7c10cdf0ded584adfadf2ae8124466304b13d26c17f855e76f9320f7c`;
-- source snapshot: `d2f37b9113e8855245866289ed393043aed6e6153e8101375072cbb23624d499`.
-
-The node's provenance is **not** claimed to be a Nix build. Optional Nix network
-tools are a separate, externally blocked capability gate; they are not required
-for this host run and their absence is not a core package failure.
-
-## 4. Start a two-pool run
-
-Use explicit paths and the frozen code identity (the actual values are emitted
-by the packet's manifest builder; do not leave the old literal defaults):
+These Bash variables select immutable application source and a new HOME-local
+workspace. Commands may be run from any checkout; the flake URL pins the source.
 
 ```sh
-SPC_LAB=/nix/store/...-spc-lab-0.1.0/bin/spc-lab
-POOL=/nix/store/...-spc-pool-0.1.0/bin/spc-pool
-MINER=/nix/store/...-spc-cpu-miner-0.1.0/bin/spc-cpu-miner
-SCAN=/nix/store/...-spc-scan-0.1.0/bin/spc-scan
-
-"$SPC_LAB" runtime \
-  --scenario crates/spc-lab/scenarios/lab-live-v2-two-pools.json \
-  --run-dir /tmp/spc-lab-run-1 \
-  --node /path/to/rbitcoin-node \
-  --pool "$POOL" \
-  --miner "$MINER" \
-  --scanner "$SCAN" \
-  --postgres-bin-dir /path/to/postgresql/bin \
-  --redis-server /path/to/redis-server \
-  --redis-cli /path/to/redis-cli \
-  --base-revision b0ab4ca34fda07c61a6335d05f598eaacc69678c \
-  --dirty-tree-hash <frozen-code-snapshot-sha256> \
-  --listen 127.0.0.1:0 \
-  --duration-secs 120
+APP_REV=98f0e6caa2482646e3c7073949f6388cd39f200b
+APP_REF="github:EthnTuttle/silent-pool/$APP_REV"
+umask 077
+WORK="$(cd "$HOME" && pwd -P)/.spc-lab/$(date -u +%Y%m%dT%H%M%SZ)-$$"
+mkdir -p "$(dirname "$WORK")"
+mkdir "$WORK"
+export WORK
 ```
 
-Add `--operator-ui` to the host command above to render the approved
-EXP-OP read-only operator page (see
-`docs/decisions/2026-11-08-pool-operator-page.md`) into every pool config
-and print its URL after a route-readiness proof:
+Keep this canonical workspace path short: the prepared shared profile checks
+that its collector Unix-socket paths are shorter than 108 bytes. If your HOME
+path is unusually long, select a shorter canonical, user-owned workspace before
+preparing inputs. Use a new workspace for each experiment.
+
+For a local source checkout, clone `https://github.com/EthnTuttle/silent-pool.git`
+and check out `$APP_REV` detached. No developer worktree, private capture or
+historical wallet directory is a build input. `nix run .` selects the default
+`spc-pool` package; explicitly select the lab or AP5 package below.
+
+For the full campaign, continue with the complete build/assembly/preparation
+recipe in [the AP5 guide](../testing/lab-ark-funded/README.md). It selects
+`ap5-inputs` from the application revision and the Python tools/QA descriptor
+from a separately published reviewed consumer revision. A new QA consumer does
+not require changing the application pin. The currently published reviewed
+consumer is `ce7b703ac0c68e6738e5f4510f056cb1209fa982`.
+
+## 3. Node and application provenance
+
+The current flake provides `rbitcoin-node-ark-lab`, stock `captaind`/`bark`,
+`spc-lab-ark-tools` and the self-hosted launcher. Its node source is the public
+Git revision `c1505776117b1d4d42489f309af33978bbe124cc`; the Ark source is pinned
+Bark `c419159fa54085572f8ca72d2ba1716556a9d3eb`. Use the flake recipes and
+`UPSTREAM_DEPS.md`, including the node's Git-fetch/export-subst distinction.
+The old external L2 binary described in historical reports is not a fresh-user
+prerequisite.
+
+For a qualified campaign, application paths and source claims come from the
+actual `ap5-inputs/outputs.json` and admitted bundle. Do not substitute a debug
+binary, developer store path, or a free-text approval/hash. The committed
+source contract and an installed package are not themselves a funded verdict.
+
+## 4. Start the intended run
+
+Choose one profile below; the small wrapper is not a prerequisite for the full
+campaign, and starting both would create two independent runtimes.
+
+### Full two-node, traffic and native-funded campaign
+
+Follow [AP5 setup and shared execution](../testing/lab-ark-funded/README.md).
+`portable prepare-shared` produces fresh `scenario.json`, `qa-inputs.json` and
+an execution plan. It provisions source-attestation inputs and validates the
+scenario but does not start actors. `shared` owns one runtime, audit/drain and
+stop/reap sequence. Its configured roster and native funding checks, rather
+than the small wrapper defaults, define the full simulation.
+
+Keep `APP_REF` and `CONSUMER_REF` distinct. The published reviewed consumer
+`ce7b703ac0c68e6738e5f4510f056cb1209fa982` expects exactly the
+`t3-controller-r23` QA descriptor (`ap5-qa-source-r23`). A later consumer and
+matching QA descriptor must again be a published, reviewed compatible pair.
+Use that consumer's release instructions if its interface changes. No consumer
+is selected by a moving branch or invented commit.
+
+### Small self-hosted infrastructure profile
+
+This source-pinned command selects the wrapper's one-node profile from section
+1. It is useful for infrastructure/UI inspection, not the full native-funded
+acceptance campaign. Its initialization/readiness checks may fail closed;
+an initialized or registered wallet is not a funded wallet.
 
 ```sh
-"$SPC_LAB" runtime \
-  ... same arguments as the host command above ... \
-  --operator-ui
+nix build --max-jobs 1 \
+  "$APP_REF#spc-lab-self-hosted-ark" "$APP_REF#spc-lab-ark-tools" --no-link
+LAUNCHER="$(nix eval --raw "$APP_REF#packages.x86_64-linux.spc-lab-self-hosted-ark.outPath")/bin/spc-lab-self-hosted-ark"
+SPC_LAB="$(nix eval --raw "$APP_REF#packages.x86_64-linux.spc-lab-ark-tools.outPath")/bin/spc-lab"
+SOURCE_PATH=$(nix flake metadata --json "$APP_REF" | python3 -c 'import json,sys; print(json.load(sys.stdin)["path"])')
+SOURCE_HASH=$(nix hash path --type sha256 --base16 "$SOURCE_PATH")
+export RUN_DIR="$WORK/runtime"
+"$LAUNCHER" --run-dir "$RUN_DIR" \
+  --base-revision "$APP_REV" --dirty-tree-hash "$SOURCE_HASH" \
+  --listen 127.0.0.1:0 --operator-ui --interactive
 ```
 
-- Off by default; host runs only. `--operator-ui` with `--topology` is
-  rejected at prepare time (no reviewed controller relay to an isolated
-  front's loopback listener exists yet), and every front must carry the
-  `api` role because the operator listener runs inside the pool API
-  process.
-- The process count is unchanged: the page is served by an extra loopback
-  listener inside each existing pool API process, leased through the same
-  port-lock machinery as every other listener (`front.<id>.operator`).
-- An HTTP 200 on the page proves the route is served; it is not a funds
-  health claim. The float fact reads `not_configured` until the AP-4
-  status source exists; the liability and payout facts are the pool
-  store's actual values.
-- The printed `spc-lab-runtime: operator front-<id>=http://127.0.0.1:<port>/`
-  line appears only after the proof. The `/lab` hub links the page as a
-  typed `operator_ui` interface under the same rules (recorded serves
-  unlink it).
+Here `SOURCE_HASH` records the fetched application source's NAR hash as launch
+provenance; it is not an AP5 qualification grant. Full campaigns use their
+bundle's source binding instead. The wrapper supplies all binary paths, not
+the run directory, provenance, listener or lifetime. The latter are explicit
+CLI arguments. Type `stop` in this same process to stop this manual runtime.
 
-For the isolated two-node/two-pool/two-miner scenario, use the same binary
-paths and add the live backend. `ip`, `nft`, `unshare`, `nsenter` and `python3`
-must be resolvable on `PATH` (or passed explicitly for the last two):
+For finite headless `runtime`, omit `--listen` and `--interactive`, and pass
+`--duration-secs 120`. There is no `runtime --headless` or `--run-root` flag.
+Without a duration, interactive stop or API stop, runtime remains alive.
+The duration begins after startup/phases; it is not a startup timeout.
+
+The UI origin is printed as `spc-lab-runtime: http=http://127.0.0.1:<port>`
+only after startup succeeds. Pool operator URLs are printed after their own
+route checks. `--operator-ui` is host-only and conflicts with `--topology`.
+For namespace/fault work, use a separately selected topology scenario and
+reviewed broker/tools; see sections 10-11 for the historical topology evidence.
+
+Always choose a fresh run directory. Preserve a failed run's private state,
+logs and receipts for diagnosis, then use a new directory for a new run; do not
+delete old wallet/feedback material to make a retry appear fresh.
+
+## 5. Operational UIs and access tokens
+
+Open the actual controller origin, not a guessed port:
+
+| Route | Use |
+|---|---|
+| `/` | Worker controls, scoped SP/Ark and T1 wallet views, durable pending commands. |
+| `/lab` | Operator role/process directory and links to actually served pool pages. A user claim opens its own root view instead. |
+| `/api/lab/v1/runs/<id>/me` | Authenticated run/principal/actor/capabilities. |
+| `/api/lab/v1/runs/<id>/snapshot`, `/api/lab/v1/runs/<id>/projection`, `/api/lab/v1/runs/<id>/wallets` | Authenticated status; own-user filtering applies. |
+| `/api/lab/v1/runs/<id>/events` | Authenticated SSE using the same scope. |
+| `/api/lab/v1/runs/<id>/commands` | Typed durable command POST. |
+| `/api/lab/v1/runs/<id>/inventory`, `/api/lab/v1/runs/<id>/catalog` | Operator-only in expanded runs. |
+
+For `expanded_access: true`, the runtime generates an operator claim at
+`<run>/private/access/operator.json` and one per declared user in that same
+directory. Plain preset names such as `alice` use `alice.json`; unsafe filename
+components are hashed, so inspect a claim's `principal` rather than guessing a
+path from an arbitrary ID. Each file contains its token, run ID, actor and
+capabilities. Open the appropriate local 0600 file in a text editor and paste
+only its `token` value into the UI's **Operator or user run token** field.
+Neither a loopback address nor a public bootstrap page grants operator access.
+
+The browser sends Authorization headers and stores credentials only in scoped
+sessionStorage. Do not put tokens in URLs, command arguments, logs, screenshots
+or shared artifacts. Signing out clears the tab's token/view; deleting or
+rotating a claim revokes it server-side. Legacy scenarios with expanded access
+off retain their tokenless loopback behavior.
+
+SP/Ark earnings, watch-only coinbase outputs and T1 test-payment funds are
+displayed separately. Missing/stale providers remain unavailable; unknown is
+not zero. A command being queued/running does not prove payment or confirmation.
+Retained unknown requests reuse their exact ID/payload when checked. Worker
+controls remain independent of an outstanding wallet operation.
+
+Pool operator pages use their separate read-only loopback listener and are
+linked when actually served; an HTTP 200 proves the route, not fund health.
+The design-review/mockup feedback utility (often port 18481) is separate, is not
+installed by this lab launcher, and never proves that mining or Ark is running.
+Keep its feedback and process out of lab cleanup.
+
+## 6. Live stop, recorded review and recovery
+
+For a manual runtime started with `--interactive`, type `stop` on that process's
+stdin. Otherwise send `stop_run` to the **live controller API**. A second
+`spc-lab command --run-dir ...` is not an HTTP client: it attempts attachment
+and cannot take the owner lock while the live controller holds it.
+
+The following local Python 3 example reads the operator claim without printing
+its token, checks the live run identity, and posts the real command envelope.
+Set `LAB_URL` to the printed live origin and `RUN_DIR` to the actual run root.
+Keep `STOP_ID` if the request has an ambiguous transport result; rerun only the
+Python request with the same ID. Do not send this to a recorded `serve` listener.
 
 ```sh
-"$SPC_LAB" runtime \
-  --scenario crates/spc-lab/scenarios/lab-network-runtime-two-pools.json \
-  --run-dir /tmp/opencode/LP-network-kimi-reproduction \
-  --node /path/to/rbitcoin-node \
-  --pool "$POOL" \
-  --miner "$MINER" \
-  --scanner "$SCAN" \
-  --postgres-bin-dir /path/to/postgresql/bin \
-  --redis-server /path/to/redis-server \
-  --redis-cli /path/to/redis-cli \
-  --pow-bits 0x207ffffe \
-  --base-revision b0ab4ca34fda07c61a6335d05f598eaacc69678c \
-  --dirty-tree-hash <frozen-code-snapshot-sha256> \
-  --topology \
-  --broker-script scripts/lab/lib/lab_backend.py \
-  --listen 127.0.0.1:0 \
-  --duration-secs 3
+export LAB_URL='http://127.0.0.1:PORT'  # replace with the printed live origin
+export RUN_DIR='/absolute/path/to/this/run'
+export STOP_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+python3 - <<'PY'
+import json, os, pathlib, re, time, urllib.parse, urllib.request
+def require(ok, message):
+    if not ok:
+        raise SystemExit(message)
+base = os.environ['LAB_URL'].rstrip('/')
+url = urllib.parse.urlsplit(base)
+require(url.scheme == 'http' and url.hostname in ('127.0.0.1', '::1') and url.port, 'use the printed loopback origin')
+require(not (url.username or url.password or url.query or url.fragment or url.path), 'origin must not contain credentials, path or query')
+claim = json.loads((pathlib.Path(os.environ['RUN_DIR']) / 'private/access/operator.json').read_text())
+require(claim['principal'] == 'operator' and 'operator' in claim['may'], 'operator claim required')
+require(re.fullmatch(r'[0-9a-fA-F]{64}', claim['token']), 'malformed claim token')
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+client = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+headers = {'Authorization': 'Bearer ' + claim['token'], 'Origin': base,
+           'Content-Type': 'application/json'}
+with client.open(urllib.request.Request(base + '/api/lab/v1/health', headers=headers), timeout=10) as response:
+    require(json.load(response)['run_id'] == claim['run_id'], 'claim and live run differ')
+command = {'command_id': os.environ['STOP_ID'], 'run_id': claim['run_id'],
+           'issued_at_wall': int(time.time() * 1000), 'actor': claim['actor'],
+           'kind': {'type': 'stop_run', 'reason': 'manual stop'}}
+path = '/api/lab/v1/runs/' + urllib.parse.quote(claim['run_id'], safe='') + '/commands'
+request = urllib.request.Request(base + path, data=json.dumps(command).encode(),
+                                 headers=headers, method='POST')
+with client.open(request, timeout=60) as response:
+    outcome = json.load(response)
+print(json.dumps({key: outcome.get(key) for key in ('command_id', 'state', 'detail')}))
+PY
 ```
 
-The `0x207ffffe` initial target is a regtest convenience, not a change to the
-scenario's `pow_limit_bits = 0x207fffff` and not a retarget-response test. The
-scenario uses real phase commands: baseline work, pause, P2P partition,
-independent work on both fronts, heal, pause, and both front accounting
-assertions. `converge-after-heal` is an explicit native action with
-`version: 1`, `timeout_secs: 90`, `max_observations: 90`, `allow_resume: true`
-and `max_resume_attempts: 1`. Only this declared action may perform one real
-SV2 resume to break a tied fork, followed by a durable pause and atomic
-revalidation. Any resume invalidates earlier quiescence, even if its outcome is
-partial or unknown; a later common-tip certificate requires a new successful
-pause and a fresh atomic observation. Existing scenarios without `convergence`
-get no post-phase resume/hash fallback. Every resume/pause is journaled; timeout is
-`not_converged` and stop/interruption is `unknown` with a reason. The budget is
-cooperative between potentially blocking node-observation rounds, not a hard
-per-RPC deadline. The action executes after all declared phases regardless of
-where it appears, so the provided scenario places it last; position-dependent
-semantics are otherwise outside this packet.
+This example targets expanded runs. For a legacy access-off run there is no
+claim file: use interactive/duration stop or the same command API with the
+legacy envelope. A timeout/connection close is not a successful stop; inspect
+the owner/log/result before recovery. A shared AP5 campaign owns its own
+audit/drain/stop/reap sequence. Interrupting it or sending a manual stop is
+cancellation, not a passing full-campaign verdict.
 
-The full no-bypass probe is deliberately performed with workers paused because
-it takes many IPv6 1-second negatives; finishing a tied fork without mining
-after heal can be impossible even when the transport is healthy. No phase calls
-`generate*`, `setmocktime` or a fake accounting hook.
-
-`--listen 127.0.0.1:0` prints the bound URL. Use a specific loopback port if a
-browser needs a stable address. Without `--listen` the run still starts; use
-`--duration-secs` for a finite headless run. `--interactive` accepts a typed
-`stop` on stdin.
-
-The run directory must be fresh. A failed preparation can leave private
-material behind; inspect and remove that run directory before retrying. Do not
-reuse a run directory that already has a `run-manifest.json`.
-
-## 5. Browser and durable controls
-
-Open the printed URL. The root page (`/`) shows the snapshot, entities,
-evidence timeline and miner controls. It is an observer with the same durable
-API:
-
-- `GET /api/lab/v1/runs/<id>/snapshot?cursor=...`
-- `GET /api/lab/v1/runs/<id>/events?after=...`
-- `POST /api/lab/v1/runs/<id>/commands`
-- `GET /api/lab/v1/runs/<id>/catalog`
-
-Open **`/lab` on the same printed origin** for the small read-only live hub.
-It lists the actual run id/lifecycle, recorded actor count, co-located logical
-roles, last-recorded process states, collected observation age and actual
-interfaces. Its `Open live controls` link returns to `/`; it adds no daemon,
-listener, proxy, role-start action or wallet/funds control. The backing route
-is `GET /api/lab/v1/runs/<id>/inventory`, an allowlisted projection rather
-than the raw private manifest or process records. Pool links are explicitly
-JSON (`/api/pool`) or metrics (`/metrics`), not an HTML operator UI. Internal
-namespace endpoints do not become host-browser links. See
-[`LAB-ROLES.md`](LAB-ROLES.md) for the source-owned role map and absent UIs.
-
-Recorded-run review uses the same pages without adopting processes:
+Once the live owner has exited, use that run's application executable. For a
+qualified bundle, obtain its exact path locally (the path is not a secret):
 
 ```sh
-"$SPC_LAB" serve --run-dir <run_dir> --listen 127.0.0.1:0
+SPC_LAB=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["binaries"]["lab"]["path"])' "$WORK/qualified/bundle.json")
+"$SPC_LAB" snapshot --run-dir "$RUN_DIR" --cursor 0
+"$SPC_LAB" events --run-dir "$RUN_DIR" --after 0
+"$SPC_LAB" manifest --run-dir "$RUN_DIR"
+"$SPC_LAB" serve --run-dir "$RUN_DIR" --listen 127.0.0.1:0
 ```
 
-Both `/lab` and `/` identify this as recorded/read-only; miner controls are
-disabled. A recorded `running` state is historical, not a current health
-claim. Observations retain their actual evidence timestamps. The hub itself
-performs no new probe and creates no synthetic heartbeat.
+`serve` is recorded/read-only and does not restart actors; end this standalone
+viewer when finished. Manifest output is private. For a dead owner's remaining
+resources, run `"$SPC_LAB" reap --run-dir "$RUN_DIR"` after inspecting the actual
+recorded run. Reap uses persisted PID/start/resource ownership, never PID alone.
+It is not a second concurrent controller or a global process cleanup command.
 
-The catalog exposes declared fronts/pools, public SP addresses with `used`, and
-live miner connection/worker specs. It is loopback-only and contains no secret
-material. An added miner reuses a declared persistent identity; it does not
-generate replacement identity material.
-
-Supported typed commands:
-
-- `add_miner` (including retry with the same `command_id`);
-- `switch_pool`;
-- `set_worker_budget`;
-- `pause_workers` / `resume_workers`;
-- `stop_run`.
-
-The command journal is durable. The same `command_id` with the same payload
-returns the stored outcome; the same id with a different payload returns a
-conflict and does not duplicate the effect. Closing the browser tab does not
-stop the run.
-
-## 6. Inspection and cleanup
-
-```sh
-"$SPC_LAB" snapshot --run-dir <run_dir> --cursor 0
-"$SPC_LAB" events --run-dir <run_dir> --after 0
-"$SPC_LAB" manifest --run-dir <run_dir>
-"$SPC_LAB" command --run-dir <run_dir> --json '{"kind":{"type":"stop_run","reason":"manual"}}'
-"$SPC_LAB" reap --run-dir <run_dir>
-```
-
-Normal stop is `stop_run`/duration/interactive; it writes the shareable result
-and stops owned processes. `reap` is for a controller that was killed and uses
-persisted ownership records; it never kills by PID alone. A run whose final
-state is `completed_with_errors` needs the manifest inspected before starting
-another run.
-
-For a traffic run, `reap` also works when the run stopped before the traffic
-capability was granted (FAILED/INCOMPLETE provisioning): cleanup never grants
-or exercises a capability, so the absent projection does not block resource
-cleanup, while a recorded-but-invalid projection still rejects
-(`docs/decisions/2026-11-12-lab-reap-cleanup-never-granted.md`). Traffic nodes
-that were never launched are reported as exited (expected-not-launched) rather
-than vanishing from the cleanup report.
-
-The same holds for a native-audit wallet that failed before any miner bound
-(partial startup): the lease projection is published by the miner bind, not by
-wallet startup, so its absence is expected-not-launched and never blocks
-cleanup. A lease projection that IS present is verified as persisted metadata
-only - recorded process/config/registry bindings must still match the
-persisted records, fail closed on anything foreign or rewritten - with no live
-wallet, socket, instance or ownership proof required
-(`docs/decisions/2026-11-13-lab-reap-cleanup-native-audit-attach.md`).
-
-For a topology run, normal stop also drops the namespace broker and its owned
-holders. The controller is never re-executed, so its original `flock`, HTTP
-listener and `Child`/stdio handles stay intact. Each real actor is exec'd by an
-`actor-exec` helper which sets `PR_SET_PDEATHSIG=SIGKILL`, verifies the expected
-controller start-time token and parent, and only then execs the actor. The
-broker has the same parent-death boundary. This design must clean up a genuine
-controller `SIGKILL` in bounded time; acceptance uses the packet's explicit
-crash proof rather than assuming it from `Drop`. Normal `reap` remains the
-fallback for old host records, never a claim that a namespaced actor survived
-backend death safely.
-
+The cleanup-only attach path handles never-granted traffic capability and
+native-audit pre-miner startup failures without inventing live capability;
+persisted contradictory/foreign bindings still fail closed. See decisions
+`2026-11-12-lab-reap-cleanup-never-granted` and
+`2026-11-13-lab-reap-cleanup-native-audit-attach`. Topology actors use the
+controller/broker lifetime helpers described in section 10. Preserve all
+unrelated review/feedback services and their state.
 ## 7. Evidence: what is and is not checked
 
-- Scenario assertions require typed `job_issued`, pool `spc_evidence` plus
-  node observations, and at least one accounted record on every declared
-  front. An empty or one-pool run therefore cannot pass the two-pool scenario.
-- `accounted_target_consistency` joins each accounted record to its announced
-  job by `(front, job_id, generation)`, checks target/`m_issue`/booked `d`, and
-  checks the recorded hash against the announced target. It reports
-  `consistent`, `inconsistent` or `unknown` with an explicit checked/not-checked
-  scope. It does **not** recompute the 80-byte header, derive the family target
-  independently, verify DB credit sums, payout, settlement or canonical
-  inclusion; the full header/payout oracle remains `inconclusive`.
-  In this combined namespace candidate the accepted F1 fix is integrated:
-  malformed/non-32-byte hashes increment `malformed_share_hashes` and are
-  `inconsistent`. The older approved host build (`e891f34c` / `d75ab391`)
-  skipped them; that version-bound limitation still applies to the old host
-  artifacts, not to this combined run.
-- The node collector is a **tip sampler**, not continuous canonical coverage or
-  a reorg tracker. A tip is accepted only as an atomic
-  `getbestblockhash` -> `getblockheader` -> matching `getblockhash(height)`
-  triple. A racy or failed read is `unknown`, never a fabricated displacement.
-  Displacements come only from the bounded last-K recheck. Phase observations
-  preserve per-node height/hash/peer views and the actual heal outcome.
-- The scanner records a contiguous cursor, explicit `skipped_heights` and a
-  retry position; it never advances past a failed height.
-- `runtime_metrics` reports requested and measured rates separately,
-  `front_evidence` joins credits/stale/rejected/transport-unknown per front,
-  and counters distinguish submitted/block-qualified/canonical observations.
-  A block-qualified share is not a canonical block.
+Runtime status, a served UI and requested hashrate are observations, not a full
+funded acceptance result. Read the selected run's actual receipts and source
+bindings. The full shared campaign separately checks native funding/maturity,
+independent accounting/history, SP/Ark delivery, refresh/renewal/offboard and
+cleanup. A missing or ambiguous provider/proof stays unknown/inconclusive.
 
-## 8. Provenance and approval gate
+The older host collector's `accounted_target_consistency` joins announced and
+booked evidence; it is not the full independent header/window/payout oracle.
+Requested and measured rates, submitted/block-qualified/canonical results,
+source gaps and stale/unavailable wallet observations remain distinct. Historical
+host/namespace receipts keep their original scopes and are not upgraded by newer
+code or documentation.
 
-The host runtime's source-bound proof and exact binary/store provenance are in
-[`reviews/2026-11-06-lab-runtime-implementation.md`](reviews/2026-11-06-lab-runtime-implementation.md).
-The approved live-driver provenance and gate instructions are in
-[`reviews/2026-11-05-lab-live-implementation.md`](reviews/2026-11-05-lab-live-implementation.md)
-and `testing/regtest-lab-v2-e2e.py` / `testing/lab-live/`. The approved driver
-binds exact LP-1/LP-2/L2 snapshots and refuses an unrelated or rejected hash;
-do not replace that binding with a free-text approval. The combined runtime +
-pool binary needs a new exact manifest/approval for acceptance; a diagnostic
-run is provisional.
+## 8. Provenance and qualification
 
-## 9. Known capability limits
+The current full-profile reproducibility and qualification path is
+[the AP5 guide](../testing/lab-ark-funded/README.md). A successful source/package
+qualification is a prerequisite, not a full funded campaign verdict. Preserve
+the bundle, selected immutable consumer/QA descriptor, generated run inputs,
+actual output paths, source hashes, execution receipts and stop/cleanup result.
+The documentation and `docs/lab-build-report.html` do not replace that verdict.
 
-Do **not** claim from this lab:
+Historical host proofs remain in
+[`2026-11-06-lab-runtime-implementation`](reviews/2026-11-06-lab-runtime-implementation.md)
+and [`2026-11-05-lab-live-implementation`](reviews/2026-11-05-lab-live-implementation.md).
+Their external-L2 and narrower workload limits apply to those recorded runs.
 
-- causal hashrate-budget/retarget response (the baseline node profile has
-  `no_pow_retargeting = true`);
-- full header/window/payout/settlement oracle verification or approved-oracle
-  equivalence;
-- fee/witness workload coverage, the denomination ladder, Ark settlement, SV1
-  interoperability, TDP production integration, or general SV2 interoperability;
-- an Ark server, a pool Ark delivery/float role or an SPc user wallet in the
-  standard scenario. These are **not running in this experiment / planned
-  required integration** for the expanded lab, not permanently optional ideas.
-  The independent Ark server, each pool's operator Ark delivery/float wallet,
-  and every SPc user's registration/receive/refresh wallet are separate work.
-  Operator and miner wallets are distinct. The standard scenario launches no `spc-agent` wallet role and wires no wallet desktop/mobile UI; backend wallet foundation on primary is described in `LAB-ROLES.md` section 3 and is not launched by this run.
-  No wallet mockup is a running role UI, and the throwaway pool payout
-  fixture is not real wallet funds;
-- a green rbitcoin full suite. Only `sv2_tp_bootstrap` passed 6/6; L2 is
-  CLEARED_WITH_RECORDED_BASELINE_LIMITATIONS at `d2f37b91...`;
-- approval of the namespace candidate by the older host review. Use the exact
-  combined source/binary manifest and new Fable verdict instead;
-- Nix-built network tools. `iproute2`, `nftables` and `util-linux` realization
-  remains externally blocked on this host. Host-tool namespace evidence is
-  labelled explicitly and do not imply that the default Nix check exercised it.
-- traffic runs. The `traffic` scenario section, the `traffic_capability`
-  manifest field and the AP-1a projection gate are frozen (see
-  [`reviews/2026-11-08-traffic-contract-implementation.md`](reviews/2026-11-08-traffic-contract-implementation.md)
-  and `docs/decisions/2026-11-08-lab-traffic-contract-t0.md`), and the
-  private history journal contract is version 2 - the full record mirror
-  of the Fable-approved T1a core header, proven against the real writer
-  by the conformance suite (`docs/decisions/2026-11-08-traffic-history-v2.md`)
-  - but no traffic
-  run can start yet: `RunEngine::prepare` rejects every traffic-bearing
-  scenario with `traffic_capability_unrecorded` until a T1 runtime records an
-  approved-lineage, recognized AP-1a projection into the run manifest, and
-  adoption re-checks the same gate before taking the owner lock. A
-  config-declared capability name is never evidence, and no
-  `NODE_CAPABILITIES` claim exists. This is the intended safe-unavailable
-  state, not a regression.
+## 9. Limits and profile selection
 
-The lab's payout policy is the exact `owed` pre-ladder test scope; it does not
-amend the production `DESIGN.md` payout policy. `a_send` and all SPc identity
-material stay on the SPc side; no identity field crosses into the Ark role.
+- A wrapper's one-node, no-traffic preset is not the two-node native-funded
+  profile, even if all its declared processes start and pages load.
+- Periodic-retarget response, production TDP/JD/SV1/general-SV2 interoperability,
+  mainnet and a green full upstream node suite are not established by this guide.
+- Wallet balances/capabilities require their actual providers and source ages.
+  Empty inputs are not a zero-balance assertion; queue submission is not delivery.
+- The full campaign's independent checks and final verdict must actually run.
+  A source-bound contract, successful build, local UI or scoped reaper result
+  does not imply funded or global-cleanup acceptance.
+- The project's payout derivation/tier policy is `DESIGN.md` and SPEC; a lab
+  profile does not authorize a different ladder or donation fallback. SPc
+  identity data stays out of Ark-role inputs (SPEC §11.3).
 
+Sections 10-11 preserve the specific namespace architecture and older external
+node validation context. They are not additional prerequisites for the default
+host/qualified full-profile recipes above.
 ## 10. Namespace ownership, storage and controls
 
 ### Controller and actor lifetime
@@ -432,8 +380,9 @@ Successful acceptance requires:
 
 ## 11. Node contract and provenance for validation waves
 
-This packet keeps the approved external L2 node; it does not upgrade nodes or
-rebase upstream pins. Its recorded binary has SHA-256
+Historical namespace-packet scope: the following recorded external L2 node
+identity is not the current fresh-machine Nix prerequisite (see section 3).
+That recorded binary has SHA-256
 `eb257af7c10cdf0ded584adfadf2ae8124466304b13d26c17f855e76f9320f7c` and
 source snapshot `d2f37b9113e8855245866289ed393043aed6e6153e8101375072cbb23624d499`.
 A stock rbitcoin v0.9.0 binary is not a drop-in: it lacks the lab's
