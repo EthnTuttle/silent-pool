@@ -3,6 +3,7 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -56,7 +57,27 @@ def transaction_fixture():
     return {"raw": raw, "txid": parse_tx(raw)["txid"], "raw_block": block,
             "block_hash": parse_block(block)["hash"], "height": 101, "fee_sats": 100,
             "inputs": [{"raw": parent_raw, "txid": parent_id, "vout": 0, "amount_sats": 120000100,
-                        "raw_block": parent_block, "block_hash": parse_block(parent_block)["hash"], "height": 1}]}
+                         "raw_block": parent_block, "block_hash": parse_block(parent_block)["hash"], "height": 1}]}
+
+
+def probe_fixture(root):
+    # Binding-only archive fixture, never executed or used for Nix admission.
+    # All bytes are public and generated here; no historical bundle is needed.
+    script_root = root / "probe-source"
+    script_root.mkdir()
+    script = script_root / "probe.py"
+    script.write_bytes(b'raise RuntimeError("archive unit fixture must not execute")\n')
+    program = Path(sys.executable).resolve()
+    wrapper = root / "unit-probe-wrapper"
+    wrapper.write_text(f'#!/unit-archive-fixture\nexec {program} {script} "$@"\n')
+    source = root / "probe-source.json"
+    source.write_bytes(encoded({"schema": "spc.lab.ap5.probe-source/v1", "root": str(script_root),
+                               "files": {script.name: sha(script)}}))
+    def ref(path):
+        return {"path": str(path), "sha256": sha(path)}
+    return {"schema": "spc.lab.ap5.probe-invocation/v1", "wrapper": ref(wrapper),
+            "program": ref(program), "script": ref(script), "prefix_args": [str(script)],
+            "runtime_subcommand": "node-probe", "source_manifest": ref(source)}
 
 
 class CleanupReplay(unittest.TestCase):
@@ -103,7 +124,7 @@ class CleanupReplay(unittest.TestCase):
 
 class ComponentReplay(unittest.TestCase):
     def replay(self, data, identity=None):
-        with tempfile.TemporaryDirectory(prefix="ap5-replay-", dir="/tmp/opencode") as tmp:
+        with tempfile.TemporaryDirectory(prefix="ap5-replay-") as tmp:
             path = Path(tmp) / "component.json"
             path.write_bytes(encoded(data))
             return replay_component(Path(tmp), {"id": identity or data["id"], "evidence": {"file": path.name, "sha256": sha(path)}}, None)
@@ -154,14 +175,22 @@ class ComponentReplay(unittest.TestCase):
 
 class ArchiveReplay(unittest.TestCase):
     def test_archive_replay_keeps_partial_diagnostic_inconclusive(self):
-        with tempfile.TemporaryDirectory(prefix="ap5-archive-", dir="/tmp/opencode") as tmp:
-            root = Path(tmp)
+        self.replay_archive()
+
+    def test_sealed_probe_event_and_launch_must_match_bundle(self):
+        for mismatch in ("probe-event", "launch-program", "launch-prefix"):
+            with self.subTest(mismatch=mismatch):
+                self.replay_archive(mismatch)
+
+    def replay_archive(self, mismatch=None):
+        with tempfile.TemporaryDirectory(prefix="ap5-archive-") as tmp:
+            root = Path(tmp).resolve()
             source = root / "source.json"
             source.write_bytes(b"{}")
             ref = {"path": str(source), "sha256": sha(source)}
             bundle = {"binaries": {}, "joined_source_manifest": ref, "joined_validation_receipt": ref,
                        "vtxo_verifier": None, "pool_wallet_executor": None}
-            bundle["probe_invocation"] = json.loads(Path("/tmp/opencode/AP5-probe-and-pid-handoff-r1/probe-invocation.json").read_text())
+            bundle["probe_invocation"] = probe_fixture(root)
             bundle_path = root / "bundle.json"
             bundle_path.write_bytes(encoded(bundle))
             bindings = {**bundle, "bundle_sha256": sha(bundle_path),
@@ -170,9 +199,16 @@ class ArchiveReplay(unittest.TestCase):
             cleanup["inventory"]["processes"].append({"pid": 9999, "start_time_ticks": 42, "role": "controller", "status": "gone_or_reused"})
             reseal_cleanup(cleanup)
             ev = Evidence(root)
-            probe = bundle["probe_invocation"]
+            probe = copy.deepcopy(bundle["probe_invocation"])
+            if mismatch == "probe-event":
+                probe["script"]["sha256"] = "00" * 32
             ev.save("probe-invocation", probe)
-            ev.save("launch", {"argv": ["unit-runtime", "--traffic-probe", probe["program"]["path"], "--traffic-probe-arg", probe["prefix_args"][0]]})
+            argv = ["unit-runtime", "--traffic-probe", probe["program"]["path"], "--traffic-probe-arg", probe["prefix_args"][0]]
+            if mismatch == "launch-program":
+                argv[2] = str(root / "wrong-program")
+            elif mismatch == "launch-prefix":
+                argv[4] = str(root / "wrong-script")
+            ev.save("launch", {"argv": argv})
             ev.save("active-resource-census", cleanup["inventory"]["active_manifest"])
             ev.save("cleanup-inventory", cleanup)
             verdict = native_funding_verdict([], cleanup, bindings)
@@ -186,6 +222,12 @@ class ArchiveReplay(unittest.TestCase):
             # Source/Nix admission has separate tests; this fixture exercises
             # the actual archive/cleanup/result consumer without a built bundle.
             with patch("verify_archive.check_bundle") as admission:
+                if mismatch is not None:
+                    message = "executed probe tuple differs" if mismatch == "probe-event" else "runtime launch probe argv differs"
+                    with self.assertRaisesRegex(Blocked, message):
+                        verify(seal, sha(seal))
+                    admission.assert_called_once_with(bundle, full=False)
+                    return
                 result = verify(seal, sha(seal))
                 admission.assert_called_once_with(bundle, full=False)
             self.assertEqual(result["diagnostic_status"], "inconclusive")
@@ -193,8 +235,8 @@ class ArchiveReplay(unittest.TestCase):
             self.assertEqual(set(result["missing"]), {"fund-server-alice", "fund-server-bob", "fund-pool-a", "fund-pool-b"})
 
     def test_external_seal_and_artifact_mutation_and_truncated_tail(self):
-        with tempfile.TemporaryDirectory(prefix="ap5-seal-", dir="/tmp/opencode") as tmp:
-            root = Path(tmp)
+        with tempfile.TemporaryDirectory(prefix="ap5-seal-") as tmp:
+            root = Path(tmp).resolve()
             ev = Evidence(root)
             path = ev.save("result", {"schema": "spc.lab.ap5.result/v2", "status": "prepared-not-executed"})
             ev.close()
@@ -202,6 +244,19 @@ class ArchiveReplay(unittest.TestCase):
             seal.write_bytes(encoded({"root": str(root), "events_sha256": sha(ev.path), "last_seq": ev.sequence, "last_digest": ev.previous}))
             digest = sha(seal)
             self.assertEqual(len(read_archive(seal, digest)[1]), 1)
+            # Even a correctly hashed seal cannot bind an indirect root.
+            alias = root / "root-alias"
+            alias.symlink_to(root, target_is_directory=True)
+            parent_alias = root / "parent-alias"
+            parent_alias.symlink_to(root.parent, target_is_directory=True)
+            original_seal = seal.read_bytes()
+            indirect = json.loads(original_seal)
+            for indirect_root in (alias, parent_alias / root.name):
+                indirect["root"] = str(indirect_root)
+                seal.write_bytes(encoded(indirect))
+                with self.assertRaisesRegex(Blocked, "AP5 root binding"):
+                    read_archive(seal, sha(seal))
+            seal.write_bytes(original_seal)
             with self.assertRaises(Blocked):
                 read_archive(seal, "00" * 32)
             original = path.read_bytes()

@@ -119,15 +119,17 @@ class Contracts(unittest.TestCase):
     def test_return_address_uses_wallet_role_index_not_receive_index(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            # HASH160 of the compressed secp256k1 generator; public test key.
             script = "76a914751e76e8199196d454941c45d1b3a323f1433bd688ac"
-            journal = root / "journal.jsonl"
+            journal = root / "run" / "journal.jsonl"
+            journal.parent.mkdir()
             journal.write_text(json.dumps({"record": "funding_observed", "owner_role": {"kind": "user_payment", "index": 1},
                                            "index": 7, "script_hex": script}) + "\n")
             ev = Evidence(root)
             c = ap5.Controller({}, {}, root, ev, scenario("run", 1), 10)
             c.manifest = lambda: {"traffic_driver_paths": {"txd-0": {"journal_path": str(journal)}}}
             self.assertEqual(c.return_address("bob"), "mrCDrCybB6J1vRfbwM5hemdJz73FwDBC8r")
-            with self.assertRaises(Blocked):
+            with self.assertRaisesRegex(Blocked, "actual T1 user receive script unavailable"):
                 c.return_address("alice")
             ev.close()
 
