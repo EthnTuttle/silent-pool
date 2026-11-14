@@ -23,8 +23,10 @@ PROFILES = {
                           '41dcb01b9f75ef6605773d5d2467c17024d768cf72b5605abdb135e0dca0494f', 123, 'ap5_bound_t3_r21'),
     't3-controller-r22': ('0d580efb996615ac0889654b021068e7e5d77aa722a17c5da1f0fb66ed489671',
                           '88a2e6d2f07936420041a8903133dcd1ec3932ca8ab3a44f42dc49bfc32715e8', 127, 'ap5_bound_t3_r22'),
+    't3-controller-r23': ('ab928bdbdced8a10b13fe0375dc11de24787ee370eaa634a1e9ca2956617f75d',
+                          'f9b93871aee0b7eea6ebfa7549577de7fce41384b147a565c6d522069e985253', 141, 'ap5_bound_t3_r23'),
 }
-PORTABLE_BYTES = {'t3-controller-r21': 1456511, 't3-controller-r22': 1493665}
+PORTABLE_BYTES = {'t3-controller-r21': 1456511, 't3-controller-r22': 1493665, 't3-controller-r23': 1647413}
 
 
 class BoundModules(importlib.abc.MetaPathFinder, importlib.abc.Loader):
@@ -136,11 +138,11 @@ def import_content(value, content, output, module_name, rows=None):
     module = importlib.import_module(module_name)
     for name in ('prerequisites', 'start', 'bootstrap', 'measured', 'reorg', 'witness', 'audit', 'receipt', 'check', 'result'):
         require(callable(getattr(module.Controller, name, None)), 'shared QA Controller export missing: ' + name)
-    if value['api'] in {'t3-controller-r19', 't3-controller-r20', 't3-controller-r21', 't3-controller-r22'}:
+    if value['api'] in {'t3-controller-r19', 't3-controller-r20', 't3-controller-r21', 't3-controller-r22', 't3-controller-r23'}:
         require(callable(getattr(module, 'operator_arguments', None)), 'shared QA operator export missing')
         runtime = importlib.import_module('source_feed_runtime')
         require(callable(getattr(runtime, 'collector_socket_path', None)), 'shared QA collector-root export missing')
-    if value['api'] in {'t3-controller-r20', 't3-controller-r21', 't3-controller-r22'}:
+    if value['api'] in {'t3-controller-r20', 't3-controller-r21', 't3-controller-r22', 't3-controller-r23'}:
         for name in ('audit_live', 'final_audit_after_drain'):
             require(callable(getattr(module.Controller, name, None)), 'shared QA final API missing: ' + name)
         require(callable(getattr(runtime.CollectorRuntime, 'final_audit_after_drain', None)), 'shared QA final collector API missing')

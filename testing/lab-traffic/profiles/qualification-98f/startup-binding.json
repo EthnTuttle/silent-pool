@@ -1,0 +1,93 @@
+{
+  "schema": "spc.qa.recovered-native-startup-qualification/1",
+  "status": "VERIFIED_SAME_COMPILER_SOURCE_ORIGINAL_NIX_LOG",
+  "package": "/nix/store/d9cl1gi6gs0yv32hq3yxn9ihbkv17pl0-wallet-native-joint-0.1.0",
+  "deriver": "/nix/store/c1qqgs9cp3bh757i776wrwf7k945wfaa-wallet-native-joint-0.1.0.drv",
+  "source_root": "/nix/store/6hwxw1jm24l2is2cd9mnnkxg0i0dsqf7-source",
+  "source_id": "git:98f0e6caa2482646e3c7073949f6388cd39f200b",
+  "log_sha256": "6adfd73e433f5e59361151430b79a8721fa28c28365a82a31c8c05b4c9aa7c24",
+  "descriptor_sha256": "ab44c44bfd8613c5afc7107a8a253cc56f7731e1e154212f450386cd870e303c",
+  "execution_groups": [
+    {
+      "declared": 7,
+      "passed": 7,
+      "ignored": 0
+    },
+    {
+      "declared": 1,
+      "passed": 1,
+      "ignored": 0
+    },
+    {
+      "declared": 6,
+      "passed": 4,
+      "ignored": 2
+    },
+    {
+      "declared": 4,
+      "passed": 3,
+      "ignored": 1
+    },
+    {
+      "declared": 1,
+      "passed": 1,
+      "ignored": 0
+    }
+  ],
+  "required_cases_covered": [
+    "wallet::native_audit::tests::startup_tests::opaque_marker_requires_exact_expected_digest_and_unique_bounded_environment",
+    "wallet::native_audit::tests::startup_tests::native_private_config_requires_canonical_controller_digest",
+    "wallet::native_audit::tests::startup_tests::unaudited_profile_has_no_native_marker_requirement",
+    "wallet::native_audit::tests::startup_tests::exact_marker_does_not_bypass_foreign_process_config_or_registry",
+    "wallet_bridge::native_render::run_token_tests::actual_engine_opaque_and_literal_markers_render_exact_digest",
+    "wallet_bridge::native_render::run_token_tests::run_token_hash_is_not_an_operator_profile_field",
+    "wallet_bridge::native_render::run_token_tests::native_run_token_gate"
+  ],
+  "remaining_cases_without_recovered_pass": [
+    "wallet::native_audit::tests::startup_tests::foreign_network_namespace_is_rejected_before_token_authorization",
+    "engine::native_audit::native_audit_cleanup_tests::cleanup_attaches_a_partial_native_wallet_startup_run",
+    "engine::native_audit::native_audit_cleanup_tests::cleanup_rejects_a_foreign_native_lease_projection",
+    "engine::native_audit::native_audit_cleanup_tests::a_present_lease_projection_is_validated_as_persisted_metadata",
+    "engine::native_audit::native_audit_cleanup_tests::a_present_lease_with_a_rewritten_registry_rejects",
+    "engine::native_audit::native_audit_cleanup_tests::a_present_lease_with_a_replaced_wallet_record_rejects",
+    "engine::native_audit::native_audit_cleanup_tests::a_present_lease_with_a_replaced_miner_peer_record_rejects",
+    "engine::native_audit::native_audit_cleanup_tests::a_present_lease_without_a_wallet_record_rejects",
+    "engine::native_audit::native_audit_cleanup_tests::cleanup_never_signals_a_foreign_wallet_pid",
+    "engine::traffic_runtime::reap_cleanup_tests::persisted_bindings_accept_a_stopped_run",
+    "engine::traffic_runtime::reap_cleanup_tests::live_reverify_refuses_what_cleanup_validation_accepts",
+    "engine::traffic_runtime::reap_cleanup_tests::persisted_bindings_reject_changed_argv",
+    "engine::traffic_runtime::reap_cleanup_tests::persisted_bindings_reject_changed_binary",
+    "engine::traffic_runtime::reap_cleanup_tests::missing_process_record_is_not_a_cleanup_failure",
+    "engine::traffic_runtime::reap_cleanup_tests::never_launched_nodes_are_not_a_cleanup_failure",
+    "engine::traffic_runtime::reap_cleanup_tests::persisted_bindings_reject_record_without_profile",
+    "engine::traffic_runtime::reap_cleanup_tests::partial_provisioning_reaps_the_never_launched_node_too",
+    "engine::traffic_runtime::reap_cleanup_tests::cleanup_attaches_a_never_granted_capability_run",
+    "engine::traffic_runtime::reap_cleanup_tests::reap_never_signals_a_process_it_does_not_own",
+    "engine::traffic_runtime::reap_cleanup_tests::cleanup_rejects_a_present_but_invalid_capability_record",
+    "engine::traffic_runtime::reap_cleanup_tests::persisted_bindings_reject_changed_driver_config"
+  ],
+  "startup_summary": {
+    "schema": "spc.native-startup-gate/1",
+    "source_id": "git:98f0e6caa2482646e3c7073949f6388cd39f200b",
+    "source_path": "/nix/store/6hwxw1jm24l2is2cd9mnnkxg0i0dsqf7-source",
+    "joint_descriptor_sha256": "ab44c44bfd8613c5afc7107a8a253cc56f7731e1e154212f450386cd870e303c",
+    "agent_harness_sha256": "4d4adbd2806832f41da977bd8716e360eb105b50b8f6b9e2633301f46bf0d198",
+    "scope": "real engine token generation/render, Supervisor export, loaded agent config and native service publication; fixture infrastructure; no funded/full-controller acceptance"
+  },
+  "published_cases": [
+    {
+      "traffic": true,
+      "instance_sha256": "2ab36d7972f83d5188cbbbb25f15b545e7322a63eea943ac4a982c2b28492215",
+      "scope": "actual prepared-engine renderer/Supervisor/loaded-config/native-service; fixture infrastructure"
+    },
+    {
+      "traffic": false,
+      "instance_sha256": "19265c006c6b6c232b6a717d75a1157e94c1517aca8909c6958f53215fa8bc8d",
+      "scope": "actual prepared-engine renderer/Supervisor/loaded-config/native-service; fixture infrastructure"
+    }
+  ],
+  "joint_cpu_sha256": "ffb2583364d60f3e92c2f50f9c0fdb9bb73664be3359bf79e828675019094709",
+  "qualified_application_cpu_sha256": "905779b8aed5432f465892a004fe109ba24f5f6f93a0421ea32d3366e9631809",
+  "scope": "same-source compiled startup/retention component tests, not installed-runtime funded acceptance",
+  "runtime_launched_by_reviewer": false
+}

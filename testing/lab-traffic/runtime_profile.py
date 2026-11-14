@@ -15,6 +15,9 @@ from source_jobs import MissingComponent
 
 PROFILE_SHA256='d619692e4d5dadcf146e22e715ced350122621d47656d0decb2434a3d3570371'
 MANIFEST_SHA256='2085d16dc957451547d96d995a52d55302a6581e23fbd3af710f927d9e586524'
+OPAQUE_MANIFEST_SHA256='85a0d7d0d78c8820e28b404f8d7b74ec998fbb1b574d9e3c69ca420a65df3572'
+PROFILES={MANIFEST_SHA256:('runtime-e4.json',PROFILE_SHA256),
+    OPAQUE_MANIFEST_SHA256:('runtime-98f.json','0f7fab9b06c55547f7cb32ee60c7888d87fc15a7142bb1e261f3eaff10932c1e')}
 APP_NAMES={'lab':'spc-lab','pool':'spc-pool','miner':'spc-cpu-miner','agent':'spc-agent','scanner':'spc-scan','txd':'spc-lab-txd'}
 
 
@@ -32,14 +35,14 @@ def sealed(path,expected,limit=32*1024*1024):
     return strict_json(raw)
 
 
-def profile():
-    return sealed(Path(__file__).with_name('profiles')/'runtime-e4.json',PROFILE_SHA256)
+def profile(manifest_sha256=MANIFEST_SHA256):
+    if manifest_sha256 not in PROFILES:raise MissingComponent('reviewed_qualified_runtime_source_profile_unavailable')
+    name,digest=PROFILES[manifest_sha256]
+    return sealed(Path(__file__).with_name('profiles')/name,digest)
 
 
 def selected(binary,role='lab'):
-    if binary.get('source_manifest_sha256')!=MANIFEST_SHA256:
-        raise MissingComponent('reviewed_qualified_runtime_source_profile_unavailable')
-    p=profile();require(p['schema']=='spc.qa.runtime-profile/1','runtime profile schema')
+    p=profile(binary.get('source_manifest_sha256'));require(p['schema']=='spc.qa.runtime-profile/1','runtime profile schema')
     if role not in p['binaries'] or binary.get('sha256')!=p['binaries'][role]:
         raise MissingComponent('reviewed_qualified_runtime_executable_profile_unavailable')
     if 'runtime_profile' in binary:require(binary['runtime_profile']==p['id'],'caller selected another runtime profile')
@@ -54,7 +57,7 @@ def derivation(value,expected):
     if set(value)=={'version','derivations'}:
         require(type(value['version']) is int and value['version']==4,'unsupported Nix derivation format version')
         key=Path(expected).name;require(set(value['derivations'])=={key},'versioned Nix derivation census')
-        result=value['derivations'][key];require(result.get('version')==4,'versioned Nix derivation record version')
+        result=value['derivations'][key];require(type(result.get('version')) is int and result['version']==4,'versioned Nix derivation record version')
         outputs={}
         for name,item in result['outputs'].items():
             raw=item.get('path');require(isinstance(raw,str) and re.fullmatch(r'[a-z0-9]{32}-[^/]+',raw),'versioned Nix output path')
@@ -122,11 +125,27 @@ def verified_source_root(binary,role):
     return root,p
 
 
+def bundle_references(value):
+    checked=0
+    if isinstance(value,dict):
+        if 'path' in value and 'sha256' in value:
+            path=Path(value['path']);require(path.is_absolute() and '..' not in path.parts and path.is_file()
+                and digest(path)==value['sha256'],'selected bundle referenced artifact changed')
+            checked+=1
+        for item in value.values():checked+=bundle_references(item)
+    elif isinstance(value,list):
+        for item in value:checked+=bundle_references(item)
+    return checked
+
+
 def admit(binary,bundle):
     p=selected(binary);root,manifest=compiler_root(binary,p,'lab');rows=source_tree(root,manifest,p);validation=gates(root,p)
+    from runtime_qualification import supplemental
+    extra=supplemental(p)
     if bundle is None:raise MissingComponent('actual_canonical_runtime_bundle_binding_required')
     require(isinstance(bundle,dict) and set(bundle)=={'path','sha256'} and bundle['sha256'] in p['bundle_sha256'],'unreviewed selected runtime bundle profile')
     value=sealed(bundle['path'],bundle['sha256'])
+    references=bundle_references(value) if p.get('verify_all_bundle_refs',False) else 0
     require(value['schema']=='spc.lab.ap5.bundle/v1' and value['scope']=='full' and value['base_revision']==p['base_revision']
         and value['joined_source_manifest']['sha256']==p['source_manifest_sha256']
         and value['joined_validation_receipt']['sha256']==p['joined_validation_sha256'],'selected runtime bundle/source/gates mismatch')
@@ -137,4 +156,5 @@ def admit(binary,bundle):
     return {'entrypoint':'runtime','profile_id':p['id'],'runtime_source_sha256':p['runtime_source_sha256'],
         'binary_sha256':binary['sha256'],'source_manifest_sha256':p['source_manifest_sha256'],'verified_bundle_sha256':bundle['sha256'],
         'verified_source_root':str(root),'verified_deriver':p['deriver'],'source_rows_verified':len(rows),'gate_checks_verified':len(validation['checks']),
-        'phase_owner':'runtime','phase_regressions':p['supplemental_regressions'],'scope':p['admission_scope'],'full_native_audited_campaign':False}
+        'phase_owner':'runtime','phase_regressions':p['supplemental_regressions'],'supplemental_checks_verified':extra,
+        'bundle_references_verified':references,'scope':p['admission_scope'],'full_native_audited_campaign':False}

@@ -1,4 +1,4 @@
-"""Portable final API regression cases, now run against frozen r22 (not live proof)."""
+"""Portable final API regression cases, now run against frozen r23 (not live proof)."""
 from pathlib import Path
 import subprocess
 import sys

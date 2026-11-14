@@ -1,0 +1,10 @@
+source_state: before
+recorded_at: 2026-11-14T18:06:31Z
+HEAD: 98f0e6caa2482646e3c7073949f6388cd39f200b
+status_porcelain: []
+source_contract_files: 1172
+5e50941360619056accf4e81397e41f4c91145c2fe41ce1b26d012c1a0a2d9d6  crates/spc-lab/src/engine/native_audit_cleanup_tests.rs
+a04f1bf14ee9c5ff74a8b6e6a2cbeb6bd84c8fa6bb4f3431a04003456a35aa9e  crates/spc-lab/src/engine/reap_cleanup_tests.rs
+d23f9e3e1f66ddac30a5fe584a80ace03978f76642d51046ce6a19f20a1bce7e  crates/spc-lab/src/engine/native_audit.rs
+0a03029272d6324c911d051677ceed970ec0af4ffef9600ddda6fc5ccdab2b61  crates/spc-lab/src/engine/traffic_runtime.rs
+679905fc6dde56defa9a876dc38dd0b3031dffcbc7e4fea41030f548850c43f8  bins/spc-agent/src/wallet/native_audit/startup_tests.rs

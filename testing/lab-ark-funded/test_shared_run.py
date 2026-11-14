@@ -290,6 +290,21 @@ class SharedRunTests(unittest.TestCase):
         self.assertEqual(qa.stops, 1)
         self.assertTrue(any(e['stage'].startswith('qa_result:') for e in result['errors']))
 
+    def test_started_publication_failure_still_finalizes_once_before_bootstrap(self):
+        qa, ap5, run = self.make()
+        def fail_info(owner, observer):
+            self.assertIs(owner, qa);self.assertIs(observer, ap5)
+            self.assertEqual(qa.runtime_starts, 1)
+            self.assertEqual(qa.bootstrap_observations, 0)
+            raise Blocked('unit run-info publication failure')
+        run.on_started = fail_info
+        result = run.run()
+        self.assertEqual(qa.runtime_starts, 1)
+        self.assertEqual(qa.bootstrap_observations, 0)
+        self.assertEqual(qa.stops, 1)
+        self.assertEqual(qa.drains, 1)
+        self.assertNotEqual(result['execution'], 'observations_finished')
+
     def test_QA_actual_final_class_has_no_legacy_audit_callback_proxy(self):
         class Base:
             def audit_live(self):raise AssertionError('export inspection only')
@@ -330,7 +345,7 @@ class SharedRunTests(unittest.TestCase):
             finally:
                 ev.close()
 
-    def test_portable_QA_r22_import_and_descriptor_tamper_refusal(self):
+    def test_portable_QA_r23_import_and_descriptor_tamper_refusal(self):
         # Fresh interpreter avoids global module-name collisions. Imports only;
         # no Controller construction, actors, services or source observer start.
         code = '''
@@ -351,8 +366,8 @@ with tempfile.TemporaryDirectory(prefix='ap5-qa-code-') as t:
  import source_feed_runtime
  assert callable(source_feed_runtime.CollectorRuntime.final_drain)
  assert callable(source_feed_runtime.CollectorRuntime.close)
- print('PORTABLE_R22_IMPORT_ONLY_PASS')
+ print('PORTABLE_R23_IMPORT_ONLY_PASS')
 '''
         result = subprocess.run([sys.executable, '-B', '-c', code], cwd=Path(__file__).parent, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertIn(b'PORTABLE_R22_IMPORT_ONLY_PASS', result.stdout)
+        self.assertIn(b'PORTABLE_R23_IMPORT_ONLY_PASS', result.stdout)

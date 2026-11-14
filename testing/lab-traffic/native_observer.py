@@ -93,7 +93,8 @@ def bind_connection(config,w,reg,observed,route):
             and peer["identity"]==config["identity"] and peer["pool_id"]==w["pool_id"] and peer["front_id"]==w["front_id"]
             and peer["connection_config_digest"]==a["connection_config_digest"]
             and peer["config_path"]==route["miner_config_path"] and observed["uid"]==w["process"]["uid"]
-            and observed["boot_id"]==w["process"]["boot_id"],"native registry observed process/config mismatch")
+            and observed["boot_id"]==w["process"]["boot_id"]
+            and observed['run_token_sha256']==w['process']['run_token_sha256'],"native registry observed process/config mismatch")
     require(all(worker["ntime_policy"]=="hold" for worker in config["workers"]),"native immutable ntime required")
     return {"config":config,"wallet":w,"registry":reg,"observed_miner":observed,"route":route}
 

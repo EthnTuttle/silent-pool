@@ -69,12 +69,13 @@ def observe_process(record,root,binary,supervisor_pid):
     require(config.stat().st_nlink==1 and stat.S_IMODE(config.parent.stat().st_mode)==0o700,"native private config link/directory")
     args=[v.decode() for v in (proc/"cmdline").read_bytes().split(b"\0") if v]
     require(option(args,"--config")==str(config),"native actual argv/config binding")
-    env=(proc/"environ").read_bytes().split(b"\0")
-    tokens=[v.split(b"=",1)[1] for v in env if v.startswith(b"SPC_LAB_RUN_TOKEN=")]
-    require(tokens==[record["run_token"].encode()],"native actual selected run token")
+    from native_scope import process_digest
+    token_hash=process_digest(proc,record)
+    require(os.readlink(proc/'ns/net')==os.readlink(f'/proc/{supervisor_pid}/ns/net')==os.readlink('/proc/self/ns/net'),
+        'native observed process namespace mismatch')
     raw=private_bytes(config,root);uid=proc.stat().st_uid
     result={"pid":pid,"uid":uid,"start_time_ticks":before["start_time_ticks"],"boot_id":Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
-        "executable_sha256":list(bytes.fromhex(binary["sha256"])),"run_token_sha256":list(hashlib.sha256(tokens[0]).digest()),
+        "executable_sha256":list(bytes.fromhex(binary["sha256"])),"run_token_sha256":list(token_hash),
         "config_sha256":list(hashlib.sha256(raw).digest())}
     require(ProcFS().identity(pid)==before,"native process changed during observation");validate_process(result)
     return result,str(config)
@@ -189,6 +190,8 @@ class NativeCapture:
         observed,config=observe_process(wallet_records[0],c.run,c.binding["binaries"]["agent"],manifest["locks"]["pid"])
         require(w["process"]==observed and w["config_path"]==config,"native actual wallet process/config")
         wallet_config=private_bytes(Path(config),c.run)
+        from native_scope import wallet_scope
+        scope_binding=wallet_scope(wallet_config,w,observed,manifest,c.run_id)
         for section,name,expected in (("upstream","sp_address",base["identity"]),("upstream","address",base["endpoint"]),
                 ("upstream","authority_public_key",base["authority_public_key"]),("ark","datadir",str(datadir)),
                 ("ark.native_audit","collector_pubkey",w["collector_pubkey"]),("ark.native_audit","pool_pubkey",w["pool_pubkey"])):
@@ -218,6 +221,7 @@ class NativeCapture:
         actual_miner,actual_path=observe_process(record,c.run,c.binding["binaries"]["miner"],manifest["locks"]["pid"])
         require(peer["config_path"]==actual_path,"native registered/observed miner config path")
         config={**base,"source_audit":a};bound=bind_connection(config,w,reg,actual_miner,route)
+        bound['wallet_scope']=scope_binding
         key=(miner,declared["id"])
         if key in self.bindings and self.bindings[key]!=bound:raise MissingComponent("native_rebind_historical_registry_capture")
         self.bindings[key]=bound

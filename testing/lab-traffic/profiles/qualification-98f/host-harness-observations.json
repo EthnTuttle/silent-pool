@@ -1,0 +1,492 @@
+{
+  "schema": "spc.qa.host-test-harness-observation/1",
+  "scope": "read-only current harness and dependency-source observation, paired with owner original before/after receipts; not a new test execution",
+  "observed": [
+    {
+      "binary": "/home/ethan/code/silent-pool/target/debug/deps/spc_lab-f3bcfb8750da4fc3",
+      "sha256": "c4a26debf3b33cc422f1ef736a5293639290f37860ee341dd6d90a46a14422c1",
+      "dependency_file_sha256": "da6da7df25eff6a0ec9ba31996619e9c5468f4d42b95b005103ac1ea84cea023",
+      "matched_compiler_source_dependency_files": 54,
+      "dependency_source_rows": [
+        {
+          "bytes": 45047,
+          "path": "crates/spc-lab/src/access.rs",
+          "sha256": "a2fd61ef9c519420c798a0481479dc18915249c8a336dbb52e69799602abf922"
+        },
+        {
+          "bytes": 30221,
+          "path": "crates/spc-lab/src/adapters.rs",
+          "sha256": "eeca8ab494d44afa14e01403b623b94a45e59b741549f9c6a69f21e1766c71fc"
+        },
+        {
+          "bytes": 12267,
+          "path": "crates/spc-lab/src/ark_acl_tests.rs",
+          "sha256": "5b57cc2427d7d10f10877b936acd96e0f26c9a452cc397c3c13226a648eff8f1"
+        },
+        {
+          "bytes": 27136,
+          "path": "crates/spc-lab/src/ark_service.rs",
+          "sha256": "7cff623891fb1bd279cee0f423bd5f972785383aaa6dadfd01d0c7857f23ae67"
+        },
+        {
+          "bytes": 11793,
+          "path": "crates/spc-lab/src/artifacts.rs",
+          "sha256": "49191720e120a5fe93bda793933e20ec9d08ec1d7e7652dd94af0c47bf441e0f"
+        },
+        {
+          "bytes": 42313,
+          "path": "crates/spc-lab/src/command.rs",
+          "sha256": "1c40b1106e7e3995fbe0434e308c44737f4ea1d88ac989f808efb63effab9f28"
+        },
+        {
+          "bytes": 31958,
+          "path": "crates/spc-lab/src/command/traffic_audit.rs",
+          "sha256": "ac1c3c4bc07b5c2c70c04002294380fcc2fa47cd91a6f996816844567b3a57cf"
+        },
+        {
+          "bytes": 29834,
+          "path": "crates/spc-lab/src/command/traffic_budget.rs",
+          "sha256": "26def0ffffedc3ee0039210a8edfac7b854ce25a4324b2911d2412e46af77f1d"
+        },
+        {
+          "bytes": 32494,
+          "path": "crates/spc-lab/src/config.rs",
+          "sha256": "804ebe2f778dd68bcbc035a4fa063fe78323c60e21c5babc9f49990c4aa37ac6"
+        },
+        {
+          "bytes": 11497,
+          "path": "crates/spc-lab/src/convergence.rs",
+          "sha256": "1831127e9cd38c55e9717142cef37b8b9a15bf4ce1397f245daf6b45a825715b"
+        },
+        {
+          "bytes": 156202,
+          "path": "crates/spc-lab/src/engine.rs",
+          "sha256": "6ca5a113ca3ce83b4d71ff79d5a4c210170598fb6a4bb834fd57d466f566ce42"
+        },
+        {
+          "bytes": 14278,
+          "path": "crates/spc-lab/src/engine/acceptance_followup_tests.rs",
+          "sha256": "8390c7ab4b6a23eed636f318a0b501419f3aeff00757f2657bb1c0eb9e590741"
+        },
+        {
+          "bytes": 33121,
+          "path": "crates/spc-lab/src/engine/native_audit.rs",
+          "sha256": "d23f9e3e1f66ddac30a5fe584a80ace03978f76642d51046ce6a19f20a1bce7e"
+        },
+        {
+          "bytes": 36223,
+          "path": "crates/spc-lab/src/engine/native_audit_cleanup_tests.rs",
+          "sha256": "5e50941360619056accf4e81397e41f4c91145c2fe41ce1b26d012c1a0a2d9d6"
+        },
+        {
+          "bytes": 21892,
+          "path": "crates/spc-lab/src/engine/reap_cleanup_tests.rs",
+          "sha256": "a04f1bf14ee9c5ff74a8b6e6a2cbeb6bd84c8fa6bb4f3431a04003456a35aa9e"
+        },
+        {
+          "bytes": 128309,
+          "path": "crates/spc-lab/src/engine/traffic_runtime.rs",
+          "sha256": "0a03029272d6324c911d051677ceed970ec0af4ffef9600ddda6fc5ccdab2b61"
+        },
+        {
+          "bytes": 520,
+          "path": "crates/spc-lab/src/error.rs",
+          "sha256": "a44791843bd30fec56fc199ad265b68728f78db31b55c2c0b9bc3283b080a901"
+        },
+        {
+          "bytes": 45400,
+          "path": "crates/spc-lab/src/evidence.rs",
+          "sha256": "08447e03cfb66f7f5aecb785c0e45a9addb49f58b67d0064294afe2ec89a4b7a"
+        },
+        {
+          "bytes": 49023,
+          "path": "crates/spc-lab/src/http.rs",
+          "sha256": "e692818d28559750d4f2ad5b1bdabf53ec4529225b8cd7fce26b441129019858"
+        },
+        {
+          "bytes": 5853,
+          "path": "crates/spc-lab/src/ids.rs",
+          "sha256": "b832cfc79b7e1321c7cb84ae88dde021cef1464916d23d2976e33548a0eb44ec"
+        },
+        {
+          "bytes": 40516,
+          "path": "crates/spc-lab/src/inventory.rs",
+          "sha256": "440efaafcdbf29604c34ee10f7b6cb8fe1b7dbbd2c620e157667c98db44d5692"
+        },
+        {
+          "bytes": 1818,
+          "path": "crates/spc-lab/src/lib.rs",
+          "sha256": "76e49717a44d487010f7857b64112979ae4f231aed584dcd24c24fc648e59d55"
+        },
+        {
+          "bytes": 3985,
+          "path": "crates/spc-lab/src/links/mod.rs",
+          "sha256": "3a1f305b8c239ff85dca61b8a004f250bf072324a839411dccd6f279cd80db09"
+        },
+        {
+          "bytes": 11426,
+          "path": "crates/spc-lab/src/links/netns.rs",
+          "sha256": "0032175e4d388640e2ccaaf86656f77fae65fdc11c431424b11331b0c66be5de"
+        },
+        {
+          "bytes": 11110,
+          "path": "crates/spc-lab/src/manifest.rs",
+          "sha256": "d8a028952ae4b6d3e84d384dfbf5a121d2fa0275d348600bf2da57aa0409b97b"
+        },
+        {
+          "bytes": 46457,
+          "path": "crates/spc-lab/src/namespace.rs",
+          "sha256": "abfecaeea77287d33786419fac5b29602f5a4fdae42c46619333d74019710b5d"
+        },
+        {
+          "bytes": 12346,
+          "path": "crates/spc-lab/src/oracle.rs",
+          "sha256": "ef419093e8d9d8bfade06b9e73017e82ef8251ed56543861b1381435a47a1f2b"
+        },
+        {
+          "bytes": 13308,
+          "path": "crates/spc-lab/src/resource.rs",
+          "sha256": "38f860af4031005a4c59fd31dee6b20afdf17968822cd4f3d2c4f83334212ebc"
+        },
+        {
+          "bytes": 191385,
+          "path": "crates/spc-lab/src/runtime.rs",
+          "sha256": "78c81ae25b7794d93ab88a1842ab2fe45a5e2a3c3e0c1ac978944cedea8283e0"
+        },
+        {
+          "bytes": 66110,
+          "path": "crates/spc-lab/src/scenario.rs",
+          "sha256": "65186aff66333adc8f882230ef931307ff239ae5e1afe5dbbe5f03b25380543f"
+        },
+        {
+          "bytes": 5497,
+          "path": "crates/spc-lab/src/secrets.rs",
+          "sha256": "f708de1bb8dcea8add357a4ca46c005e2e5b5684c00de08c67d15ce6cce418e3"
+        },
+        {
+          "bytes": 11709,
+          "path": "crates/spc-lab/src/spc_evidence.rs",
+          "sha256": "dfb92ad44966095262558383100b8c27f332cd0d03d1bd59bba2196002df585c"
+        },
+        {
+          "bytes": 37323,
+          "path": "crates/spc-lab/src/supervisor.rs",
+          "sha256": "cdd72fdbf76299c2375c78ee588cb02aa94bf45977b9db60366820dcb561e30b"
+        },
+        {
+          "bytes": 24470,
+          "path": "crates/spc-lab/src/topology.rs",
+          "sha256": "1b92bdfed1020c3fd0c274fb6d5db6a37b21785b5daf52ba76aa5b97c9f3ec94"
+        },
+        {
+          "bytes": 9045,
+          "path": "crates/spc-lab/src/traffic/commands.rs",
+          "sha256": "5afeaefff02082ba2daaad93b387fa4043a4050c088d066eeee7353353f1634d"
+        },
+        {
+          "bytes": 7265,
+          "path": "crates/spc-lab/src/traffic/completion.rs",
+          "sha256": "d62be567d2eb8dbad39d30a76bf2f028da743938db49323084da3943d2cdeac3"
+        },
+        {
+          "bytes": 3825,
+          "path": "crates/spc-lab/src/traffic/consumer.rs",
+          "sha256": "079a548a46b9268a4e114085075ae87447f28c668867edb93bdacf3ebebbf4db"
+        },
+        {
+          "bytes": 37220,
+          "path": "crates/spc-lab/src/traffic/control.rs",
+          "sha256": "61f44dffd39cde37622ac406f99c318642fc9b84e05d0f16c742f67a5ebaf471"
+        },
+        {
+          "bytes": 15836,
+          "path": "crates/spc-lab/src/traffic/launch_profile.rs",
+          "sha256": "010cf647f6b20fd31e25ff25993f084c7ff87423eae90b144152e649d2b9ef05"
+        },
+        {
+          "bytes": 3648,
+          "path": "crates/spc-lab/src/traffic/mod.rs",
+          "sha256": "451ed8a1fbca96c79dfd2b5af6643a5e6e2ff1e9cb00e64d985eb71a56471e18"
+        },
+        {
+          "bytes": 10918,
+          "path": "crates/spc-lab/src/traffic/payment_view.rs",
+          "sha256": "09241d6d57651cfe2648b72acbc052c710e8127fcb6b30d14572878d0ace8cce"
+        },
+        {
+          "bytes": 68860,
+          "path": "crates/spc-lab/src/traffic/projection.rs",
+          "sha256": "3c5f1c31087841d11ced25b1e15363b23e7c10ba54a788d4b3566ad9eef05314"
+        },
+        {
+          "bytes": 26920,
+          "path": "crates/spc-lab/src/traffic/protocol.rs",
+          "sha256": "2af25c05b6d5e5f9cfdb3415e5a7ec493dd4544a2707ef13895417d0a0e783fc"
+        },
+        {
+          "bytes": 4263,
+          "path": "crates/spc-lab/src/traffic/rpc.rs",
+          "sha256": "de80263c37af08a30dedfe609632132dc9118065ed37d74452729e633a7295a7"
+        },
+        {
+          "bytes": 5075,
+          "path": "crates/spc-lab/src/traffic/runtime.rs",
+          "sha256": "e9c1f3682949f9a472997aea5214721fb03bc047ce56e4862ea4870a8ec6ba37"
+        },
+        {
+          "bytes": 32454,
+          "path": "crates/spc-lab/src/traffic/spec.rs",
+          "sha256": "5ad08a455dc8d787ba87533c4022be30a7ec12130ce6b11dc88d37be3dda1183"
+        },
+        {
+          "bytes": 15879,
+          "path": "crates/spc-lab/src/wallet_aggregate_binding.rs",
+          "sha256": "907a56852351ae715225e649ecd64759bddf478d82badf26d34c405460c84da9"
+        },
+        {
+          "bytes": 11297,
+          "path": "crates/spc-lab/src/wallet_aggregate_binding_tests.rs",
+          "sha256": "682378df2bb7140820a3c9a5e397c1810e3eae04c5c12bcf06dbcbb481429338"
+        },
+        {
+          "bytes": 16440,
+          "path": "crates/spc-lab/src/wallet_bridge.rs",
+          "sha256": "2915fd2bec899e9674035b7995620c3648ee23ae57e88404e501fa712e4d1add"
+        },
+        {
+          "bytes": 8914,
+          "path": "crates/spc-lab/src/wallet_control.rs",
+          "sha256": "bc90cd22a619a068e71dc34bd145ebd20c34ecdda978693d98845817f730491d"
+        },
+        {
+          "bytes": 11410,
+          "path": "crates/spc-lab/src/wallet_native_render.rs",
+          "sha256": "d42315c11f7c0fd218247b897ab4a4b3d5a973b322f6df485c2c9246dccd041e"
+        },
+        {
+          "bytes": 19453,
+          "path": "crates/spc-lab/src/wallet_native_run_token_tests.rs",
+          "sha256": "a156a7ba900caaea9c22706d24422314f91742b43f5140d3f496f9cb0c76b741"
+        },
+        {
+          "bytes": 16061,
+          "path": "crates/spc-lab/src/wallet_projection.rs",
+          "sha256": "35cb5958a9b64ffbd68ac1e5adfd99d5ba171436a715012853c154c229d28583"
+        },
+        {
+          "bytes": 14104,
+          "path": "crates/spc-lab/src/wide.rs",
+          "sha256": "0dd4c9f243433787ed8ffaeaeb9d969cbc16c62ea60466ae273077a4db07ba91"
+        }
+      ],
+      "build_anchor_lines": [
+        "# env-dep:SPC_BUILD_SOURCE_ID",
+        "# env-dep:SPC_NATIVE_STARTUP_AGENT_HARNESS",
+        "# env-dep:SPC_NATIVE_STARTUP_AGENT_SHA256"
+      ]
+    },
+    {
+      "binary": "/home/ethan/code/silent-pool/target/debug/deps/spc_agent-f760ac42d8402846",
+      "sha256": "c74d48f043fdbb811fe0bf1bd9aeb5a840039ffc0f743a9c5250126d5d5e3fd6",
+      "dependency_file_sha256": "93b5e4bb40889ba00bfe30a3f7b446571bf5a2e4917fb34ccf401cfff225c084",
+      "matched_compiler_source_dependency_files": 37,
+      "dependency_source_rows": [
+        {
+          "bytes": 30280,
+          "path": "bins/spc-agent/src/config.rs",
+          "sha256": "c739d390d7887095e81047215af3c045a446363e05605d067a2b608f75aeeebd"
+        },
+        {
+          "bytes": 69463,
+          "path": "bins/spc-agent/src/jdc.rs",
+          "sha256": "f4f95e4b9ecf6fe1ca7b384405d83ef2caffe4d791fccb2153e84f5667ab261b"
+        },
+        {
+          "bytes": 866,
+          "path": "bins/spc-agent/src/lib.rs",
+          "sha256": "b9cdafefe3922d537cfc23f01a53fcd4800c9942f13918b68c2fcf080b7fc7ce"
+        },
+        {
+          "bytes": 30025,
+          "path": "bins/spc-agent/src/source_feed.rs",
+          "sha256": "756807b897326a0ad00a78496b2c12176294750261d717ffeea6519edad7c0bb"
+        },
+        {
+          "bytes": 31276,
+          "path": "bins/spc-agent/src/sv2_client.rs",
+          "sha256": "119deff382b0feed007aac8513903c56519e8c3f6698c1d3d7a1fcb48f89d704"
+        },
+        {
+          "bytes": 8721,
+          "path": "bins/spc-agent/src/translator.rs",
+          "sha256": "1e48e78efb2a9272a54415563487778dce2d2da68151aabf91bf92dfdde69b28"
+        },
+        {
+          "bytes": 6959,
+          "path": "bins/spc-agent/src/verify.rs",
+          "sha256": "2ce503b0b4b0bbb2bc5b774f800987a1a8d9d9d1e3f2cbd1bed6c873fe58fe0a"
+        },
+        {
+          "bytes": 17283,
+          "path": "bins/spc-agent/src/wallet/aggregate_api.rs",
+          "sha256": "67c199ed0876ec5f011446ad4512bb4e8ee44a59aa6ed6e19352f22183fc38e1"
+        },
+        {
+          "bytes": 15761,
+          "path": "bins/spc-agent/src/wallet/aggregate_receive.rs",
+          "sha256": "1e45d7abb2de0dc0560b2ccdd04516120dca1175e968d8018c4a8184f8e833a2"
+        },
+        {
+          "bytes": 28283,
+          "path": "bins/spc-agent/src/wallet/aggregate_tests.rs",
+          "sha256": "56974db7751b6479e2cdd385d765b891fbeaab2eeafcb817e764c8a5a454b032"
+        },
+        {
+          "bytes": 19073,
+          "path": "bins/spc-agent/src/wallet/aggregate_watch.rs",
+          "sha256": "9904058b74557eccb13445d4a6dcde4f5d8eb4655bb67e3112b73310e3b0112c"
+        },
+        {
+          "bytes": 16810,
+          "path": "bins/spc-agent/src/wallet/audit_regressions.rs",
+          "sha256": "857517f5976a1dddfb6281ad4134752d5c872ca59ee8288357042331114e2151"
+        },
+        {
+          "bytes": 36093,
+          "path": "bins/spc-agent/src/wallet/bark_store.rs",
+          "sha256": "75ddbd603099ae4cccfa04bb5ba077eaaf37991489d84356bc6aadc1b8ec9e20"
+        },
+        {
+          "bytes": 31840,
+          "path": "bins/spc-agent/src/wallet/keys.rs",
+          "sha256": "dc36f307e5421b859ecb2dd570387a3dbb269a386de2f9c41b73b1955de5b49c"
+        },
+        {
+          "bytes": 4466,
+          "path": "bins/spc-agent/src/wallet/live_bark.rs",
+          "sha256": "96c9559d264fe2874483ac9156bcd84115213b3520d6d119c0abcfa59a32dea2"
+        },
+        {
+          "bytes": 16577,
+          "path": "bins/spc-agent/src/wallet/live_receive.rs",
+          "sha256": "30633a3f3a8d23a7f1a9313c95650aaeff6c8d3556f5f87d6f753108e8b91afd"
+        },
+        {
+          "bytes": 8095,
+          "path": "bins/spc-agent/src/wallet/live_registration.rs",
+          "sha256": "49ec644d9b014e6eda2708c5975d30983beefc5666e51538056896929bc82dea"
+        },
+        {
+          "bytes": 47258,
+          "path": "bins/spc-agent/src/wallet/maintenance.rs",
+          "sha256": "add712fd8ba02a8cdccfecc17455f927357e563374e6dcf4e895a34699083b2e"
+        },
+        {
+          "bytes": 36895,
+          "path": "bins/spc-agent/src/wallet/mod.rs",
+          "sha256": "68d48544ded4a1ce9b19e13a6f3a0e5e7ad469454ad9559fd9b776df232c5486"
+        },
+        {
+          "bytes": 28628,
+          "path": "bins/spc-agent/src/wallet/native_audit.rs",
+          "sha256": "a6ab6a30813ff9d00671a7c41625d2f29fff1d268e4829a1e763321b1f8a50ef"
+        },
+        {
+          "bytes": 8750,
+          "path": "bins/spc-agent/src/wallet/native_audit/joint_artifact.rs",
+          "sha256": "b567278fc587cae4fd3cb9a7acf0776344e8d1026522e735320afd6051a562f5"
+        },
+        {
+          "bytes": 26408,
+          "path": "bins/spc-agent/src/wallet/native_audit/joint_test.rs",
+          "sha256": "fe16570f64de7b8d768d672c4ac51a0986fe05d7d9877a52d7f37155648aac47"
+        },
+        {
+          "bytes": 8902,
+          "path": "bins/spc-agent/src/wallet/native_audit/startup_tests.rs",
+          "sha256": "679905fc6dde56defa9a876dc38dd0b3031dffcbc7e4fea41030f548850c43f8"
+        },
+        {
+          "bytes": 21490,
+          "path": "bins/spc-agent/src/wallet/native_audit/tests.rs",
+          "sha256": "ed4ae2bb3c5afdf7b38417f552a7369062345cc4f0a39123f050548d30e38d9a"
+        },
+        {
+          "bytes": 7085,
+          "path": "bins/spc-agent/src/wallet/native_audit_io.rs",
+          "sha256": "db4553d6168b1d5ab5e672e9f42e0cc66aa572a0e706188f959180d8d035a953"
+        },
+        {
+          "bytes": 9176,
+          "path": "bins/spc-agent/src/wallet/native_audit_service.rs",
+          "sha256": "717131c2b4c4fcfd4dab6455f9a1ddf093898b2626c2eb1ce3d1686e1fe55832"
+        },
+        {
+          "bytes": 12575,
+          "path": "bins/spc-agent/src/wallet/native_audit_service_tests.rs",
+          "sha256": "e8fecb202ccf5bf3ddeee069f46b0ba7deaa284902cb9fc2e74d794138b92aa1"
+        },
+        {
+          "bytes": 4801,
+          "path": "bins/spc-agent/src/wallet/native_source_audit.rs",
+          "sha256": "3cf058056c684bcad3d8088273fb9d77fc2b65863361f2ddf81d42f579ec9a67"
+        },
+        {
+          "bytes": 10663,
+          "path": "bins/spc-agent/src/wallet/native_source_audit_tests.rs",
+          "sha256": "b5815905a02621f0f73e95e20f52dcd2311c13d5b1bb7db2ddc2bc1bd1af8662"
+        },
+        {
+          "bytes": 6557,
+          "path": "bins/spc-agent/src/wallet/provision.rs",
+          "sha256": "cf132ab99e6e5adf1bb15e424dbdb1715263d1f90377b456a0a7abfa4d346e90"
+        },
+        {
+          "bytes": 22384,
+          "path": "bins/spc-agent/src/wallet/receive.rs",
+          "sha256": "01b483db1860175af21f9e138f94c6bdcdd9dd2e61b3b656f30cd6f0917fc51f"
+        },
+        {
+          "bytes": 41120,
+          "path": "bins/spc-agent/src/wallet/registration.rs",
+          "sha256": "388399b4f5fe8b24e28f95b069ef947c01f0ed5b11923962bcc8cd0da7adacc1"
+        },
+        {
+          "bytes": 25295,
+          "path": "bins/spc-agent/src/wallet/round.rs",
+          "sha256": "10da12d69435470e4920fa8dfb8bbfbf64f24918f4dd7b3597957b23f8eac3f6"
+        },
+        {
+          "bytes": 13892,
+          "path": "bins/spc-agent/src/wallet/scan.rs",
+          "sha256": "48706d13c0f3e74b66bde5d9d55a93b24b55ccc39a2b0dbd9634d9c96e7db567"
+        },
+        {
+          "bytes": 64426,
+          "path": "bins/spc-agent/src/wallet/state.rs",
+          "sha256": "3eca6a9db6e6d6191b5e910cdf91fa1aab5883ef51d04ca46a5daa3ee7335e86"
+        },
+        {
+          "bytes": 16832,
+          "path": "bins/spc-agent/src/wallet/status.rs",
+          "sha256": "48a86a623f56141cf9ad7d4475c4cfe9eb5ca01aee3a4e103c6a37b92afae8af"
+        },
+        {
+          "bytes": 23096,
+          "path": "bins/spc-agent/src/wallet/ui_inputs.rs",
+          "sha256": "4fd63d2832c476dce0849953a35320ad4da11cd757be5b534007559acb453b04"
+        }
+      ],
+      "build_anchor_lines": [
+        "# env-dep:SPC_BUILD_SOURCE_ID",
+        "# env-dep:SPC_JOINT_CPU_DRV",
+        "# env-dep:SPC_JOINT_CPU_DRV_SHA256",
+        "# env-dep:SPC_JOINT_CPU_OUTPUT",
+        "# env-dep:SPC_JOINT_DESCRIPTOR",
+        "# env-dep:SPC_JOINT_DESCRIPTOR_SHA256",
+        "# env-dep:SPC_JOINT_SOURCE_NAR_SHA256",
+        "# env-dep:SPC_JOINT_TEST_SOURCE"
+      ]
+    }
+  ]
+}

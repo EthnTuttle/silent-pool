@@ -1,4 +1,4 @@
-"""Reject damaged or self-resealed r22 packages before importing controller code."""
+"""Reject damaged or self-resealed current packages before importing controller code."""
 import json
 import os
 from pathlib import Path
@@ -29,7 +29,7 @@ class R22SourceIntake(unittest.TestCase):
                 elif case in {'census', 'old-byte-census'}:
                     data = json.loads(manifest.read_text())
                     if case == 'census':data['files'].pop()
-                    else:data['source_bytes'] = 1456511
+                    else:data['source_bytes'] = 1493665
                     manifest.write_text(json.dumps(data))
                     value['manifest']['sha256'] = sha(manifest)
                 elif case == 'root':value['archive']['path'] = '../original/source.tar.gz'

@@ -1,4 +1,4 @@
-"""Invoke the reviewed source-owned r22 exporter; hashes grant no live capability."""
+"""Invoke the reviewed source-owned r23 exporter; hashes grant no live capability."""
 import hashlib
 from pathlib import Path
 import subprocess
@@ -7,19 +7,19 @@ import sys
 from common import require, sha
 from pool_control import strict_json
 
-QA_API = 't3-controller-r22'
-QA_MANIFEST_SHA256 = '88a2e6d2f07936420041a8903133dcd1ec3932ca8ab3a44f42dc49bfc32715e8'
-QA_ARCHIVE_SHA256 = '0d580efb996615ac0889654b021068e7e5d77aa722a17c5da1f0fb66ed489671'
-QA_FILES = 127
-QA_BYTES = 1493665
-EXPORTER_SHA256 = 'c0ff78afd921d52bf85485842ecf40d8605394d83722b0beb2ead8efc30e506d'
+QA_API = 't3-controller-r23'
+QA_MANIFEST_SHA256 = 'f9b93871aee0b7eea6ebfa7549577de7fce41384b147a565c6d522069e985253'
+QA_ARCHIVE_SHA256 = 'ab928bdbdced8a10b13fe0375dc11de24787ee370eaa634a1e9ca2956617f75d'
+QA_FILES = 141
+QA_BYTES = 1647413
+EXPORTER_SHA256 = '53e5b4af3e5dea058315b84a175cfd1a981a11bfb8467f27ff0e643020a957a6'
 
 
 def exporter(repo):
     repo = Path(repo).resolve(strict=True)
     path = repo / 'testing/lab-traffic/portable_source.py'
     require(not path.is_symlink() and path.resolve().is_relative_to(repo) and sha(path) == EXPORTER_SHA256,
-            'QA exporter differs from reviewed r22 source')
+            'QA exporter differs from reviewed r23 source')
     return repo, path
 
 
@@ -37,7 +37,7 @@ def qa_manifest(repo, require_approved=True):
     if require_approved:
         require(len(rows) == QA_FILES and value['source_bytes'] == QA_BYTES
                 and hashlib.sha256(raw).hexdigest() == QA_MANIFEST_SHA256,
-                'QA source differs from reviewed r22 source/mode/byte census')
+                'QA source differs from reviewed r23 source/mode/byte census')
     return value, raw
 
 

@@ -78,8 +78,9 @@ class MirrorCapture:
 
 class SharedCoordinator:
     """Single serial owner; finalization does not recurse into QA.cleanup()."""
-    def __init__(self, qa, ap5, validate_binding):
+    def __init__(self, qa, ap5, validate_binding, on_started=None):
         self.qa, self.ap5, self.validate_binding = qa, ap5, validate_binding
+        self.on_started = on_started
         self.state = 'new'
         self.lock = threading.Lock()
         self.outcome = {'execution': 'not_started', 'drain': 'not_attempted', 'final_audit': 'not_attempted', 'cleanup': 'not_attempted'}
@@ -133,6 +134,8 @@ class SharedCoordinator:
             self.validate_binding(self.qa, self.ap5)
             self.qa.start()  # Sole runtime constructor; Runtime owns bootstrap.
             self.ap5.adopt_shared_runtime(self.qa)
+            if self.on_started is not None:
+                self.on_started(self.qa, self.ap5)
             self.qa.bootstrap()  # Observes original phase; never HTTP bootstrap.
             self.ap5.observe_started_runtime()
             # Run the real funded QA phases before creating Ark anchors: the
@@ -317,7 +320,7 @@ def main():
                                                                 'executable': bool(path.stat().st_mode & 0o111)}
     root = fresh_root(args.out)
     qa_module, descriptor = load_qa(args.qa_source, args.qa_source_sha256, root / 'qa-source')
-    require(descriptor['api'] == 't3-controller-r22', 'shared live runner requires exact r22 portable source and final audit exports')
+    require(descriptor['api'] == 't3-controller-r23', 'shared live runner requires exact r23 portable source and final audit exports')
     bundle = strict_json(args.bundle.read_bytes())
     paths, source, receipt = check_bundle(bundle, full=True)  # Before actor construction.
     spec = strict_json(args.scenario.read_bytes())
@@ -336,7 +339,8 @@ def main():
         runtime_bundle={'path': str(args.bundle.resolve()), 'sha256': sha(args.bundle)},
     )
     qa.capture = MirrorCapture(qa.capture, evidence)
-    coordinator = SharedCoordinator(qa, ap5, validate_shared_binding)
+    from run_info import publish_run_info
+    coordinator = SharedCoordinator(qa, ap5, validate_shared_binding, on_started=publish_run_info)
     previous = {}
     def cancel(signum, frame):
         coordinator.cancel_requested = True
@@ -367,7 +371,16 @@ def main():
         finally:
             outcome['errors'] = list(coordinator.errors)
             component_status = seal_ap5(ap5, args.bundle, outcome)
-        return shared_exit_status(qa_exit, component_status, coordinator.errors, outcome['cleanup'])
+        exit_code = shared_exit_status(qa_exit, component_status, coordinator.errors, outcome['cleanup'])
+        summary = {'schema': 'spc.lab.ap5.run-result/v1', 'run_id': ap5.id, 'output_directory': str(root),
+                   'exit_code': exit_code, 'qa_exit': qa_exit, 'component_status': component_status,
+                   'cleanup': outcome['cleanup'], 'errors': list(coordinator.errors),
+                   'runtime_still_running': qa.process is not None and qa.process.poll() is None}
+        with (root / 'run-result.json').open('xb') as stream:
+            (root / 'run-result.json').chmod(0o600)
+            stream.write(encoded(summary) + b'\n')
+        print(json.dumps(summary, sort_keys=True), flush=True)
+        return exit_code
     finally:
         for sig, handler in previous.items():
             signal.signal(sig, handler)

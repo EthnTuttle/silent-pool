@@ -23,19 +23,10 @@ from storage import collect_database, option, private_bytes, sha_file
 
 
 def config_fields(raw):
-    section=None;result={}
-    for line in raw.decode().splitlines():
-        line=line.strip()
-        if line.startswith("["):section=line
-        elif section=="[ark.native_audit]" and line and not line.startswith("#"):
-            name,value=line.split("=",1);name=name.strip()
-            require(name not in result,"duplicate rendered source_audit key")
-            result[name]=strict_json(value.strip())
-    if not {"collector_socket","pool_pubkey","collector_pubkey"}<=set(result):
-        raise MissingComponent("rendered_existing_wallet_native_audit_config")
-    # These exact fields are used by the source-bound controller/AP3 contract.
-    # Other service scope fields are checked against the published instance.
-    return {"socket":result["collector_socket"],"pool_pubkey":result["pool_pubkey"],"collector_pubkey":result["collector_pubkey"]}
+    from native_scope import private_scope
+    result=private_scope(raw)
+    return {"socket":result["collector_socket"],"pool_pubkey":result["pool_pubkey"],"collector_pubkey":result["collector_pubkey"],
+        'run_token_hash':result['run_token_hash']}
 
 
 def public_identity(address):
@@ -142,17 +133,23 @@ class CollectorRuntime:
                     and sha_file(f"/proc/{process['pid']}/exe")==expected["sha256"],"source verifier must be the actual sealed agent binary")
             info=os.stat(f"/proc/{process['pid']}/exe")
             executable_identity=[info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns,info.st_ctime_ns]
-            env=Path(f"/proc/{process['pid']}/environ").read_bytes().split(b"\0")
-            require([v.split(b"=",1)[1] for v in env if v.startswith(b"SPC_LAB_RUN_TOKEN=")]==[process["run_token"].encode()],"source verifier process ownership token")
-            wallet_config=private_bytes(Path(option(process["args"],"--config")),c.run)
+            from native_capture import observe_process, config_scalar
+            from native_scope import wallet_scope
+            observed,config_path=observe_process(process,c.run,expected,manifest['locks']['pid'])
+            wallet_config=private_bytes(Path(config_path),c.run)
             config=config_fields(wallet_config)
+            datadir=Path(config_scalar(wallet_config,'ark','datadir'))
+            instance=strict_json(private_bytes(datadir/'native-audit-instance.json',c.run,16*1024))
+            require(instance['config_path']==config_path and instance['identity_id']==identity
+                and instance['front_id']==row['front'],'source wallet instance route/config mismatch')
+            scope_binding=wallet_scope(wallet_config,instance,observed,manifest,c.run_id)
             require(config["collector_pubkey"]==signer.public_key and config["pool_pubkey"]==settings["pool_pubkeys"][row["front"]],"rendered source authority keys differ from pinned keys")
             # The owned rendered scenario provides the public identity binding,
             # independently of a job/trace. Optional parent pins are crosschecked;
             # no scan secret key file is read by the collector.
             require(identity in {i["id"] for i in c.scenario["identities"]},"source wallet identity outside declared roster")
-            from native_capture import config_scalar
             address=rendered_address(actual_identities[identity],config_scalar(wallet_config,'upstream','sp_address'))
+            require(instance['identity']==address,'source wallet instance public identity mismatch')
             scan,sp_id=public_identity(address)
             require(("scan_pubkey" not in row or scan==row["scan_pubkey"]) and ("sp_id" not in row or sp_id==row["sp_id"]),
                     "source ACK key/identity differs from actual provisioned wallet")
@@ -164,7 +161,7 @@ class CollectorRuntime:
             bound[identity]={"scan_pubkey":scan,"pool_pubkey":config["pool_pubkey"],"front":row["front"],
                              "sp_id":sp_id,"pid":process["pid"],"start_time_ticks":process["start_time_ticks"],
                              "run_id":c.run_id,"miner_id":row["miner_id"],"executable_identity":executable_identity,
-                             "executable_sha256":expected["sha256"]}
+                              "executable_sha256":expected["sha256"],'native_scope':scope_binding}
         checksums={int(k):v for k,v in settings["migration_checksums"].items()}
         provider=ReplayProvider(c.source_capture,c.views,bound,self.capture_sql,c.common_chain,checksums,self.retention)
         self.provider=provider;self.migrations=checksums

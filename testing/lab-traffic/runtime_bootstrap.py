@@ -35,8 +35,8 @@ def source_admission(binary,*,bundle=None):
     runtime=rows.get("crates/spc-lab/src/runtime.rs")
     if runtime==G105_RUNTIME_SHA256:
         raise MissingComponent("g105_Runtime_phase_wait_bug_no_repeat_execution")
-    from runtime_profile import MANIFEST_SHA256 as QUALIFIED_MANIFEST, admit
-    if binary['source_manifest_sha256']==QUALIFIED_MANIFEST:
+    from runtime_profile import PROFILES, admit
+    if binary['source_manifest_sha256'] in PROFILES:
         return admit(binary,bundle)
     if (runtime,binary["sha256"],binary["source_manifest_sha256"]) not in ADMITTED_RUNTIME_FIXES:
         raise MissingComponent("corrected_Runtime_phase_wait_source_and_tested_CLI_binding_pending")

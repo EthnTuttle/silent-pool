@@ -66,6 +66,21 @@ its fresh installed program/source/fixture manifests are required.
 
 ## Run the shared campaign
 
+Use fresh persistent directories for long runs, for example beneath
+`${XDG_STATE_HOME:-$HOME/.local/state}/spc-ap5`, and keep the path short enough
+for the collector Unix sockets. Temporary test directories are not a durable
+archive across server restarts. An absent formerly used run path is not a new
+run: retain its historical outcome and choose a new run ID and output root.
+
+After successful startup the shared runner prints a `spc.lab.ap5.run-info/v1`
+JSON record and writes `run-info.json` in the selected output root. Runtime
+identity, listen argv, run-bound API snapshot and the actual controls/lab HTML
+routes are checked before URLs are published. Listener ports come from the
+actual manifest. The record gives the private operator-claim file location,
+never its token. It is a startup observation, not a promise that those ports
+remain live after teardown. Final `run-result.json` and its printed JSON report
+the actual QA/component/cleanup statuses and combined exit code.
+
 ### Independently released consumers with an already qualified runtime
 
 Runtime and Python consumer releases can be pinned independently. The full

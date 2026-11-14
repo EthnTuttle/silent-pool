@@ -73,15 +73,31 @@ class RuntimeProfileTests(unittest.TestCase):
         with self.assertRaises(Inconclusive):rp.selected({'sha256':'00'*32,'source_manifest_sha256':rp.MANIFEST_SHA256})
         with self.assertRaises(Inconclusive):rp.selected({'sha256':p['binaries']['lab'],'source_manifest_sha256':'00'*32})
 
+    def test_98f_profile_is_distinct_and_seals_all_28_supplemental_cases(self):
+        from runtime_qualification import supplemental
+        p=rp.profile(rp.OPAQUE_MANIFEST_SHA256);old=rp.profile()
+        self.assertEqual(p['runtime_source_sha256'],old['runtime_source_sha256'])
+        self.assertNotEqual(p['binaries']['lab'],old['binaries']['lab'])
+        self.assertEqual(p['bundle_sha256'],['3cf18a8ee2611ad698e3002ca7862b2d5a9ec3d7382aab025ca211513c310ce0'])
+        self.assertTrue(p['requires_private_run_token_hash']);self.assertTrue(p['verify_all_bundle_refs'])
+        checks=supplemental(p)
+        self.assertEqual([len(c['required_cases']) for c in checks],[7,1,8,12])
+        for name in ('bins/spc-cpu-miner/src/connection/outbound.rs','crates/spc-lab/src/wallet_native_render.rs',
+                     'bins/spc-agent/src/wallet/native_audit_io.rs','crates/spc-lab/src/engine/native_audit_cleanup_tests.rs'):
+            self.assertIn(name,p['critical_source_rows'])
+        with self.assertRaises(Inconclusive):rp.selected({'sha256':old['binaries']['lab'],'source_manifest_sha256':rp.OPAQUE_MANIFEST_SHA256})
+        self.assertEqual(rp.selected({'sha256':p['binaries']['lab'],'source_manifest_sha256':rp.OPAQUE_MANIFEST_SHA256})['id'],p['id'])
+
     def test_actual_Nix_flat_and_version4_formats_are_strict(self):
         drv='/nix/store/'+'a'*32+'-unit.drv';out='b'*32+'-output'
         data={'version':4,'derivations':{Path(drv).name:{'version':4,'env':{'__json':json.dumps({'src':'/nix/store/source','doInstallCheck':True})},'outputs':{'out':{'path':out}},'system':'x86_64-linux'}}}
         env,outputs,system=rp.derivation(data,drv)
         self.assertEqual(outputs['out'],'/nix/store/'+out);self.assertTrue(env['doInstallCheck'])
-        for kind in ('version','record_version','extra','path'):
+        for kind in ('version','record_version','float_record_version','extra','path'):
             bad=copy.deepcopy(data)
             if kind=='version':bad['version']=5
             elif kind=='record_version':bad['derivations'][Path(drv).name]['version']=5
+            elif kind=='float_record_version':bad['derivations'][Path(drv).name]['version']=4.0
             elif kind=='extra':bad['derivations']['other.drv']=next(iter(bad['derivations'].values()))
             else:bad['derivations'][Path(drv).name]['outputs']['out']['path']='../other'
             with self.subTest(kind=kind),self.assertRaises(Invalid):rp.derivation(bad,drv)

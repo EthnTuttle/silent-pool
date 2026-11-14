@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from types import SimpleNamespace
 
 import native_codec as n
@@ -263,6 +264,11 @@ class NativeAuditTests(unittest.TestCase):
                 self.assertEqual(path,str(config));self.assertEqual(bytes(observed["run_token_sha256"]),hashlib.sha256(b"public-unit-token").digest())
                 with self.assertRaises(Invalid):observe_process({**record,"run_token":"foreign"},root,{"path":str(exe),"sha256":digest},os.getpid())
                 with self.assertRaises(Invalid):observe_process({**record,"start_time_ticks":ticks+1},root,{"path":str(exe),"sha256":digest},os.getpid())
+                readlink=os.readlink
+                def foreign_namespace(path,*args,**kwargs):
+                    return 'net:[foreign-unit]' if str(path)==f'/proc/{process.pid}/ns/net' else readlink(path,*args,**kwargs)
+                with patch('native_capture.os.readlink',side_effect=foreign_namespace),self.assertRaisesRegex(Invalid,'namespace'):
+                    observe_process(record,root,{"path":str(exe),"sha256":digest},os.getpid())
             finally:
                 process.stdin.close();process.wait(timeout=5)
 
@@ -307,8 +313,8 @@ class NativeAuditTests(unittest.TestCase):
 
     def test_native_loaded_wallet_collector_config_has_no_legacy_scan_file_fallback(self):
         from source_feed_runtime import config_fields
-        raw=b'[ark.native_audit]\ncollector_socket = "/unit/collector.sock"\npool_pubkey = "pool"\ncollector_pubkey = "collector"\nrun_id = "run"\n'
-        self.assertEqual(config_fields(raw),{"socket":"/unit/collector.sock","pool_pubkey":"pool","collector_pubkey":"collector"})
+        raw=b'[ark.native_audit]\ncollector_socket = "/unit/collector.sock"\npool_pubkey = "pool"\ncollector_pubkey = "collector"\nrun_id = "run"\nidentity_id = "alice"\npool_id = "pool-a"\nfront_id = "front-a"\nrun_token_hash = "'+b'01'*32+b'"\n'
+        self.assertEqual(config_fields(raw),{"socket":"/unit/collector.sock","pool_pubkey":"pool","collector_pubkey":"collector",'run_token_hash':'01'*32})
         with self.assertRaises(Inconclusive):config_fields(b'[source_audit]\nsocket = "/unit/legacy.sock"\n')
         with self.assertRaises(Invalid):config_fields(raw+b'collector_pubkey = "other"\n')
 

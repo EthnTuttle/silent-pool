@@ -1,0 +1,8 @@
+source_state: after
+recorded_at: 2026-11-14T18:07:38Z
+HEAD: 98f0e6caa2482646e3c7073949f6388cd39f200b
+status_porcelain: []
+test_binary: target/debug/deps/spc_lab-f3bcfb8750da4fc3
+c4a26debf3b33cc422f1ef736a5293639290f37860ee341dd6d90a46a14422c1  target/debug/deps/spc_lab-f3bcfb8750da4fc3
+namespace_test_binary: target/debug/deps/spc_agent-f760ac42d8402846
+c74d48f043fdbb811fe0bf1bd9aeb5a840039ffc0f743a9c5250126d5d5e3fd6  target/debug/deps/spc_agent-f760ac42d8402846

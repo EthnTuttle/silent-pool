@@ -20,6 +20,13 @@ def write(path, value):
     Path(path).chmod(0o600)
 
 
+def validate_socket_paths(run_out, identity, collector_name):
+    private = Path(run_out) / 'qa/runtime/private'
+    require(len(os.fsencode(private / collector_name)) < 108, 'collector Unix socket path exceeds platform bound')
+    native = private / ('wallet-' + identity) / 'state/native-audit.sock'
+    require(len(os.fsencode(native)) < 108, 'native wallet Unix socket path exceeds platform bound')
+
+
 def prepare(args):
     bundle_path = Path(args.bundle).resolve(strict=True)
     bundle = load(bundle_path); check_bundle(bundle, full=True)
@@ -75,8 +82,7 @@ def prepare(args):
     for wallet in spec['wallet_agents']:
         identity, front = wallet['identity_id'], wallet['front_id']
         socket_name = 'collector-' + identity + '.sock'
-        socket = run_out / 'qa/runtime/private' / socket_name
-        require(len(os.fsencode(socket)) < 108, 'collector Unix socket path exceeds platform bound')
+        validate_socket_paths(run_out, identity, socket_name)
         wallet['native_audit'] = {'collector_socket': socket_name, 'pool_pubkey': public_keys[front],
                                   'collector_pubkey': collector_public}
         agents[identity] = {'wallet_entity': identity, 'miner_id': 'miner-' + identity, 'front': front}
@@ -142,7 +148,7 @@ def prepare(args):
     (root / 'scenario-validation.stdout').write_bytes(result.stdout)
     (root / 'scenario-validation.stderr').write_bytes(result.stderr)
     require(result.returncode == 0, 'actual runtime rejected prepared scenario: ' + result.stderr.decode())
-    write(root / 'execution-plan.json', {'status': 'PREPARED_NOT_LAUNCHED; REVIEWED_R22_AND_IMMUTABLE_CONSUMER_REQUIRED',
+    write(root / 'execution-plan.json', {'status': 'PREPARED_NOT_LAUNCHED; REVIEWED_EXECUTION_QA_AND_IMMUTABLE_CONSUMER_REQUIRED',
         'bundle': ref(bundle_path), 'outputs': ref(args.outputs), 'inputs': ref(root / 'qa-inputs.json'),
         'scenario': ref(root / 'scenario.json'), 'run_output': str(run_out), 'timeout_secs': 7200,
         'provisioning_qa_descriptor': ref(args.qa_source), 'provisioning_qa_api': qa_descriptor['api'],
@@ -156,7 +162,7 @@ def prepare(args):
         'original_operation': 'ap5-native-bootstrap', 'bootstrap_deadline_secs': 3600,
         'aggregate_hashes_per_second': 40, 'ordinary_transactions_per_second': 0.2,
         'source_policies': {name: bundle[name] for name in ('pool_control_source_policy', 'aggregate_source_policy', 'vtxo_verifier')},
-        'global_cleanup_scope': 'four previously unreadable PIDs remain unresolved; scoped reaper success cannot imply global cleanup'})
+        'global_cleanup_scope': 'fresh run coverage must be observed explicitly; historical numeric PIDs are not a current baseline; scoped reaper success cannot imply global cleanup'})
     return root
 
 
