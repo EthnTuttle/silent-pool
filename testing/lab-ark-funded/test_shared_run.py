@@ -11,7 +11,7 @@ from unittest.mock import patch
 from common import Blocked, Evidence, sha
 from ap5 import Controller as AP5Controller
 from scenario import scenario
-from shared_run import MirrorCapture, SharedCoordinator, coordinated_qa_class, FINAL_CASES
+from shared_run import MirrorCapture, SharedCoordinator, coordinated_qa_class, FINAL_CASES, validate_shared_binding
 
 
 class Sink:
@@ -304,6 +304,28 @@ class SharedRunTests(unittest.TestCase):
         self.assertEqual(qa.stops, 1)
         self.assertEqual(qa.drains, 1)
         self.assertNotEqual(result['execution'], 'observations_finished')
+
+    def test_failure_retains_code_locations_without_exception_values_or_locals(self):
+        qa, ap5, run = self.make()
+        def failed_observer(owner, observer):
+            secret = 'SECRET_MUST_NOT_BE_RECORDED'
+            raise Blocked(secret)
+        run.on_started = failed_observer
+        outcome = run.run()
+        failure = next(r for r in outcome['errors'] if r['stage'] == 'execution')
+        self.assertTrue(any(f['function'] == 'failed_observer' for f in failure['traceback_frames']))
+        self.assertTrue(all(set(f) == {'file', 'function', 'line'} for f in failure['traceback_frames']))
+        self.assertNotIn('SECRET_MUST_NOT_BE_RECORDED', json.dumps(outcome))
+        self.assertEqual(qa.stops, 1)
+
+    def test_full_fault_case_opt_in_cannot_be_missing_or_default_false(self):
+        for traffic in ({}, {'lab_acceptance': False}):
+            spec = {'traffic': traffic}
+            qa = SimpleNamespace(run_id='unit', scenario=spec,
+                                 args=SimpleNamespace(operator_ui=True, allow_reorg=True, witness=True))
+            ap5 = SimpleNamespace(id='unit', spec=spec)
+            with self.subTest(traffic=traffic), self.assertRaisesRegex(Blocked, 'explicit signed acceptance-case opt-in'):
+                validate_shared_binding(qa, ap5)
 
     def test_QA_actual_final_class_has_no_legacy_audit_callback_proxy(self):
         class Base:

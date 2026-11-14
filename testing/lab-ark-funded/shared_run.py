@@ -99,6 +99,15 @@ class SharedCoordinator:
 
     def failure(self, stage, error):
         value = {'stage': stage, 'class': type(error).__name__, 'status': 'inconclusive'}
+        # Keep exact failing code locations without serializing exception values,
+        # locals, arguments, environment or credential-bearing response bodies.
+        frames = []
+        tb = error.__traceback__
+        while tb is not None:
+            frames.append({'file': tb.tb_frame.f_code.co_filename,
+                           'function': tb.tb_frame.f_code.co_name, 'line': tb.tb_lineno})
+            tb = tb.tb_next
+        value['traceback_frames'] = frames
         self.errors.append(value)
         self.emit('shared-stage-incomplete', value)
 
@@ -236,6 +245,8 @@ def validate_shared_binding(qa, ap5):
     require(qa.run_id == ap5.id and same_json_value(qa.scenario, ap5.spec), 'shared scenario differs between consumers')
     require(qa.args.operator_ui is True and qa.args.allow_reorg is True and qa.args.witness is True,
             'shared QA phase/actor scope differs')
+    require(qa.scenario['traffic'].get('lab_acceptance') is True,
+            'full shared campaign requires explicit signed acceptance-case opt-in before actor startup')
     require(qa.binding.get('source_feed'), 'actual four-wallet source feed binding required')
     require(type(qa.binding.get('path_env')) is str and qa.binding['path_env']
             and all(Path(p).is_absolute() and p.startswith('/nix/store/') for p in qa.binding['path_env'].split(':')),
