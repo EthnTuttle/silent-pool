@@ -6,7 +6,6 @@ selects that route. A genuinely namespaced server requires the owned broker;
 there is no retry through host loopback or a shared socket.
 """
 from dataclasses import dataclass, field
-from decimal import Decimal
 import hashlib
 import ipaddress
 import json
@@ -423,7 +422,7 @@ def validate_rows(raw, plan, query_contract=None):
             "SQL observation schema/query binding")
     server = value["server"]
     require(set(server) == {"database", "role", "port", "data_directory", "unix_socket_directories",
-                            "listen_addresses", "server_addr", "server_port", "postmaster_start_epoch",
+                            "listen_addresses", "server_addr", "server_port", "postmaster_identity_file",
                             "system_identifier", "transaction_read_only", "transaction_isolation", "backend_pid", "snapshot"},
             "SQL server metadata fields changed")
     expected = plan.connection
@@ -432,8 +431,20 @@ def validate_rows(raw, plan, query_contract=None):
             "SQL actual server resource mismatch")
     require(server["transaction_read_only"] == "on" and server["transaction_isolation"] == "repeatable read",
             "SQL transaction is not a read-only consistent snapshot")
-    epoch = Decimal(server["postmaster_start_epoch"])
-    require(epoch.is_finite() and int(epoch) == plan.postmaster["start_epoch"], "SQL postmaster start epoch mismatch")
+    # PostgreSQL 17's PID file records MyStartTime (InitProcessGlobals), but
+    # pg_postmaster_start_time() returns PgStartTime, set later in startup.
+    # They can straddle a second boundary. Bind the server's bounded file read
+    # to the exact locally observed PID/directory/start/port/socket bytes;
+    # neither rounding nor a time tolerance identifies the process.
+    identity_file = server["postmaster_identity_file"]
+    require(isinstance(identity_file, str) and len(identity_file.encode()) <= 8192,
+            "SQL postmaster identity file type/bound")
+    require(hashlib.sha256(identity_file.encode()).hexdigest() == plan.postmaster["identity_file_sha256"],
+            "SQL postmaster identity file mismatch")
+    lines = identity_file.splitlines()
+    require(len(lines) >= 6 and lines[0] == str(plan.process_facts["pid"])
+            and lines[1] == plan.database["dir"] and lines[2] == str(plan.postmaster["start_epoch"])
+            and lines[3] == str(expected.port), "SQL postmaster file PID/directory/start/port mismatch")
     require(re.fullmatch(r"[0-9]+", server["system_identifier"]) is not None, "SQL cluster system identifier")
     require(re.fullmatch(r"[0-9]+:[0-9]+:[0-9,]*", server["snapshot"]) is not None, "SQL snapshot identity")
     integer(server["backend_pid"], 1)

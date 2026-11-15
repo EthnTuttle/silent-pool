@@ -33,7 +33,7 @@ relative to the checked-out test files. Historical archive replayers require
 an explicitly supplied archive and are optional, not startup prerequisites.
 
 `portable_source.py` creates `source.tar.gz`, `manifest.json`, `qa-source.json`.
-The descriptor has schema `spc.lab.ap5.qa-source/v1`, API `t3-controller-r24`;
+The descriptor has schema `spc.lab.ap5.qa-source/v1`, API `t3-controller-r25`;
 its artifact paths resolve relative to the descriptor directory. Its printed
 SHA256 is the external descriptor pin supplied to AP5. The versioned snapshot
 recipe sorts all source paths, validates regular files/bytes/SHA256, preserves
@@ -43,14 +43,14 @@ It excludes build/cache/private directories. Archive modes/bytes/hashes must
 be checked by the AP5 loader; relative paths are not permission to traverse out
 of the descriptor root. Source modules must be loaded from this one bound tree.
 
-## r24 observer release against the already-compiled 98f applications
+## r25 pause/SQL consumer release against the already-compiled 98f applications
 
 Package this Python consumer independently using `portable_source.py snapshot`.
 Keep the qualified application package, compiler source, outputs aggregation and
 selected durable 3cf18a8e bundle pinned. A new QA release does not require rebuilding them.
 See [RUNTIME-PROFILES.md](RUNTIME-PROFILES.md) for the complete reviewed profile.
 
-The AP5 loader must admit API `t3-controller-r24` and call:
+The AP5 loader must admit API `t3-controller-r25` and call:
 
 ```python
 qa = coordinated_qa_class(qa_module)(
@@ -80,6 +80,22 @@ as incomplete finalization; no repeated active-only request or second drain is
 permitted. The collector independently applies the same precondition before
 miner removal. See [LIVE-JOURNAL-PREFIX.md](LIVE-JOURNAL-PREFIX.md) for the live
 prefix contract and the retained b14/b15 causal limits.
+
+r25 adds `qa.acknowledged_traffic_pause(driver_id)`: a read-only, same-run and
+current-incarnation proof of a successful controller/actor pause, matching
+durable barrier, closed watermarks and no subsequent resume or forwarded effect.
+AP5 reuses a returned proof, or on None makes its one new pause attempt and then
+requires the helper to establish the resulting proof. Exceptions stay
+nonpassing; each other independent driver still receives its one opportunity.
+Measured pause now acknowledges every declared actor before the common interval
+and resumes every actor after a valid interval. Journal census is exact, not zip.
+
+Fresh inputs must include `source_feed.sql_query` with exact fields sql_contract,
+query_id, schema, sha256, bytes and table_count derived from the loaded r25 QA
+query renderer. The fullrail query is 8699 bytes / 22 tables / SHA256
+`16c8d72f970d1aed7a776e2b7a1f1269277d3f39dddb6cf6b78306f3d3802a1b`.
+The same query ID/schema with old r24 bytes is rejected before startup. See
+[MEASURED-PAUSE-AND-SQL.md](MEASURED-PAUSE-AND-SQL.md).
 
 ## Produce actual build/check inventory
 

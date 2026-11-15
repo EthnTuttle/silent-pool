@@ -127,6 +127,7 @@ class Controller:
         self.phase_bootstrap = None
         self.observation_lock = threading.RLock()
         self.live_journal_readers = {}
+        self.measured_pause_acknowledgements = {}
         self.results = {}
         self.process = None
         self.url = None
@@ -201,6 +202,7 @@ class Controller:
         from runtime_bootstrap import RuntimeBootstrap, source_admission
         self.phase_bootstrap = RuntimeBootstrap(self.scenario)
         require(self.binding["payout_policy"] == "design-fixed-ladder", "full acceptance requires production fixed ladder")
+        self.verify_sql_query_binding()
         for name, item in self.binding["binaries"].items():
             path = Path(item["path"])
             if not (path.is_absolute() and path.is_file() and os.access(path, os.X_OK)):
@@ -240,6 +242,19 @@ class Controller:
                                             "binary_hashes": {k: v["sha256"] for k, v in self.binding["binaries"].items()}})
         write_private(self.priv / "inputs.json", Path(self.args.inputs).read_bytes())
         write_private(self.priv / "scenario.json", Path(self.args.scenario).read_bytes())
+
+    def verify_sql_query_binding(self):
+        settings=self.binding.get("source_feed")
+        if not settings:return
+        from storage import query_spec
+        contract=settings.get("sql_contract",settings["contract"])
+        query,query_id,schema,tables=query_spec(contract)
+        digest_=hashlib.sha256(query.encode()).hexdigest()
+        expected={"sql_contract":contract,"query_id":query_id,"schema":schema,"sha256":digest_,
+            "bytes":len(query.encode()),"table_count":len(tables)}
+        require(isinstance(settings.get("sql_query"),dict) and canonical_json(settings["sql_query"])==canonical_json(expected),
+            "source-feed SQL query metadata differs from prepared input pin")
+        self.result("sql_query_binding","PASSED",{**expected,"scope":"source-bound query selection only"})
 
     def manifest(self):
         path = self.run / "run-manifest.json"
@@ -622,28 +637,196 @@ class Controller:
         # Actual AddConnection ordering must additionally be checked against
         # production control evidence, not inferred from this manifest state.
 
+    def measured_journal_census(self, drivers):
+        """Bind every snapshot by driver identity, never positional zip."""
+        manifest=self.manifest()
+        require(manifest is not None and manifest["run_id"]==self.run_id,"measured journal actual run binding")
+        paths=manifest["traffic_driver_paths"]
+        require(set(paths)==set(drivers),"measured manifest driver census")
+        snapshots=self.journals();by_driver={}
+        require(len(snapshots)==len(drivers),"measured journal driver census")
+        for path,rows,digest_ in snapshots:
+            require(bool(rows) and rows[0]["record"]=="header","measured journal header missing")
+            header=rows[0];driver=header["driver_id"]
+            require(driver in drivers and driver not in by_driver and header["run_id"]==self.run_id,
+                "measured journal foreign/duplicate driver")
+            require(Path(path)==Path(paths[driver]["journal_path"]),"measured journal driver path binding")
+            by_driver[driver]=(Path(path),rows,digest_)
+        require(set(by_driver)==set(drivers),"measured journal missing driver")
+        return by_driver
+
+    @staticmethod
+    def driver_control_payload_hash(command, principal):
+        kind=command["kind"]
+        require(set(kind)=={"type","driver_id"} and kind["type"] in {"pause_tx_driver","resume_tx_driver"},
+            "closed traffic driver control kind")
+        # Actual CommandKind serde field order, as for the separate bootstrap codec.
+        raw=json.dumps({"type":kind["type"],"driver_id":kind["driver_id"]},ensure_ascii=False,separators=(",",":")).encode()
+        prefix=b"" if principal is None else b"expanded_v1\n"+principal.encode()+b"\n"+command["run_id"].encode()+b"\n"
+        return hashlib.sha256(prefix+raw).hexdigest()
+
+    @staticmethod
+    def pause_acknowledgement(response, cid, received):
+        require(response["state"]=="succeeded" and response["command_id"]==cid,"pause command acknowledgement")
+        ack=strict_json(response["detail"])
+        require(isinstance(ack,dict) and set(ack)=={"status","command_id","wall_ms","monotonic_ms",
+            "last_used_send_sequence","last_txid","last_intent_txid","journal_seq"},"pause acknowledgement shape")
+        require(ack["status"]=="paused" and ack["command_id"]==cid,"actor pause acknowledgement")
+        for field in ("wall_ms","monotonic_ms","journal_seq","last_used_send_sequence"):integer(ack[field])
+        for field in ("last_txid","last_intent_txid"):
+            if ack[field] is not None:unhex(ack[field],32)
+        require((ack["last_used_send_sequence"]==0)==(ack["last_txid"] is None),"pause last-send identity")
+        require(ack["monotonic_ms"]<=received//1_000_000,"pause acknowledgement clock")
+        return ack
+
+    def acknowledged_traffic_pause(self, driver):
+        """Read-only proof of a current acknowledged pause; never an actor command.
+
+        None means no reusable acknowledgement. Contradictory evidence raises;
+        a resume attempt invalidates reuse even if its outcome was unknown.
+        """
+        from storage import confined
+        drivers=[a["id"] for a in self.scenario["traffic"]["driver"]["actors"]]
+        require(len(drivers)==len(set(drivers)) and driver in drivers,"pause proof declared driver census")
+        manifest=self.manifest()
+        require(manifest is not None and manifest["run_id"]==self.run_id
+            and set(manifest["traffic_driver_paths"])==set(drivers),"pause proof actual run/driver census")
+        rows=self.audit_rows()
+        sessions=[r for r in rows if r["record"]=="traffic_audit" and r["event"]["event"]=="session"
+            and r["event"]["binding"]["driver_id"]==driver]
+        if not sessions:raise Inconclusive("pause proof current driver incarnation unavailable")
+        session=sessions[-1];binding=session["event"]["binding"];incarnation=binding["incarnation"]
+        require(binding["run_id"]==self.run_id and binding["acceptance_enabled"] is True
+            and binding["controller_sha256"]==self.binding["binaries"]["lab"]["sha256"]
+            and binding["actor_sha256"]==self.binding["binaries"]["txd"]["sha256"],"pause proof current incarnation binding")
+        begins={r["command"]["command_id"]:r for r in rows if r["record"]=="begin"
+            and r["command"]["kind"].get("driver_id")==driver}
+        require(len(begins)==sum(r["record"]=="begin" and r["command"]["kind"].get("driver_id")==driver for r in rows),
+            "pause proof duplicate controller command")
+        candidates=[]
+        for row in rows:
+            if row["record"]!="finish" or row["command_id"] not in begins:continue
+            begin=begins[row["command_id"]]
+            if begin["command"]["kind"]["type"]!="pause_tx_driver":continue
+            outcome=row["outcome"]
+            require(isinstance(outcome,dict) and set(outcome)=={"command_id","state","detail","resolved_at","journal_seq"}
+                and outcome["command_id"]==row["command_id"] and isinstance(outcome["detail"],str)
+                and outcome["state"] in {"succeeded","failed","cancelled","unknown","rejected_precondition","rejected_conflict","blocked_on_height"},
+                "pause proof malformed controller outcome")
+            integer(outcome["resolved_at"]);integer(outcome["journal_seq"])
+            if outcome["state"]=="succeeded":
+                candidates.append((begin,row))
+        if not candidates:return None
+        begin,finish=max(candidates,key=lambda pair:pair[0]["seq"]);command=begin["command"];cid=command["command_id"]
+        if begin["seq"]<session["seq"]:return None
+        principal="operator" if self.scenario.get("expanded_access",False) else None
+        resumes=[r for r in begins.values() if r["seq"]>begin["seq"] and r["command"]["kind"]["type"]=="resume_tx_driver"]
+        for resume in resumes:
+            cmd=resume["command"]
+            require(cmd["run_id"]==self.run_id and resume.get("principal")==principal
+                and resume.get("hash_scheme")==("expanded_v1" if principal else None)
+                and resume["payload_hash"]==self.driver_control_payload_hash(cmd,principal),"pause proof resume command binding")
+        if resumes:return None
+        require(command["run_id"]==self.run_id and command["kind"]=={"type":"pause_tx_driver","driver_id":driver}
+            and begin.get("principal")==principal and begin.get("hash_scheme")==("expanded_v1" if principal else None)
+            and begin["payload_hash"]==self.driver_control_payload_hash(command,principal),"pause proof controller command binding")
+        require(sum(r["record"]=="finish" and r["command_id"]==cid for r in rows)==1 and finish["seq"]>begin["seq"],
+            "pause proof durable outcome census/order")
+        ack=self.pause_acknowledgement(finish["outcome"],cid,time.monotonic_ns())
+        path=confined(Path(manifest["traffic_driver_paths"][driver]["journal_path"]),self.run/"private")
+        history,digest_=read_records(path)
+        require(history[0]["run_id"]==self.run_id and history[0]["driver_id"]==driver,"pause proof journal run/driver")
+        seq=ack["journal_seq"];require(seq<len(history),"pause proof acknowledged barrier missing")
+        barrier=history[seq]
+        require(barrier["record"]=="send_barrier" and barrier["seq"]==seq and barrier["command_id"]==cid
+            and barrier["send_sequence"]==ack["last_used_send_sequence"] and barrier["last_txid"]==ack["last_txid"],
+            "pause proof acknowledgement/barrier mismatch")
+        require(not any(r["record"] in {"broadcast_sent","reorg_resubmit","send_resumed"} for r in history[seq+1:]),
+            "send or unrequested resume after acknowledged pause")
+        watermarks=[r for r in rows if r["record"]=="traffic_audit" and r["event"]["event"]=="watermark"
+            and r["event"]["incarnation"]==incarnation]
+        closes=[r for r in watermarks if r["event"]["command_id"]==cid and r["event"]["closed"] is True]
+        require(len(closes)>=2 and begin["seq"]<closes[0]["seq"]<closes[-1]["seq"]<finish["seq"]
+            and closes[0]["monotonic_ms"]<=barrier["monotonic_ms"]<=ack["monotonic_ms"]<=closes[-1]["monotonic_ms"],
+            "pause proof closed watermarks/acknowledgement ordering")
+        require(all(r["boot_id"]==session["boot_id"] for r in closes),"pause proof watermark boot changed")
+        require(watermarks[-1]["event"]["closed"] is True,"pause proof gate reopened without a resume")
+        forwards=[r for r in rows if r["record"]=="traffic_audit" and r["event"]["event"]=="forward_attempt"
+            and r["seq"]>closes[0]["seq"] and r["event"]["attempt"]["incarnation"]==incarnation
+            and r["event"]["attempt"]["method"] in {"sendrawtransaction","submitblock"}]
+        require(not forwards,"controller forwarded an effect after acknowledged driver pause")
+        proof={"run_id":self.run_id,"driver_id":driver,"incarnation":incarnation,"boot_id":session["boot_id"],
+            "command_id":cid,"controller_begin_seq":begin["seq"],"controller_finish_seq":finish["seq"],"ack":ack,
+            "closed_watermark_seqs":[r["seq"] for r in closes],"journal":{"path":str(path),"sha256":digest_,
+                "records":len(history),"barrier_seq":seq},"no_later_resume_attempt":True,"forwarded_effects_after_close":0,
+            "scope":"current_recorded_incarnation_acknowledged_pause_only"}
+        self.capture.add("acknowledged_traffic_pause",proof)
+        return proof
+
+    def measured_pause(self):
+        drivers=[a["id"] for a in self.scenario["traffic"]["driver"]["actors"]]
+        require(bool(drivers) and len(drivers)==len(set(drivers)),"measured declared driver census")
+        require(not self.measured_pause_acknowledgements,"measured pause cannot replace unresolved acknowledgements")
+        for index,driver in enumerate(drivers):
+            label="measured-pause-"+str(index)
+            response=self.command(label,{"type":"pause_tx_driver","driver_id":driver})
+            received=time.monotonic_ns();cid=self.commands[label]["command_id"]
+            ack=self.pause_acknowledgement(response,cid,received)
+            self.measured_pause_acknowledgements[driver]={"label":label,"command_id":cid,"ack":ack,
+                "received_monotonic_ns":received,"barrier_verified":False}
+            self.capture.add("measured_driver_pause_ack",{"driver_id":driver,**self.measured_pause_acknowledgements[driver]})
+        # Both the common interval and its baseline begin after ALL acknowledgements.
+        before=self.measured_journal_census(drivers)
+        barriers={}
+        for driver in drivers:
+            path,rows,digest_=before[driver];saved=self.measured_pause_acknowledgements[driver];ack=saved["ack"]
+            seq=ack["journal_seq"];require(seq<len(rows),"measured acknowledged barrier missing from journal")
+            barrier=rows[seq]
+            require(barrier["record"]=="send_barrier" and barrier["command_id"]==saved["command_id"]
+                and barrier["seq"]==seq and barrier["send_sequence"]==ack["last_used_send_sequence"]
+                and barrier["last_txid"]==ack["last_txid"] and barrier["monotonic_ms"]<=ack["monotonic_ms"],
+                "measured pause acknowledgement/journal barrier mismatch")
+            barriers[driver]=seq;saved.update(barrier_verified=True,journal_path=str(path),barrier_seq=seq)
+        def refs(snapshot):
+            return {driver:{"path":str(snapshot[driver][0]),"records":len(snapshot[driver][1]),
+                "sha256":snapshot[driver][2],"barrier_seq":barriers[driver]} for driver in drivers}
+        start=time.monotonic_ns()
+        self.capture.add("measured_pause_baseline",{"start_monotonic_ns":start,"drivers":refs(before),
+            "pause_acknowledgements":self.measured_pause_acknowledgements})
+        while time.monotonic_ns()-start<self.args.pause_seconds*1_000_000_000:
+            self.bounded();self.common_chain();time.sleep(0.25)
+        after=self.measured_journal_census(drivers);end=time.monotonic_ns()
+        # Retain exact cuts even when the no-send guard rejects the interval.
+        self.capture.add("measured_pause_end",{"end_monotonic_ns":end,"drivers":refs(after)})
+        for driver in drivers:
+            p1,r1,_=before[driver];p2,r2,_=after[driver]
+            require(p1==p2 and r2[:len(r1)]==r1,"journal history rewritten while paused")
+            # Include the gap between this driver's acknowledgement and the
+            # final driver's acknowledgement; it must not hide a real violation.
+            require(not any(r["record"] in {"broadcast_sent","reorg_resubmit","send_resumed"}
+                for r in r2[barriers[driver]+1:]),"send or premature resume occurred during acknowledged driver pause")
+        self.capture.add("pause_read_interval",{"start_monotonic_ns":start,"end_monotonic_ns":end,
+            "seconds_requested":self.args.pause_seconds,"drivers":drivers,
+            "pause_command_ids":{d:self.measured_pause_acknowledgements[d]["command_id"] for d in drivers},
+            "before":refs(before),"after":refs(after)})
+        # Full acceptance still requires TrafficAudit's actual closed forwarding
+        # intervals. An attempted resume invalidates local paused-state reuse,
+        # even when its acknowledgement is lost or unknown.
+        for index,driver in enumerate(drivers):
+            self.measured_pause_acknowledgements.pop(driver)
+            label="measured-resume-"+str(index)
+            response=self.command(label,{"type":"resume_tx_driver","driver_id":driver})
+            require(response["state"]=="succeeded" and response["command_id"]==self.commands[label]["command_id"]
+                and strict_json(response["detail"])=={"status":"resumed"},"measured driver resume acknowledgement")
+            self.capture.add("measured_driver_resumed",{"driver_id":driver,"command_id":response["command_id"]})
+
     def measured(self):
         time_end = min(self.deadline, time.monotonic() + self.args.measure_seconds)
         while time.monotonic() < time_end:
             self.bounded()
             self.common_chain()
             time.sleep(0.5)
-        self.command("pause", {"type": "pause_tx_driver", "driver_id": self.driver})
-        before = self.journals()
-        start = time.monotonic_ns()
-        while time.monotonic_ns() - start < self.args.pause_seconds * 1_000_000_000:
-            self.bounded()
-            self.common_chain()
-            time.sleep(0.25)
-        after = self.journals()
-        for (p1, r1, _), (p2, r2, _) in zip(before, after):
-            require(p1 == p2 and r2[:len(r1)] == r1, "journal history rewritten while paused")
-            require(not any(r["record"] in {"broadcast_sent", "reorg_resubmit"} for r in r2[len(r1):]),
-                    "send occurred during actual paused interval")
-        self.capture.add("pause_read_interval", {"start_monotonic_ns": start, "end_monotonic_ns": time.monotonic_ns(),
-                                                  "seconds_requested": self.args.pause_seconds})
-        # Full pass also needs zero controller forwarded sends, verified later.
-        self.command("resume", {"type": "resume_tx_driver", "driver_id": self.driver})
+        self.measured_pause()
         if self.args.destination:
             payload = {"type": "send_user_payment", "user": sorted(i["id"] for i in self.scenario["identities"])[0],
                        "destination_address": self.args.destination, "amount_sats": self.args.amount_sats,

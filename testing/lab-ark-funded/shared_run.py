@@ -127,10 +127,25 @@ class SharedCoordinator:
     def quiesce_final_traffic(self):
         self.qa.require_active_finalization()
         drivers = [a['id'] for a in self.qa.scenario['traffic']['driver']['actors']]
+        failures = []
         for driver in drivers:
-            if self.live_audit_finished and driver == self.qa.driver:
-                continue  # Actual r20 audit_live already acknowledged this pause.
-            self.qa.command('shared-final-pause-' + driver, {'type': 'pause_tx_driver', 'driver_id': driver}, timeout=10)
+            try:
+                proof = self.qa.acknowledged_traffic_pause(driver)
+                reused = proof is not None
+                if proof is None:
+                    self.qa.command('shared-final-pause-' + driver, {'type': 'pause_tx_driver', 'driver_id': driver}, timeout=10)
+                    proof = self.qa.acknowledged_traffic_pause(driver)
+                require(type(proof) is dict and proof.get('run_id') == self.qa.run_id
+                        and proof.get('driver_id') == driver, 'current driver pause proof unavailable or mismatched')
+                self.emit('shared-final-traffic-pause-proof', {'driver_id': driver, 'reused': reused, 'proof': proof})
+            except Exception as error:
+                # Each independent driver gets one attempt even if an earlier
+                # acknowledgement failed. Never retry an unknown outcome here,
+                # and never let partial quiescence become a successful fence.
+                failures.append(error)
+                self.failure('final_pause:' + driver, error)
+        if failures:
+            raise failures[0]
         self.traffic_quiesced = True
         self.emit('shared-final-traffic-quiesced', {'drivers': drivers})
 
@@ -249,6 +264,10 @@ def validate_shared_binding(qa, ap5):
     require(qa.scenario['traffic'].get('lab_acceptance') is True,
             'full shared campaign requires explicit signed acceptance-case opt-in before actor startup')
     require(qa.binding.get('source_feed'), 'actual four-wallet source feed binding required')
+    from qa_query import validate_query_binding
+    query_binding = validate_query_binding(qa.binding['source_feed'])
+    qa.capture.add('shared_qa_sql_query_binding', query_binding)
+    ap5.ev.save('shared-qa-sql-query-binding', query_binding)
     require(type(qa.binding.get('path_env')) is str and qa.binding['path_env']
             and all(Path(p).is_absolute() and p.startswith('/nix/store/') for p in qa.binding['path_env'].split(':')),
             'shared actor PATH must be supplied by the immutable Nix closure')
@@ -337,7 +356,7 @@ def main():
                                                                 'executable': bool(path.stat().st_mode & 0o111)}
     root = fresh_root(args.out)
     qa_module, descriptor = load_qa(args.qa_source, args.qa_source_sha256, root / 'qa-source')
-    require(descriptor['api'] == 't3-controller-r24', 'shared live runner requires exact r24 portable source, stage guard and final audit exports')
+    require(descriptor['api'] == 't3-controller-r25', 'shared live runner requires exact r25 source, acknowledged pause and query binding exports')
     bundle = strict_json(args.bundle.read_bytes())
     paths, source, receipt = check_bundle(bundle, full=True)  # Before actor construction.
     spec = strict_json(args.scenario.read_bytes())

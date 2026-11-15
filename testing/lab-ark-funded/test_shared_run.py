@@ -44,6 +44,7 @@ class Hooks:
         self.temporary = tempfile.TemporaryDirectory(prefix='ap5-r21-hooks-')
         self.priv = Path(self.temporary.name)
         self.final_status = 'PASSED'
+        self.paused_drivers = set()
 
     def note(self, stage):
         self.events.append((stage, None))
@@ -84,6 +85,13 @@ class Hooks:
     def command(self, name, payload, timeout=10):
         assert payload['type'] == 'pause_tx_driver'
         self.note('qa-final-traffic-pause')
+        self.paused_drivers.add(payload['driver_id'])
+
+    def acknowledged_traffic_pause(self, driver):
+        # Call-order fixture only; test_shared_r25 invokes the actual helper.
+        if driver in self.paused_drivers:
+            return {'run_id': self.run_id, 'driver_id': driver}
+        return None
 
     def require_active_finalization(self):
         # Call-order fixture only; test_shared_r24 exercises the frozen guard.
@@ -232,6 +240,44 @@ class SharedRunTests(unittest.TestCase):
         self.assertNotIn('qa-final-audit', [name for name, _ in qa.events])
         self.assertEqual(qa.results['final_sealed_prefix']['status'], 'INCONCLUSIVE')
 
+    def test_first_pause_error_does_not_leave_second_driver_unattempted_or_claim_quiescence(self):
+        qa, ap5, run = self.make()
+        qa.fail = 'qa-measured'  # Finalize before audit_live's own pause.
+        attempted = []
+        def pause(name, payload, timeout=10):
+            attempted.append(payload['driver_id'])
+            if payload['driver_id'] == 'txd-0':
+                raise Blocked('SECRET_RESPONSE_NOT_FOR_EVIDENCE')
+            qa.paused_drivers.add(payload['driver_id'])
+        qa.command = pause
+        qa.reenter = run.finalize
+        outcome = run.run()
+        run.finalize()
+        self.assertEqual(attempted, ['txd-0', 'txd-1'])
+        self.assertFalse(run.traffic_quiesced)
+        self.assertEqual((qa.drains, qa.stops), (1, 1))
+        self.assertEqual(outcome['final_audit'], 'inconclusive')
+        self.assertNotIn('qa-final-audit', [name for name, _ in qa.events])
+        error = next(e for e in outcome['errors'] if e['stage'] == 'final_pause:txd-0')
+        self.assertTrue(any(f['function'] == 'pause' for f in error['traceback_frames']))
+        self.assertNotIn('SECRET_RESPONSE_NOT_FOR_EVIDENCE', json.dumps(outcome))
+        self.assertEqual(qa.results['final_sealed_prefix']['status'], 'INCONCLUSIVE')
+
+    def test_all_pause_errors_are_retained_once_without_retries_or_extra_finalization(self):
+        qa, ap5, run = self.make('qa-measured')
+        attempted = []
+        def pause(name, payload, timeout=10):
+            attempted.append(payload['driver_id'])
+            raise Blocked('unit ambiguous pause acknowledgement')
+        qa.command = pause
+        result = run.run()
+        run.finalize()
+        self.assertEqual(attempted, ['txd-0', 'txd-1'])
+        self.assertEqual([e['stage'] for e in result['errors'] if e['stage'].startswith('final_pause:')],
+                         ['final_pause:txd-0', 'final_pause:txd-1'])
+        self.assertFalse(run.traffic_quiesced)
+        self.assertEqual((qa.drains, qa.stops), (1, 1))
+
     def test_nonpassing_returned_final_dict_never_becomes_pass_and_still_cleans_once(self):
         for status in ('INCONCLUSIVE', 'FAILED'):
             qa, ap5, run = self.make()
@@ -371,7 +417,7 @@ class SharedRunTests(unittest.TestCase):
             finally:
                 ev.close()
 
-    def test_portable_QA_r24_import_and_descriptor_tamper_refusal(self):
+    def test_portable_QA_r25_import_and_descriptor_tamper_refusal(self):
         # Fresh interpreter avoids global module-name collisions. Imports only;
         # no Controller construction, actors, services or source observer start.
         code = '''
@@ -393,8 +439,9 @@ with tempfile.TemporaryDirectory(prefix='ap5-qa-code-') as t:
  assert callable(source_feed_runtime.CollectorRuntime.final_drain)
  assert callable(source_feed_runtime.CollectorRuntime.close)
  assert callable(module.Controller.require_active_finalization)
- print('PORTABLE_R24_IMPORT_ONLY_PASS')
+ assert callable(module.Controller.acknowledged_traffic_pause)
+ print('PORTABLE_R25_IMPORT_ONLY_PASS')
 '''
         result = subprocess.run([sys.executable, '-B', '-c', code], cwd=Path(__file__).parent, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertIn(b'PORTABLE_R24_IMPORT_ONLY_PASS', result.stdout)
+        self.assertIn(b'PORTABLE_R25_IMPORT_ONLY_PASS', result.stdout)

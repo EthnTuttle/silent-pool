@@ -98,7 +98,7 @@ class StorageTests(unittest.TestCase):
                            "unix_socket_directories": str(self.root / "pg" / "socket"), "listen_addresses": "127.0.0.1",
                            "server_addr": None if plan.connection.unix else plan.connection.host,
                            "server_port": None if plan.connection.unix else 43210,
-                           "postmaster_start_epoch": "1700000000.123456", "system_identifier": "99999999999999",
+                            "postmaster_identity_file": self.pidfile.read_text(), "system_identifier": "99999999999999",
                            "transaction_read_only": "on", "transaction_isolation": "repeatable read", "backend_pid": 101, "snapshot": "4:9:5,7"},
                 "counts": {table: 0 for table in TABLES}, "tables": {table: [] for table in TABLES}}
 
@@ -207,6 +207,11 @@ class StorageTests(unittest.TestCase):
         self.assertNotIn(c.database, query())
         self.assertNotIn("SELECT *", query())
         self.assertIn("REPEATABLE READ READ ONLY", query())
+        # The SQL server must read the same startup identity as build_plan.
+        # PgStartTime is a different, later timestamp, not a rounded PID-file
+        # timestamp. The source-owned read has a literal path and byte bound.
+        self.assertIn("'postmaster_identity_file', pg_read_file('postmaster.pid', 0, 8192)", query())
+        self.assertNotIn("pg_postmaster_start_time", query())
 
     def test_readonly_result_and_actual_row_shape(self):
         plan = self.plan()
@@ -219,12 +224,58 @@ class StorageTests(unittest.TestCase):
 
     def test_actual_server_socket_vs_tcp_and_cluster_epoch_negatives(self):
         plan = self.plan()
-        for key, value in (("server_addr", "127.0.0.1"), ("port", 5432), ("postmaster_start_epoch", "1700000001.0"),
+        for key, value in (("server_addr", "127.0.0.1"), ("port", 5432), ("postmaster_identity_file", self.pidfile.read_text().replace("1700000000", "1700000001")),
                            ("transaction_read_only", "off"), ("transaction_isolation", "read committed"), ("role", "other")):
             data = self.observation(plan)
             data["server"][key] = value
             with self.subTest(key=key), self.assertRaises(Invalid):
                 validate_rows(json.dumps(data).encode(), plan)
+
+    def test_postmaster_file_exact_binding_across_startup_second_boundary(self):
+        # b16 pool A's exact SQL timestamp is UNKNOWN (response discarded).
+        # Its startup log crosses a second boundary; use its public PID-file
+        # second with this test's synthetic PID/directory.
+        for start in (1794687773, 1794687774):
+            with self.subTest(start=start):
+                lines = self.pidfile.read_text().splitlines(keepends=True)
+                lines[2] = str(start) + "\n"
+                self.write(self.pidfile, "".join(lines))
+                plan = self.plan()
+                validate_rows(json.dumps(self.observation(plan)).encode(), plan)
+                for changed in (str(start - 1), str(start + 1), str(start) + ".000001",
+                                str(start) + ".999999", "NaN", "Infinity"):
+                    data = self.observation(plan)
+                    data["server"]["postmaster_identity_file"] = self.pidfile.read_text().replace(str(start), changed)
+                    with self.subTest(changed=changed), self.assertRaisesRegex(Invalid, "identity file mismatch"):
+                        validate_rows(json.dumps(data).encode(), plan)
+
+    def test_postmaster_file_other_identity_fields_and_shape_fail_closed(self):
+        plan = self.plan()
+        original = self.pidfile.read_text()
+        for old, new in (("100\n", "101\n"), (str(self.root / "pg"), "/foreign/pg"),
+                         ("43210", "43211"), ("socket", "other-socket"), ("ready", "starting")):
+            data = self.observation(plan)
+            data["server"]["postmaster_identity_file"] = original.replace(old, new)
+            with self.subTest(field=old), self.assertRaisesRegex(Invalid, "identity file mismatch"):
+                validate_rows(json.dumps(data).encode(), plan)
+        for value in (None, 1700000000, "", original.rstrip("\n"), "x" * 8193):
+            data = self.observation(plan)
+            data["server"]["postmaster_identity_file"] = value
+            with self.subTest(value_type=type(value).__name__), self.assertRaises(Invalid):
+                validate_rows(json.dumps(data).encode(), plan)
+        for mapping, key in ((plan.postmaster, "start_epoch"), (plan.process_facts, "pid")):
+            mapping[key] += 1
+            with self.subTest(plan_key=key), self.assertRaisesRegex(Invalid, "PID/directory/start/port mismatch"):
+                validate_rows(json.dumps(self.observation(plan)).encode(), plan)
+            mapping[key] -= 1
+
+    def test_legacy_unbound_startup_timestamp_is_not_a_file_identity(self):
+        plan = self.plan()
+        data = self.observation(plan)
+        del data["server"]["postmaster_identity_file"]
+        data["server"]["postmaster_start_epoch"] = "1794687774.000001"
+        with self.assertRaisesRegex(Invalid, "metadata fields changed"):
+            validate_rows(json.dumps(data).encode(), plan)
 
     def test_namespace_result_must_match_exact_declared_address(self):
         self.namespace_fixture()

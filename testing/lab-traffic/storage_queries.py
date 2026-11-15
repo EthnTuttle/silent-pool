@@ -57,7 +57,7 @@ def _render(definitions, query_id, schema):
             " 'unix_socket_directories', current_setting('unix_socket_directories'),\n"
             " 'listen_addresses', current_setting('listen_addresses'),\n"
             " 'server_addr', host(inet_server_addr()), 'server_port', inet_server_port(),\n"
-            " 'postmaster_start_epoch', extract(epoch FROM pg_postmaster_start_time())::text,\n"
+            " 'postmaster_identity_file', pg_read_file('postmaster.pid', 0, 8192),\n"
             " 'system_identifier', (pg_control_system()).system_identifier::text,\n"
             " 'transaction_read_only', current_setting('transaction_read_only'),\n"
             " 'transaction_isolation', current_setting('transaction_isolation'),\n"

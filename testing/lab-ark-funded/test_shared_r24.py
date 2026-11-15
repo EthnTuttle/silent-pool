@@ -23,7 +23,7 @@ root=Path(tmp.name).resolve()
 package_qa(Path(os.environ.get('AP5_QA_TEST_SOURCE',str(Path.cwd().parents[1]))),root/'package')
 descriptor=root/'package/qa-source.json'
 module,profile=load_qa(descriptor,sha(descriptor),root/'source')
-assert profile['api']=='t3-controller-r24'
+assert profile['api']=='t3-controller-r25'
 from runtime_bootstrap import RuntimeBootstrap
 from source_feed_runtime import CollectorRuntime
 from test_runtime_bootstrap import fixture,finish,encoded
@@ -45,6 +45,7 @@ qa.deadline=time.monotonic()+60;qa.native_capture=Mock()
 commands=[]
 def command(name,payload,timeout=10):
  commands.append(payload);qa.note('command:'+payload['type'])
+ if payload['type']=='pause_tx_driver':qa.paused_drivers.add(payload['driver_id'])
 qa.command=command
 coordinator=SharedCoordinator(qa,ap5,lambda *_:None)
 def real_early_collector():

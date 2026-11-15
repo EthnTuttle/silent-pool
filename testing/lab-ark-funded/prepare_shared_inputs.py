@@ -75,6 +75,13 @@ def prepare(args):
     _, qa_descriptor = load_qa(args.qa_source, args.qa_source_sha256, root / 'qa-provisioning-source')
     from source_feed_codec import CONTRACT, CollectorKey, _N, _GX, _GY, _multiply
     from decision_observations import CONTRACT as DECISION_CONTRACT
+    from qa_query import fullrail_query
+    sql_query, sql_bytes = fullrail_query()
+    # This follows load_qa, so a separately versioned observer selects its actual
+    # query bytes even when the Runtime and the fullrail contract ID stay fixed.
+    with (root / 'qa-fullrail-query.sql').open('xb') as stream:
+        stream.write(sql_bytes)
+    (root / 'qa-fullrail-query.sql').chmod(0o600)
     key_root = fresh_root(root / 'attestation-keys')
 
     def key(name):
@@ -158,7 +165,8 @@ def prepare(args):
         'probe_script': probe['script'], 'policy': policy, 'consensus_field_map': mapping,
         'consensus_source_facts': {'subsidy_initial_sats': {'value': policy['subsidy_initial_sats'],
             'source_path': str(subsidy_source), 'source_sha256': sha(subsidy_source)}},
-        'source_feed': {'contract': CONTRACT, 'sql_contract': DECISION_CONTRACT, 'collector_key_file': str(collector_path),
+        'source_feed': {'contract': CONTRACT, 'sql_contract': DECISION_CONTRACT, 'sql_query': sql_query,
+            'collector_key_file': str(collector_path),
             'collector_pubkey': collector_public, 'pool_pubkeys': public_keys, 'agents': agents, 'migration_checksums': migrations}}
     write(root / 'scenario.json', spec); write(root / 'qa-inputs.json', binding)
     result = subprocess.run([bundle['binaries']['lab']['path'], 'validate', '--scenario', str(root / 'scenario.json')],
@@ -170,6 +178,7 @@ def prepare(args):
         'bundle': ref(bundle_path), 'outputs': ref(args.outputs), 'inputs': ref(root / 'qa-inputs.json'),
         'scenario': ref(root / 'scenario.json'), 'run_output': str(run_out), 'timeout_secs': 7200,
         'provisioning_qa_descriptor': ref(args.qa_source), 'provisioning_qa_api': qa_descriptor['api'],
+        'qa_fullrail_query': {**sql_query, 'artifact': ref(root / 'qa-fullrail-query.sql')},
         'runtime_source_root': str(source), 'template': ref(template_path), 'node_source_root': str(node_source),
         'migration_sources': migration_sources, 'scenario_validation': {'exit': result.returncode,
             'stdout': ref(root / 'scenario-validation.stdout'), 'stderr': ref(root / 'scenario-validation.stderr')},
