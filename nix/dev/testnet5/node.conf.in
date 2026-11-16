@@ -1,0 +1,22 @@
+# FUTURE NODE-ONLY FIXTURE: render @DATADIR@ to a fresh owned absolute path.
+# Not installed as a service and not launched by this package.
+# Explicit approval after lab satisfaction precedes any future launch.
+network=testnet5
+datadir=@DATADIR@
+# Public BIP95 P2P default is 18353; this fixture is outbound-only.
+listen=0
+max_inbound=0
+no_discover=1
+no_seeds=1
+# No DNS/fixed seeds exist at this source pin. Revalidate this published peer.
+connect=lapis.erisian.com.au:18353
+max_outbound=8
+milestone=0
+# Private RPC only. The node owns its Unix socket/token and Core cookie.
+rpc_listen=127.0.0.1:18352
+rpc_socket=@DATADIR@/rpc.sock
+rpc_cookie_file=@DATADIR@/.cookie
+rpc_cookie_perms=owner
+log_level=info
+# RPC version stays the real supported default, 190000. No bark-v31 profile,
+# version override, consensus waiver, difficulty overlay or bootstrap import.

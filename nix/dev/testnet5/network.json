@@ -1,0 +1,20 @@
+{
+  "schema": "spc.testnet5.network/1",
+  "chain": "testnet5",
+  "genesis_hash": "00000000000008c1637e7d3252dc1c333d4546fd6fff6a474b200d674a91d497",
+  "genesis_header_hex": "00c0302200000000000000000000000000000000000000000000000000000000000000008de2a6b556ecb56779c34481ede767f09b2ae214f37ab1ad34085b5cb699588c91ebf76affff0f1a31913d65",
+  "magic_wire_hex": "46495645",
+  "default_p2p_port": 18353,
+  "default_rpc_port": 18352,
+  "pow_limit_bits_hex": "1a0fffff",
+  "target_spacing_seconds": 600,
+  "retarget_interval": 2016,
+  "allow_min_difficulty_exception": false,
+  "bip54_activation_height": 1,
+  "subsidy_halving_interval": 210000,
+  "coinbase_maturity": 100,
+  "dns_seeds_at_source_pin": [],
+  "fixed_seeds_at_source_pin": [],
+  "bootstrap_peers_to_revalidate_before_deployment": ["lapis.erisian.com.au:18353"],
+  "bootstrap_peer_source": "https://github.com/bitcoin/bitcoin/pull/35861#issuecomment-6876532713"
+}

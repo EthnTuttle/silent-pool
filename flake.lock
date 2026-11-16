@@ -55,7 +55,8 @@
         "crane": "crane",
         "flake-utils": "flake-utils",
         "nixpkgs": "nixpkgs",
-        "rust-overlay": "rust-overlay"
+        "rust-overlay": "rust-overlay",
+        "testnet5-node-src": "testnet5-node-src"
       }
     },
     "rust-overlay": {
@@ -91,6 +92,25 @@
         "owner": "nix-systems",
         "repo": "default",
         "type": "github"
+      }
+    },
+    "testnet5-node-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1794772616,
+        "narHash": "sha256-dOYjR/LkGo50U+nHw1Y+PqTfOKuvWuf8JbH0ksg50ZA=",
+        "ref": "master",
+        "rev": "8af95b811d81b4797afb69a655fc100202d57ca6",
+        "shallow": true,
+        "type": "git",
+        "url": "https://github.com/rbitcoin-org/rbitcoin.git"
+      },
+      "original": {
+        "ref": "master",
+        "rev": "8af95b811d81b4797afb69a655fc100202d57ca6",
+        "shallow": true,
+        "type": "git",
+        "url": "https://github.com/rbitcoin-org/rbitcoin.git"
       }
     }
   },

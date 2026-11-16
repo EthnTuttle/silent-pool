@@ -1,0 +1,19 @@
+{
+  "schema": "spc.testnet5.node-source/1",
+  "repository": "https://github.com/rbitcoin-org/rbitcoin.git",
+  "revision": "8af95b811d81b4797afb69a655fc100202d57ca6",
+  "nar_hash": "sha256-dOYjR/LkGo50U+nHw1Y+PqTfOKuvWuf8JbH0ksg50ZA=",
+  "last_modified": 1794772616,
+  "source_file_count_before_filter": 1350,
+  "source_blob_bytes_before_filter": 22353155,
+  "fetch": "git; shallow; submodules=false; no export-subst archive",
+  "excluded_gitlink": "third_party/bitcoin@d206226b4993f0330d809ca81851fb6976574ee7",
+  "cargo_lock_sha256": "658f3964c566cc4fbb5281af06bcba4839ec3156b95f04395b2ca8d450650051",
+  "rust_toolchain": "1.95.0",
+  "workspace_version": "0.9.99",
+  "linkage": "Nix-store-linked glibc; not upstream portable musl release",
+  "build_packages": ["rbitcoin-node", "rbitcoin-cli"],
+  "upstream_cargo_git_dependencies": [],
+  "full_consensus_or_live_qualification": false,
+  "stock_bark_c419159_testnet5_support": false
+}

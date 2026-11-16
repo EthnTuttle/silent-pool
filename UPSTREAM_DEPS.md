@@ -22,6 +22,34 @@ Pins guarantee reproducibility and a known-good starting point; nothing here gat
 | `EthnTuttle/rbitcoin` | `c1505776117b1d4d42489f309af33978bbe124cc` (`silent-pool-lab-profile-facts`) | **Published lab build input (2026-11-12).** Exact 2106-file / 30,897,163-byte tested AP1b + consensus-facts r2 source, full manifest `f1592c935e29b0b1fdf6429ad1b84e9ae925e9a9fcccd66b04f3d090680ff20f`, Git tree `8583c44dcaf65bd0d3a4dc95cc88676c53ac58ad`, NAR `sha256-t6LQYTA738Uzstg5AsakWCJS4yGanDBTn4FSpUmhiIU=`. Fetch as Git from `https://github.com/EthnTuttle/rbitcoin.git`, with this immutable revision, `ref = "refs/heads/silent-pool-lab-profile-facts"`, `shallow = true`, `submodules = false`. Archive exports change two bundled Bitcoin files through `export-subst` and do not reproduce that NAR. This is an additional reproducibility binding, not a replacement of reference pin `7736c8e779d9271b6a0c538881f9758527bc3165` or a default/live-node selection change. Parent is the actual implementation baseline `e8cf9c9d61f7c63ae59cc11ab1179cace50ca142`; bundled Bitcoin corpus files match `bitcoin/bitcoin@f0de87f040621468b956f01f526a43a010310501`. Cargo.lock is byte-unchanged. |
 | `ark-bitcoin/bark` | `c419159fa54085572f8ca72d2ba1716556a9d3eb` | **Ark rail (2026-11-02).** The `c419159` the prototypes pin; full SHA from `spc_ark_client/Cargo.lock`. Covers `ark-lib` (address/mailbox/policy formats and the blinding formula of SPEC §11.8), `bark-server-rpc` (public gRPC surface) and `bark-wallet` (send/board/refresh semantics). The pool (`spc-pool`, feature `ark`) uses stock `bark-wallet` + `ark-lib` - no patch, no fork; the agent (`spc-agent`) uses `ark-lib` + `bark-server-rpc` via an in-tree thin wallet (SPEC §10 O13 resolved). Excluded from the pin's guarantee: server configuration defaults (`vtxo_lifetime`, fee schedule, `max_arkoor_amount`), discovered per server via `ArkInfo` at startup, never assumed. `bark-server` (`captaind`) is a dev-dependency for regtest runs only. The workspace adopts the prototype's `[patch.crates-io] ark-lib` -> git-rev mapping so `spc-crypto`'s `ark-lib = "0.7.1"` and the pinned git crate stay one package (crate identity is load-bearing: `Address`, `Vtxo` and `Keypair` types cross between `spc-crypto`, the adapter and the RPC bindings). See `docs/decisions/2026-11-02-bark-adapter.md`. |
 
+## Independent future Testnet5 development node (2026-11-16)
+
+`rbitcoin-org/rbitcoin @ 8af95b811d81b4797afb69a655fc100202d57ca6`
+is the separate `testnet5-node-src` non-flake Git input in `flake.lock`.
+NAR: `sha256-dOYjR/LkGo50U+nHw1Y+PqTfOKuvWuf8JbH0ksg50ZA=`;
+upstream Cargo.lock SHA256:
+`658f3964c566cc4fbb5281af06bcba4839ec3156b95f04395b2ca8d450650051`.
+The opt-in `rbitcoin-node-testnet5-dev` package in `nix/dev/testnet5-node.nix`
+uses Rust 1.95.0 and source version 0.9.99. Fetch via Git, shallow and without
+submodules, never an export-subst archive. The 1350 source blobs total
+22353155 bytes before filtering; the excluded Bitcoin corpus gitlink is
+`d206226b4993f0330d809ca81851fb6976574ee7` and is not required by the product.
+
+This source implements BIP95's public Testnet5 genesis
+`00000000000008c1637e7d3252dc1c333d4546fd6fff6a474b200d674a91d497`,
+wire magic `46495645`, P2P 18353/RPC 18352, BIP54 from block 1, and ordinary
+retargeting without the 20-minute difficulty exception. No DNS/fixed seeds
+are shipped at this pin. `nix/dev/testnet5/network.json` binds these facts;
+the private node-only config is a fixture, not an installed service.
+
+Qualification is source/offline-fixture only until a separately scheduled
+build and live-node validation pass. The package is Nix-store-linked glibc,
+not the upstream portable static release. Stock Bark c419159 lacks Testnet5
+support. This input does not replace the c150577 lab pin or authorize a
+deployment. Adopt this entry, the package files, root flake wiring and its
+new lock node atomically. Future repins update the source record and lock
+together. Validation recipe: `nix/dev/testnet5/README.md`.
+
 ## Project-owned canonical lab probe (2026-11-12)
 
 The Python canonical probe is maintained in `testing/ark-rpc`, not in an

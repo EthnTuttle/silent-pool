@@ -1,0 +1,13 @@
+{
+  "getblockchaininfo": {
+    "chain": "testnet5",
+    "blocks": 0,
+    "initialblockdownload": true
+  },
+  "getblockhash": "00000000000008c1637e7d3252dc1c333d4546fd6fff6a474b200d674a91d497",
+  "getblockheader": "00c0302200000000000000000000000000000000000000000000000000000000000000008de2a6b556ecb56779c34481ede767f09b2ae214f37ab1ad34085b5cb699588c91ebf76affff0f1a31913d65",
+  "getnetworkinfo": {
+    "version": 190000,
+    "subversion": "/rbitcoin:0.9.99/"
+  }
+}

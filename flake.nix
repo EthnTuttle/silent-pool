@@ -12,9 +12,15 @@
     # edge to add. No production output references crane yet; only the
     # opt-in spc-ark-deps-crane-pilot package below consumes it.
     crane.url = "github:ipetkov/crane/79fd63528501446749c09f08cad486a58c7d173e";
+    # Independent future-development input; never used by the regtest lab.
+    # Git preserves blobs (including export-subst content); no archive source.
+    testnet5-node-src = {
+      url = "git+https://github.com/rbitcoin-org/rbitcoin.git?ref=master&rev=8af95b811d81b4797afb69a655fc100202d57ca6&shallow=1";
+      flake = false;
+    };
   };
 
-  outputs = { self, nixpkgs, flake-utils, rust-overlay, crane }:
+  outputs = { self, nixpkgs, flake-utils, rust-overlay, crane, testnet5-node-src }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs {
@@ -94,7 +100,12 @@
         # The pilot package in `packages` is its only consumer.
         craneLib = (crane.mkLib pkgs).overrideToolchain rust;
       in {
-        packages = rec {
+        packages = pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          rbitcoin-node-testnet5-dev = import ./nix/dev/testnet5-node.nix {
+            inherit pkgs;
+            nodeSource = testnet5-node-src;
+          };
+        } // rec {
           rbitcoin-node-ark-lab = import ./nix/lab/ark-node.nix { inherit pkgs; };
           spc-lab-self-hosted-ark = import ./nix/lab/ark-runtime.nix {
             inherit pkgs src;
