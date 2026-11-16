@@ -238,6 +238,12 @@ would make the API an attribution oracle.
 
 ### 5.5 Internal crate APIs (proposed per roadmap Phase 1–2; prototype-shaped)
 
+Draft Testnet5 integration (SPEC §2.1/§5.1/§5.3): `ChainNetwork` supplies exact
+chain/code/genesis independently of the old SP/BIP32 encoding `Network`.
+Parsing an SP address validates encoding only. Pool startup binds SQL and the
+dedicated SPc Redis DB; remote bootstrap uses WIRE §3.5's chain envelope. No
+new metadata crosses the Ark ACL, and stock Testnet5 Ark remains unsupported.
+
 `spc-crypto` (all pure; signatures exist in `spc_ark/src/lib.rs` today):
 `parse_sp_address() → (B_scan, B_spend, network)` ·
 `sp_id(B_scan, B_spend)` ·

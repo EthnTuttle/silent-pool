@@ -18,6 +18,9 @@ struct Cli {
 enum Command {
     /// Find this miner's SPc outputs in a block range.
     Find {
+        /// Exact consensus chain. Required for RPC; HRP cannot select a test chain.
+        #[arg(long)]
+        network: Option<String>,
         #[arg(long)]
         address: String,
         #[arg(long)]
@@ -82,12 +85,13 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::GenAddress { network } => {
-            let net = match network.as_str() {
-                "mainnet" => spc_crypto::Network::Mainnet,
-                "testnet4" | "testnet" => spc_crypto::Network::Testnet,
-                "signet" => spc_crypto::Network::Signet,
-                _ => spc_crypto::Network::Regtest,
-            };
+            // Preserve this command's historical testnet4 alias, reject typos.
+            let chain = spc_crypto::ChainNetwork::parse(if network == "testnet" {
+                "testnet4"
+            } else {
+                &network
+            })?;
+            let net = chain.sp_encoding();
             let secp = bitcoin::secp256k1::Secp256k1::new();
             let scan = bitcoin::secp256k1::SecretKey::new(&mut rand::thread_rng());
             let spend = bitcoin::secp256k1::SecretKey::new(&mut rand::thread_rng());
@@ -98,6 +102,8 @@ async fn main() -> anyhow::Result<()> {
                 "{}",
                 serde_json::json!({
                     "address": address,
+                    "network": chain.name(),
+                    "genesis_hash": chain.genesis().to_string(),
                     "b_scan": spc_scan::hex(&b_scan.serialize()),
                     "b_spend": spc_scan::hex(&b_spend.serialize()),
                     "scan_key": spc_scan::hex(&scan.secret_bytes()),
@@ -138,6 +144,7 @@ async fn main() -> anyhow::Result<()> {
             );
         }
         Command::Find {
+            network,
             address,
             scan_key,
             from,
@@ -147,19 +154,45 @@ async fn main() -> anyhow::Result<()> {
             rpc_pass,
             blocks,
         } => {
+            let chain = network
+                .as_deref()
+                .map(spc_crypto::ChainNetwork::parse)
+                .transpose()?;
+            if let Some(chain) = chain {
+                spc_crypto::parse_sp_address(&address, chain.sp_encoding())?;
+            }
+            if blocks.is_some() && rpc.is_some() {
+                anyhow::bail!("--blocks and --rpc are mutually exclusive");
+            }
             let (b_spend, kind) = parse_address(&address)?;
             let b_scan = parse_scan_key(&scan_key).map_err(|e| anyhow::anyhow!(e))?;
             let source: Box<dyn BlockSource> = match (blocks, rpc) {
-                (Some(dir), _) => Box::new(FileSource::open(&dir).map_err(|e| anyhow::anyhow!(e))?),
+                (Some(dir), _) => {
+                    // A sparse file/proof set has no genesis ancestry contract.
+                    // Keep its historical recovery semantics, without a false
+                    // chain-identity assertion from a caller-supplied label.
+                    if chain.is_some() {
+                        anyhow::bail!(
+                            "--network binding requires --rpc; offline ancestry is not verified"
+                        );
+                    }
+                    Box::new(FileSource::open(&dir).map_err(|e| anyhow::anyhow!(e))?)
+                }
                 (None, Some(url)) => {
                     #[cfg(feature = "rpc")]
                     {
+                        let chain = chain.ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "--rpc requires explicit --network (HRP is not chain identity)"
+                            )
+                        })?;
                         let auth = match (rpc_user, rpc_pass) {
                             (Some(u), Some(p)) => bitcoincore_rpc::Auth::UserPass(u, p),
                             _ => bitcoincore_rpc::Auth::None,
                         };
                         Box::new(
-                            spc_scan::RpcSource::new(&url, auth).map_err(|e| anyhow::anyhow!(e))?,
+                            spc_scan::RpcSource::new_for_chain(&url, auth, chain)
+                                .map_err(|e| anyhow::anyhow!(e))?,
                         )
                     }
                     #[cfg(not(feature = "rpc"))]
@@ -182,6 +215,7 @@ async fn main() -> anyhow::Result<()> {
                         serde_json::json!({
                             "height": height,
                             "address_kind": kind,
+                            "chain_network": chain.map(|c| c.name()),
                             "a_send": outcome.a_x.map(|x| spc_scan::hex(&x)),
                             "found": outcome.found,
                         })

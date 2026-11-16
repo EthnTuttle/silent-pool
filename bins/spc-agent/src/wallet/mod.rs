@@ -91,6 +91,15 @@ impl WalletSettings {
     /// closed when the `[ark]` section does not fully describe the
     /// provisioned material.
     pub fn from_config(config: &AgentConfig) -> anyhow::Result<Self> {
+        // Recheck at the public config adapter, before keys or state are opened.
+        // Callers constructing AgentConfig directly must not alias new chains.
+        if let Some(chain) = config.chain_network()? {
+            chain.stock_bitcoin_network()?;
+            anyhow::ensure!(
+                chain != spc_crypto::ChainNetwork::Testnet4,
+                "Testnet4 needs the explicit-chain WalletKeys adapter"
+            );
+        }
         let ark = config
             .ark
             .as_ref()

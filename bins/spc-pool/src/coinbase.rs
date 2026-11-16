@@ -14,6 +14,7 @@
 //!   carrier. `A_send` travels in the `OP_RETURN` output the caller supplies
 //!   in `outputs` (§2.4.2).
 
+use crate::template::CoinbaseFields;
 use bitcoin::bip32::{ChildNumber, Xpub};
 use bitcoin::script::ScriptBuf;
 use bitcoin::NetworkKind;
@@ -33,6 +34,8 @@ const VPUB_VERSION: [u8; 4] = [0x04, 0x5F, 0x1C, 0xF6];
 /// A coinbase could not be built within the scriptSig budget.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum CoinbaseError {
+    #[error("coinbase consensus fields: {0}")]
+    Consensus(String),
     /// The height push (+ carrier, in pool-template mode) + extranonce would
     /// exceed the 100 bytes the Template Provider reserves for the scriptSig.
     #[error(
@@ -129,6 +132,29 @@ pub fn try_build_pool_template(
     outputs: &[(ScriptBuf, u64)],
     locktime: u32,
 ) -> Result<CoinbaseTemplate, CoinbaseError> {
+    try_build_pool_template_with_fields(
+        version,
+        height,
+        a_x,
+        extranonce_len,
+        outputs,
+        CoinbaseFields::legacy(locktime),
+    )
+}
+
+/// Template-sourced builder used by the live front. The legacy wrapper above
+/// remains for existing callers without a negotiated live template.
+pub fn try_build_pool_template_with_fields(
+    version: u32,
+    height: u32,
+    a_x: &[u8; 32],
+    extranonce_len: usize,
+    outputs: &[(ScriptBuf, u64)],
+    fields: CoinbaseFields,
+) -> Result<CoinbaseTemplate, CoinbaseError> {
+    fields
+        .validate(height)
+        .map_err(|e| CoinbaseError::Consensus(e.to_string()))?;
     if !script_sig_budget(height, extranonce_len) {
         return Err(CoinbaseError::ScriptSigBudget {
             height,
@@ -138,7 +164,7 @@ pub fn try_build_pool_template(
     }
     let script_sig_prefix = emit_script_sig(height, a_x);
     let prefix = coinbase_prefix(version, &script_sig_prefix, extranonce_len);
-    let suffix = output_suffix(outputs, locktime);
+    let suffix = output_suffix(outputs, fields);
     Ok(CoinbaseTemplate {
         prefix,
         suffix,
@@ -171,7 +197,7 @@ pub fn build_jd_template(
         });
     }
     let prefix = coinbase_prefix(version, &h_push, extranonce_len);
-    let suffix = output_suffix(outputs, locktime);
+    let suffix = output_suffix(outputs, CoinbaseFields::legacy(locktime));
     Ok(CoinbaseTemplate {
         prefix,
         suffix,
@@ -197,16 +223,16 @@ fn coinbase_prefix(version: u32, script_sig_prefix: &[u8], extranonce_len: usize
 }
 
 /// Transaction suffix from the input sequence through the locktime.
-fn output_suffix(outputs: &[(ScriptBuf, u64)], locktime: u32) -> Vec<u8> {
+fn output_suffix(outputs: &[(ScriptBuf, u64)], fields: CoinbaseFields) -> Vec<u8> {
     let mut suffix = Vec::new();
-    suffix.extend_from_slice(&u32::MAX.to_le_bytes()); // sequence
+    suffix.extend_from_slice(&fields.sequence.to_le_bytes());
     write_compact_size(&mut suffix, outputs.len() as u64);
     for (script, value) in outputs {
         suffix.extend_from_slice(&value.to_le_bytes());
         write_compact_size(&mut suffix, script.len() as u64);
         suffix.extend_from_slice(script.as_bytes());
     }
-    suffix.extend_from_slice(&locktime.to_le_bytes());
+    suffix.extend_from_slice(&fields.locktime.to_le_bytes());
     suffix
 }
 

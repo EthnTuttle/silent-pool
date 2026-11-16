@@ -114,7 +114,7 @@ U64    registration_rev            // durable registration revision returned in 
 U8     state                       // 0 applied, 1 already_applied, 2 superseded
 B033   b_scan
 B033   b_spend
-I64    identity_network            // 0 mainnet, 1 testnet4, 2 signet, 3 regtest
+I64    identity_network            // 0 mainnet, 1 testnet4, 2 signet, 3 regtest, 4 testnet5, 5 testnet3
 B004   ark_id
 B033   b_ark
 U8     mailbox_mode                // 0 none, 1 static, 2 epoch_derived, 3 epoch_registered
@@ -273,6 +273,19 @@ U32     expiry_height         // 0 if failed
 The signing key is the order-signing key of SPEC §11.3 (secp256k1, BIP340; `order_pubkey` is the 32-byte x-only key). No `sp_id`, `B_scan`, `B_spend`, `P_i` or block hash appears in either message (SPEC §11.3, schema-tested in §11.9).
 
 ### 3.5 Bootstrap RPC (front → payout)Transport: length-prefixed (`U32 LE`) JSON over TCP to the `payout` role's internal listener, TLS with per-front credentials (the same trust level as the front's Redis ACL, MULTI-REGION §6). It returns attribution data, so it MUST NOT be exposed beyond the fronts. A front is not ready (no channel opens) until the RPC completes.
+
+**Draft chain-bound envelope (2026-11-15; SPEC §2.1/§5.1/§5.3).** New-chain
+response: `{ "chain": { "version": 1, "network": "testnet5",
+"network_code": 4, "genesis_hash": "00000000000008c1637e7d3252dc1c333d4546fd6fff6a474b200d674a91d497" },
+"snapshot": <the response below> }`. Genesis is display-order hex, unlike
+internal block hash arrays. Exact version/name/code/known-genesis and identity
+row code equality are required before apply. Missing/unknown fields or a legacy
+unenveloped response cannot acquire a default chain. Existing snapshot fields
+stay intact. Current runtime uses direct SQL bootstrap with a database binding;
+this envelope does not claim an implemented remote server. Persistent SPc-only
+Redis `spc:chain-identity` uses compact JSON of the same chain object, initialized
+only into an empty dedicated DB, no TTL or overwrite. Ark reads no new key;
+its messages and ACL stay unchanged. Old stream versions and codes 0..3 remain.
 
 **Request**
 ```json

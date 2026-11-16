@@ -43,7 +43,7 @@ use thiserror::Error;
 use crate::block::{
     assemble, assemble_witness, coinbase_merkle_branch, merkle_root, AssembledBlock,
 };
-use crate::coinbase::{build_pool_template, commitment_output, CoinbaseTemplate};
+use crate::coinbase::{commitment_output, try_build_pool_template_with_fields, CoinbaseTemplate};
 use crate::sv1::{
     network_target, ntime_allowed, nullifier, version_allowed, Job, Share, SharePolicy,
 };
@@ -1061,6 +1061,14 @@ impl Front {
 
     async fn refresh_inner(&mut self) -> Result<Job, FrontError> {
         let template = self.source.get_template().await?;
+        template.validate_context()?;
+        if template.coinbase.consensus_cleanup() {
+            for raw in &template.transactions {
+                template
+                    .coinbase
+                    .validate_transaction(&crate::template::decode_transaction_strict(raw)?)?;
+            }
+        }
         if let Some(store) = &self.economic_source {
             let view = store
                 .economic_view()
@@ -1151,7 +1159,11 @@ impl Front {
             || commitment_moved
             || self.template_id != template_id
             || self.template.as_ref().is_some_and(|previous| {
-                previous.bits != template.bits || previous.version != template.version
+                previous.bits != template.bits
+                    || previous.version != template.version
+                    || previous.coinbase != template.coinbase
+                    || previous.min_time != template.min_time
+                    || previous.max_time != template.max_time
             });
         // The job id must exist before the slice is opened: the slice records
         // `(H << 32) | job_id` of the job it belongs to (SPEC §3.4).
@@ -1368,15 +1380,19 @@ impl Front {
         if controlled_bytes > template.coinbase_output_max_additional_size as usize {
             return Err(spc_accounting::Error::PayoutWeight.into());
         }
-        let coinbase = build_pool_template(
+        let coinbase = try_build_pool_template_with_fields(
             template.version,
             template.height,
             &a_send_x,
             self.cfg.extranonce_len,
             &outputs,
-            0,
-        );
+            template.coinbase,
+        )
+        .map_err(|e| TemplateError::Unavailable(e.to_string()))?;
         let stripped = coinbase.assemble(&vec![0; self.cfg.extranonce_len]);
+        template
+            .coinbase
+            .validate_coinbase(template.height, &stripped)?;
         crate::block::validate_template_weight(
             &stripped,
             &template.transactions,
@@ -1539,7 +1555,7 @@ impl Front {
         if !version_allowed(template.version, share.version) {
             return Err(FrontError::InvalidVersion);
         }
-        if !ntime_allowed(job.ntime, share.ntime) {
+        if !ntime_allowed(job.ntime, share.ntime) || !template.time_allowed(share.ntime) {
             return Err(FrontError::StaleTime);
         }
         if share.extranonce.len() != self.cfg.extranonce_len {
@@ -1550,6 +1566,9 @@ impl Front {
         #[cfg(not(test))]
         let revalidate_headers = true;
         if revalidate_headers {
+            template
+                .coinbase
+                .validate_coinbase(template.height, &share.coinbase)?;
             revalidate_share(&job, &share)?;
         }
 
@@ -2151,6 +2170,9 @@ mod tests {
             version: 0x2000_0000,
             bits: 0x207f_ffff, // easy regtest target
             curtime: 1_700_000_000,
+            min_time: 1_700_000_000,
+            max_time: None,
+            coinbase: crate::template::CoinbaseFields::legacy(0),
             subsidy: 312_500_000,
             fees: 0,
             coinbase_value: 312_500_000,
@@ -2373,6 +2395,9 @@ pool_payout_descriptor = "DESCRIPTOR"
             version: 0x2000_0000,
             bits,
             curtime: 1_700_000_000,
+            min_time: 1_700_000_000,
+            max_time: None,
+            coinbase: crate::template::CoinbaseFields::legacy(0),
             subsidy: 312_500_000,
             fees,
             coinbase_value: 312_500_000 + fees,
@@ -3177,6 +3202,75 @@ pool_payout_descriptor = "DESCRIPTOR"
         assert!(ntime_allowed(refreshed.ntime, refreshed.ntime + 30));
     }
 
+    #[tokio::test]
+    async fn bip54_fields_and_time_bounds_retire_old_work() {
+        let source = Arc::new(MutableSource::new(template()));
+        let mut front = Front::new(cfg(), source.clone(), type32());
+        let old = front.refresh().await.unwrap();
+        let stale = share(&front, 1);
+        let mut next = template();
+        next.coinbase = crate::template::CoinbaseFields::from_gbt_rules(
+            next.height,
+            &["!consensuscleanup".into()],
+        )
+        .unwrap();
+        source.set(next.clone());
+        let active = front.refresh().await.unwrap();
+        assert_ne!(active.job_id, old.job_id);
+        assert!(matches!(front.on_share(stale), Err(FrontError::StaleJob)));
+        let raw = coinbase_of(&active, &[0; 8]);
+        let tx: bitcoin::Transaction = bitcoin::consensus::deserialize(&raw).unwrap();
+        assert_eq!(tx.lock_time.to_consensus_u32(), next.height - 1);
+        assert_eq!(tx.input[0].sequence.0, 0xffff_fffe);
+
+        next.min_time += 1;
+        next.curtime = next.min_time;
+        next.max_time = Some(next.curtime + 10);
+        source.set(next.clone());
+        let bounded = front.refresh().await.unwrap();
+        assert_ne!(bounded.job_id, active.job_id);
+        assert_eq!(bounded.ntime, next.min_time);
+        let mut too_late = share(&front, 2);
+        too_late.ntime = next.max_time.unwrap() + 1;
+        assert!(matches!(
+            front.on_share(too_late),
+            Err(FrontError::StaleTime)
+        ));
+        next.curtime = next.min_time - 1;
+        source.set(next);
+        assert!(front.refresh().await.is_err());
+        assert!(front.job().is_none());
+    }
+
+    #[tokio::test]
+    async fn bip54_real_header_and_witness_assembly_preserve_fields() {
+        let mut t = template_at(800_000, 0x207f_ffff, 0);
+        t.coinbase = crate::template::CoinbaseFields::from_gbt_rules(
+            t.height,
+            &["!consensuscleanup".into()],
+        )
+        .unwrap();
+        t.transactions = vec![raw_witness_tx(1)];
+        let source = Arc::new(MockTemplateSource::new(t.clone()));
+        let mut front = Front::new(cfg(), source, type32());
+        front.revalidate_headers = true;
+        front.refresh().await.unwrap();
+        let good = fully_hashed_v2_share(&front, 0, true);
+        let mut bad = good.clone();
+        let mut tx: bitcoin::Transaction = bitcoin::consensus::deserialize(&bad.coinbase).unwrap();
+        tx.input[0].sequence = bitcoin::Sequence::MAX;
+        bad.coinbase = bitcoin::consensus::serialize(&tx);
+        assert!(front.on_share(bad).is_err());
+        assert!(front.open.as_ref().unwrap().shares.is_empty());
+        let found = front.on_share(good).unwrap().unwrap();
+        let block: bitcoin::Block = bitcoin::consensus::deserialize(&found.block).unwrap();
+        assert_eq!(block.txdata[0].lock_time.to_consensus_u32(), t.height - 1);
+        assert_eq!(block.txdata[0].input[0].sequence.0, 0xffff_fffe);
+        assert!(!block.txdata[0].input[0].witness.is_empty());
+        assert!(block.check_merkle_root());
+        assert!(block.check_witness_commitment());
+    }
+
     /// A version rolled outside the BIP 320 mask is not the template.
     #[tokio::test]
     async fn a_version_outside_the_mask_is_rejected() {
@@ -3510,7 +3604,10 @@ pool_payout_descriptor = "DESCRIPTOR"
         let mut front = Front::new(cfg(), source, type32());
         front.refresh().await.unwrap();
         front.revalidate_headers = true;
-        let mut forged = share(&front, 1);
+        // A genuinely valid, fully hashed share: the forged header hash must
+        // be caught by revalidation itself, after the BIP54 consensus-fields
+        // pre-check accepts the complete issued coinbase.
+        let mut forged = fully_hashed_v2_share(&front, 1, true);
         forged.share_hash = [0u8; 32];
         assert!(matches!(
             front.on_share(forged),

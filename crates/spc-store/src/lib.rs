@@ -6,6 +6,7 @@
 pub mod aggregate_store;
 pub mod aggregation;
 pub mod bootstrap;
+pub mod chain;
 pub mod codec;
 pub mod economic;
 pub mod models;

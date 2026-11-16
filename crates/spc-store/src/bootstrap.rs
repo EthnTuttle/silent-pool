@@ -12,6 +12,35 @@ use crate::models::*;
 
 pub const MAX_FRAME: usize = 64 * 1024 * 1024;
 
+/// Opt-in chain-bound bootstrap envelope. The legacy payload stays byte/field
+/// compatible; new-chain consumers must reject an unenveloped legacy response.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ChainBoundBootstrap {
+    pub chain: crate::chain::ChainBinding,
+    pub snapshot: BootstrapResponse,
+}
+
+impl ChainBoundBootstrap {
+    pub fn into_snapshot(
+        self,
+        expected: spc_crypto::ChainNetwork,
+    ) -> crate::postgres::Result<BootstrapResponse> {
+        self.chain.validate(expected)?;
+        if self
+            .snapshot
+            .ark_identities
+            .iter()
+            .any(|i| i.network != expected.code())
+        {
+            return Err(crate::postgres::StoreError::Invalid(
+                "bootstrap identity chain mismatch",
+            ));
+        }
+        Ok(self.snapshot)
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum FrameError {
     #[error("io: {0}")]
@@ -225,6 +254,24 @@ impl BootstrapResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chain_envelope_cannot_restore_a_same_prefix_chain() {
+        let chain = spc_crypto::ChainNetwork::Testnet5;
+        let value = serde_json::json!({
+            "chain": crate::chain::ChainBinding::new(chain),
+            "snapshot": { "economic": null, "rev": 0, "pending_balance": [],
+                "ark_delivery": [], "ark_identities": [], "ark_epoch_mailboxes": [],
+                "window_tail": [], "type32_blobs": [], "resume_cursors": {} }
+        });
+        let bound: ChainBoundBootstrap = serde_json::from_value(value.clone()).unwrap();
+        assert!(bound
+            .into_snapshot(spc_crypto::ChainNetwork::Testnet4)
+            .is_err());
+        let bound: ChainBoundBootstrap = serde_json::from_value(value.clone()).unwrap();
+        assert!(bound.into_snapshot(chain).is_ok());
+        assert!(serde_json::from_value::<ChainBoundBootstrap>(value["snapshot"].clone()).is_err());
+    }
 
     #[tokio::test]
     async fn frame_round_trip() {

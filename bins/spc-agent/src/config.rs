@@ -296,7 +296,7 @@ fn default_status_listen() -> String {
 fn parse_network(s: &str) -> Option<Network> {
     match s {
         "mainnet" => Some(Network::Mainnet),
-        "testnet" => Some(Network::Testnet),
+        "testnet" | "testnet3" | "testnet4" | "testnet5" => Some(Network::Testnet),
         "signet" => Some(Network::Signet),
         "regtest" => Some(Network::Regtest),
         _ => None,
@@ -321,6 +321,8 @@ impl OwnPayoutPolicy {
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ConfigError {
+    #[error("explicit chain is unsupported by this wallet/runtime adapter: {0}")]
+    UnsupportedChain(String),
     #[error("sp_address is not a valid address for the pool network")]
     InvalidAddress,
     #[error("require_own_payout must be 'warn' or 'refuse'")]
@@ -406,6 +408,19 @@ impl Ark {
 }
 
 impl AgentConfig {
+    /// Explicit chain selection uses the existing [ark] network key even when
+    /// Ark is disabled. Missing test-family selection remains unknown; HRP is
+    /// not promoted to a consensus identity. Historical agent `testnet` is v3.
+    pub fn chain_network(&self) -> Result<Option<spc_crypto::ChainNetwork>, ConfigError> {
+        let Some(name) = self.ark.as_ref().and_then(|a| a.network.as_deref()) else {
+            return Ok(None);
+        };
+        let canonical = if name == "testnet" { "testnet3" } else { name };
+        spc_crypto::ChainNetwork::parse(canonical)
+            .map(Some)
+            .map_err(|_| ConfigError::Network(name.into()))
+    }
+
     pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
         let text = std::fs::read_to_string(path)?;
         let mut cfg: Self = toml::from_str(&text)?;
@@ -461,6 +476,23 @@ impl AgentConfig {
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
+        let chain = self.chain_network()?;
+        if let Some(chain) = chain {
+            parse_sp_address(&self.upstream.sp_address, chain.sp_encoding())
+                .map_err(|_| ConfigError::InvalidAddress)?;
+            if self.ark.as_ref().is_some_and(|a| a.enabled) {
+                chain
+                    .stock_bitcoin_network()
+                    .map_err(|e| ConfigError::UnsupportedChain(e.to_string()))?;
+                // WalletKeys still stores the old encoding selector. Do not
+                // collapse explicit Testnet4 into its legacy Testnet3 backend.
+                if chain == spc_crypto::ChainNetwork::Testnet4 {
+                    return Err(ConfigError::UnsupportedChain(
+                        "Testnet4 needs the explicit-chain WalletKeys adapter".into(),
+                    ));
+                }
+            }
+        }
         let network = self.network();
         let parsed = parse_sp_address(&self.upstream.sp_address, network)
             .map_err(|_| ConfigError::InvalidAddress)?;
@@ -552,6 +584,29 @@ impl AgentConfig {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn explicit_testnet5_is_not_a_stock_wallet_alias() {
+        let mut cfg = sample();
+        cfg.ark.as_mut().unwrap().network = Some("testnet5".into());
+        assert_eq!(
+            cfg.chain_network().unwrap(),
+            Some(spc_crypto::ChainNetwork::Testnet5)
+        );
+        assert!(matches!(
+            cfg.validate(),
+            Err(ConfigError::UnsupportedChain(_))
+        ));
+        cfg.ark.as_mut().unwrap().enabled = false;
+        assert!(cfg.validate().is_ok());
+        cfg.ark.as_mut().unwrap().network = Some("testnet".into());
+        assert_eq!(
+            cfg.chain_network().unwrap(),
+            Some(spc_crypto::ChainNetwork::Testnet3)
+        );
+        cfg.ark.as_mut().unwrap().network = Some("testnet5 ".into());
+        assert!(cfg.validate().is_err());
+    }
+
     use super::*;
     use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
 

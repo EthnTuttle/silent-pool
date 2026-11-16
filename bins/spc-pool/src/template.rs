@@ -5,6 +5,120 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
+/// Coinbase consensus selected by the trusted template source, never by a
+/// network-name heuristic or a user override. Fields are immutable after
+/// negotiation and travel in the serialized job suffix on SV1 and SV2.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CoinbaseFields {
+    pub locktime: u32,
+    pub sequence: u32,
+    consensus_cleanup: bool,
+}
+
+impl CoinbaseFields {
+    pub const fn legacy(locktime: u32) -> Self {
+        Self {
+            locktime,
+            sequence: u32::MAX,
+            consensus_cleanup: false,
+        }
+    }
+
+    pub fn from_gbt_rules(height: u32, rules: &[String]) -> Result<Self, TemplateError> {
+        let mut cleanup = false;
+        for rule in rules {
+            match rule.strip_prefix('!').unwrap_or(rule) {
+                "consensuscleanup" => cleanup = true,
+                "segwit" | "csv" | "taproot" => {}
+                // This adapter does not construct signet solutions.
+                "signet" => {
+                    return Err(TemplateError::Unavailable(
+                        "unsupported GBT signet rule".into(),
+                    ))
+                }
+                _ if rule.starts_with('!') => {
+                    return Err(TemplateError::Unavailable(format!(
+                        "unknown required GBT rule: {rule}"
+                    )))
+                }
+                _ => {} // BIP 9/145 optional rules need not be understood.
+            }
+        }
+        if !cleanup {
+            return Ok(Self::legacy(0));
+        }
+        let locktime = height
+            .checked_sub(1)
+            .filter(|h| *h < 500_000_000)
+            .ok_or_else(|| {
+                TemplateError::Unavailable("BIP54 height outside height-locktime range".into())
+            })?;
+        Ok(Self {
+            locktime,
+            sequence: 0xffff_fffe,
+            consensus_cleanup: true,
+        })
+    }
+
+    pub fn consensus_cleanup(self) -> bool {
+        self.consensus_cleanup
+    }
+
+    pub fn validate(self, height: u32) -> Result<(), TemplateError> {
+        if self.consensus_cleanup {
+            validate_bip54_fields(height, self.locktime, self.sequence)?;
+        } else if self.sequence != u32::MAX {
+            return Err(TemplateError::Unavailable(
+                "legacy coinbase sequence changed".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn validate_coinbase(self, height: u32, raw: &[u8]) -> Result<(), TemplateError> {
+        self.validate(height)?;
+        let tx = decode_transaction_strict(raw)?;
+        if !tx.is_coinbase()
+            || tx.lock_time.to_consensus_u32() != self.locktime
+            || tx.input[0].sequence.0 != self.sequence
+        {
+            return Err(TemplateError::Unavailable(
+                "coinbase differs from negotiated template fields".into(),
+            ));
+        }
+        self.validate_transaction(&tx)
+    }
+
+    pub fn validate_transaction(self, tx: &bitcoin::Transaction) -> Result<(), TemplateError> {
+        if self.consensus_cleanup && tx.base_size() == 64 {
+            return Err(TemplateError::Unavailable(
+                "BIP54 forbids 64-byte stripped transactions".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// BIP54's coinbase-field rule. Any non-final sequence is consensus-valid;
+/// the pool chooses 0xfffffffe. Heights beyond height-based nLockTime are
+/// deliberately unsupported rather than interpreted as timestamps.
+pub fn validate_bip54_fields(
+    height: u32,
+    locktime: u32,
+    sequence: u32,
+) -> Result<(), TemplateError> {
+    if height == 0
+        || locktime >= 500_000_000
+        || height.checked_sub(1) != Some(locktime)
+        || sequence == u32::MAX
+    {
+        return Err(TemplateError::Unavailable(
+            "invalid BIP54 coinbase height/locktime/sequence".into(),
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Template {
     pub height: u32,
@@ -12,6 +126,11 @@ pub struct Template {
     pub version: u32,
     pub bits: u32,
     pub curtime: u32,
+    /// Source-computed minimum includes MTP and active retarget-boundary rules.
+    pub min_time: u32,
+    /// Optional absolute GBT bound. It is rechecked before credit/submission.
+    pub max_time: Option<u32>,
+    pub coinbase: CoinbaseFields,
     /// Block subsidy, in satoshis.
     pub subsidy: u64,
     /// Selected transaction fees, in satoshis.
@@ -25,6 +144,22 @@ pub struct Template {
     /// The Template Provider's reservation for the coinbase's additional
     /// outputs (SPEC §4.8).
     pub coinbase_output_max_additional_size: u32,
+}
+
+impl Template {
+    pub fn validate_context(&self) -> Result<(), TemplateError> {
+        self.coinbase.validate(self.height)?;
+        if !self.time_allowed(self.curtime) {
+            return Err(TemplateError::Unavailable(
+                "GBT curtime outside mintime/maxtime".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn time_allowed(&self, time: u32) -> bool {
+        time >= self.min_time && self.max_time.is_none_or(|max| time <= max)
+    }
 }
 
 #[derive(Debug, Error)]
@@ -292,6 +427,9 @@ mod tests {
             version: 0x2000_0000,
             bits: 0x1d00_ffff,
             curtime: 1_700_000_000,
+            min_time: 1_700_000_000,
+            max_time: None,
+            coinbase: CoinbaseFields::legacy(0),
             subsidy: 312_500_000,
             fees: 0,
             coinbase_value: 312_500_000,

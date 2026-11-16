@@ -51,6 +51,9 @@ fn template() -> Template {
         version: 0x2000_0000,
         bits: 0x207f_ffff,
         curtime: 1_700_000_000,
+        min_time: 1_700_000_000,
+        max_time: None,
+        coinbase: spc_pool::template::CoinbaseFields::legacy(0),
         subsidy: 312_500_000,
         fees: 0,
         coinbase_value: 312_500_000,
@@ -379,6 +382,50 @@ async fn upstream_client_activates_future_jobs_and_captures_job_targets() {
     assert_eq!(apply_upstream(&mut frame, &mut upstream), Wire::PrevHash);
     assert_eq!(upstream.get_active_job().unwrap().target, new_target);
     assert_eq!(upstream.get_stale_jobs_count(), 1);
+}
+
+#[tokio::test]
+async fn bip54_coinbase_fields_survive_native_sv2_wire() {
+    let mut t = template();
+    t.coinbase =
+        spc_pool::template::CoinbaseFields::from_gbt_rules(t.height, &["!consensuscleanup".into()])
+            .unwrap();
+    let fields = t.coinbase;
+    let job = job_for(t).await;
+    let (tx, _rx) = mpsc::channel(8);
+    let server = server(tx);
+    let (addr, _handle) = server.bind("127.0.0.1:0").await.unwrap();
+    let (mut read, mut write) = connect(addr).await;
+    send_open(&mut write, 1, 4, [0xff; 32]).await;
+    let success = open_success(&mut read).await;
+    server.publish(job.clone()).await;
+    let mut checked = false;
+    loop {
+        let mut frame = read.read_frame().await.unwrap();
+        let mut payload = frame.payload().to_vec();
+        match frame.header().msg_type() {
+            MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB => {
+                let message: NewExtendedMiningJob = binary_sv2::from_bytes(&mut payload).unwrap();
+                let mut raw = message.coinbase_tx_prefix.as_bytes().to_vec();
+                raw.extend_from_slice(success.extranonce_prefix.as_bytes());
+                raw.extend_from_slice(&vec![0; success.extranonce_size as usize]);
+                raw.extend_from_slice(message.coinbase_tx_suffix.as_bytes());
+                let tx: bitcoin::Transaction = bitcoin::consensus::deserialize(&raw).unwrap();
+                assert_eq!(tx.lock_time.to_consensus_u32(), job.height - 1);
+                assert_eq!(tx.input[0].sequence.0, 0xffff_fffe);
+                fields.validate_coinbase(job.height, &raw).unwrap();
+                checked = true;
+            }
+            MESSAGE_TYPE_MINING_SET_NEW_PREV_HASH => {
+                let prev: SetNewPrevHash = binary_sv2::from_bytes(&mut payload).unwrap();
+                assert_eq!(prev.nbits, job.nbits);
+                assert_eq!(prev.min_ntime, job.ntime);
+                assert!(checked, "future job must arrive first");
+                break;
+            }
+            _ => {}
+        }
+    }
 }
 
 #[tokio::test]

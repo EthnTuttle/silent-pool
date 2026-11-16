@@ -265,6 +265,25 @@ pub struct ProvisionedKeys {
     pub child: ChildWalletMaterial,
 }
 
+/// Explicit chain-bound offline provisioning. The chain metadata MUST travel
+/// separately with these files: test-family xprv/address bytes cannot carry it.
+/// This does not open or initialize a stock Bark wallet on unsupported chains.
+#[derive(Debug)]
+pub struct ChainProvisionedKeys {
+    pub chain: crate::ChainNetwork,
+    pub keys: ProvisionedKeys,
+}
+
+pub fn provision_for_chain(
+    master_seed: &[u8; 64],
+    chain: crate::ChainNetwork,
+) -> Result<ChainProvisionedKeys, Error> {
+    Ok(ChainProvisionedKeys {
+        chain,
+        keys: provision(master_seed, chain.sp_encoding())?,
+    })
+}
+
 impl std::fmt::Debug for ProvisionedKeys {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ProvisionedKeys").finish_non_exhaustive()

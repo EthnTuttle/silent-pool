@@ -266,6 +266,12 @@ The one unifying trick that keeps this tractable: in pool-template mode every sh
 - [ ] §11.9 negative and separation tests (self-hosted `captaind` on mainnet, xprv/hardened/multipath descriptor, same-process `ark`) refuse to start.
 
 ### Phase 8: Regtest e2e, ops, and public testnet (≈ 2 weeks)
+
+Draft Testnet5 source integration adds a prerequisite, not rollout permission:
+SPEC §2.1/§5.1/§5.3 and WIRE §3.5 chain binding must reject wrong-genesis
+endpoints, same-prefix cross-chain DB/Redis/bootstrap restores and unsupported
+stock Ark. Existing lab approval, v2 regtest-only policy, BIP54 and public-chain
+audit/work decisions remain separate gates; no automatic legacy-state migration.
 **Tasks**:
 - [ ] `spc-regtest-harness`: bitcoin-core (IPC/TDP) + `spc-pool` (JDS module included) + `spc-translator` + `spc-jdc` + 3 synthetic miners; CI job.
 - [ ] Metrics: slices/min, open-slice shares, distribution entries, trimmed sats, `a_send` age, outbox depth/age, per-stream lag, `spc_orphaned_settlement_total` (a build must never fail over a lost block event — Blitzpool's vouching invariant; SPEC §7.4, §9).

@@ -59,6 +59,9 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = AgentConfig::load(cli.config.as_deref().expect("clap requires config"))?;
+    if config.chain_network()? == Some(spc_crypto::ChainNetwork::Testnet5) {
+        anyhow::bail!("Testnet5 agent runtime requires a chain-bound job/source interface and stock Ark support; address encoding alone is insufficient");
+    }
     if let Some(path) = cli.wallet_command {
         #[cfg(feature = "ark")]
         {

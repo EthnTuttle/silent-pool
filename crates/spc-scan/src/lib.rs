@@ -437,13 +437,43 @@ impl BlockSource for FileSource {
 #[cfg(feature = "rpc")]
 pub struct RpcSource {
     client: bitcoincore_rpc::Client,
+    chain: Option<spc_crypto::ChainNetwork>,
 }
 
 #[cfg(feature = "rpc")]
 impl RpcSource {
     pub fn new(url: &str, auth: bitcoincore_rpc::Auth) -> Result<Self, String> {
         let client = bitcoincore_rpc::Client::new(url, auth).map_err(|e| e.to_string())?;
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            chain: None,
+        })
+    }
+
+    /// Chain-bound scanner path; legacy `new` remains encoding-only and does
+    /// not claim endpoint identity. New-chain CLI scanning uses this method.
+    pub fn new_for_chain(
+        url: &str,
+        auth: bitcoincore_rpc::Auth,
+        chain: spc_crypto::ChainNetwork,
+    ) -> Result<Self, String> {
+        let client = bitcoincore_rpc::Client::new(url, auth).map_err(|e| e.to_string())?;
+        let source = Self {
+            client,
+            chain: Some(chain),
+        };
+        source.validate_chain()?;
+        Ok(source)
+    }
+
+    fn validate_chain(&self) -> Result<(), String> {
+        use bitcoincore_rpc::RpcApi;
+        if let Some(chain) = self.chain {
+            chain
+                .validate_genesis(self.client.get_block_hash(0).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
     }
 }
 
@@ -451,15 +481,23 @@ impl RpcSource {
 impl BlockSource for RpcSource {
     fn block_at(&self, height: u32) -> Result<Block, String> {
         use bitcoincore_rpc::RpcApi;
+        self.validate_chain()?;
         let hash = self
             .client
             .get_block_hash(height as u64)
             .map_err(|e| e.to_string())?;
-        self.client.get_block(&hash).map_err(|e| e.to_string())
+        let block = self.client.get_block(&hash).map_err(|e| e.to_string())?;
+        if block.block_hash() != hash {
+            return Err("RPC block hash mismatch".into());
+        }
+        self.validate_chain()?;
+        Ok(block)
     }
     fn tip_height(&self) -> Result<u32, String> {
         use bitcoincore_rpc::RpcApi;
-        Ok(self.client.get_block_count().map_err(|e| e.to_string())? as u32)
+        self.validate_chain()?;
+        u32::try_from(self.client.get_block_count().map_err(|e| e.to_string())?)
+            .map_err(|_| "tip height exceeds u32".into())
     }
 }
 

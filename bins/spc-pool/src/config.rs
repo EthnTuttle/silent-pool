@@ -642,7 +642,9 @@ impl Default for Ark {
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ConfigError {
-    #[error("unknown network '{0}' (expected mainnet, testnet4, signet, regtest)")]
+    #[error(
+        "unknown network '{0}' (expected mainnet, testnet3, testnet4, testnet5, signet, regtest)"
+    )]
     Network(String),
     #[error("mainnet is out of scope for v0.1")]
     Mainnet,
@@ -877,13 +879,23 @@ impl Config {
     }
 
     pub fn network(&self) -> Result<Network, ConfigError> {
-        match self.pool.network.as_str() {
-            "mainnet" => Err(ConfigError::Mainnet),
-            "testnet4" | "testnet" => Ok(Network::Testnet),
-            "signet" => Ok(Network::Signet),
-            "regtest" => Ok(Network::Regtest),
-            other => Err(ConfigError::Network(other.to_string())),
+        // Existing consumers of this accessor need SP/BIP32 encoding only.
+        // Consensus/backend consumers MUST use chain_network().
+        Ok(self.chain_network()?.sp_encoding())
+    }
+
+    pub fn chain_network(&self) -> Result<spc_crypto::ChainNetwork, ConfigError> {
+        if self.pool.network == "mainnet" {
+            return Err(ConfigError::Mainnet);
         }
+        // Preserve the historical POOL alias; agent's old `testnet` meant v3.
+        let name = if self.pool.network == "testnet" {
+            "testnet4"
+        } else {
+            &self.pool.network
+        };
+        spc_crypto::ChainNetwork::parse(name)
+            .map_err(|_| ConfigError::Network(self.pool.network.clone()))
     }
 
     pub fn roles(&self) -> Result<Vec<Role>, ConfigError> {
@@ -897,6 +909,13 @@ impl Config {
     pub fn validate(&self) -> Result<(), ConfigError> {
         let network = self.network()?;
         let roles = self.roles()?;
+        if self.chain_network()? == spc_crypto::ChainNetwork::Testnet5
+            && (roles.contains(&Role::Ark) || self.ark.as_ref().is_some_and(|a| a.enabled))
+        {
+            return Err(ConfigError::ArkTransport(
+                "Testnet5 is unsupported by pinned stock Bark/rust-bitcoin".into(),
+            ));
+        }
         if roles.contains(&Role::Front) {
             let secret = self.pool.authority_secret()?;
             let configured_public = self.pool.authority_public()?;
@@ -1167,6 +1186,30 @@ pub fn validate_pool_descriptor(d: &str) -> Result<(), ConfigError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn explicit_testnet5_identity_preserves_old_codes_and_refuses_ark_and_v2() {
+        let mut cfg = sample();
+        cfg.pool.network = "testnet5".into();
+        assert_eq!(
+            cfg.chain_network().unwrap(),
+            spc_crypto::ChainNetwork::Testnet5
+        );
+        assert_eq!(cfg.chain_network().unwrap().code(), 4);
+        assert_eq!(cfg.network().unwrap(), spc_crypto::Network::Testnet);
+        cfg.accounting.work_unit_version = 2;
+        assert!(cfg.accounting.share_policy(cfg.network().unwrap()).is_err());
+        cfg.accounting.work_unit_version = 1;
+        cfg.pool.roles = vec!["ark".into()];
+        assert!(matches!(cfg.validate(), Err(ConfigError::ArkTransport(_))));
+        cfg.pool.network = "testnet4".into();
+        assert_eq!(cfg.chain_network().unwrap().code(), 1);
+        cfg.pool.network = "testnet".into();
+        assert_eq!(
+            cfg.chain_network().unwrap(),
+            spc_crypto::ChainNetwork::Testnet4
+        );
+    }
+
     use super::*;
 
     const SAMPLE: &str = r#"

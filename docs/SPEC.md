@@ -9,6 +9,8 @@ updated: 2026-11-09
 status: current
 supersedes: none
 changelog:
+  - "2026-11-15 (dev/testnet5 draft integration): RPC pool templates explicitly negotiate consensuscleanup and freeze BIP54 height-1 locktime/non-final sequence through serialized jobs and pre-credit verification. Unknown required rules, invalid time bounds/compact targets and 64-byte stripped BIP54 transactions fail closed. Legacy bytes and SPc/accounting/Ark policy are unchanged. See docs/decisions/2026-11-15-template-bip54.md."
+  - "2026-11-15 DRAFT integration: consensus ChainNetwork distinct from SP/BIP32 encoding; Testnet5 code 4 and known BIP95 genesis, Testnet3 code 5, old codes preserved. Endpoint/SQL/Redis/bootstrap bindings fail closed; existing unbound data requires reviewed migration. Stock Testnet5 Ark and agent runtime remain unsupported; v2 stays regtest-only. See docs/decisions/2026-11-15-testnet5-chain-identity.md. Staged patch only, no lab/deployment authorization."
   - "2026-11-12: native wallet startup and CPU authorization bind the exact opaque Supervisor run marker by a required controller-generated private run_token_hash, not a run-ID prefix. Persisted config/recorded markers and stale lifecycle bindings fail closed on restart/adopt. Public codec, SourceFeed v2 and native evidence policy are unchanged. See docs/decisions/2026-11-12-native-opaque-run-token.md."
   - "2026-11-11: full lab audited native CPU profiles require source-owned durable retention of actual public CandidateRequest/Approved bytes before activation. Versioned spc.native-evidence/1 envelopes and native_public_evidence_durable_v1 capability bind private controller-derived capture paths, process/config/manifest provenance and content hashes. Storage failures, budget exhaustion, deadline expiry and cancellation remain inactive; native wire/signature preimages and N1/N2 bounds are unchanged. See docs/decisions/2026-11-11-native-evidence-retention.md and docs/NATIVE-EVIDENCE.md."
   - "2026-11-11: full-rail decision observations retain actual settlement delivery reads, public front derivation inputs/results, bracketed grant-time canonical reads and immutable signed authorization history. Opaque lease-consumption persistence precedes cosign without changing the ten-second lease or payout rules. See docs/decisions/2026-11-11-fullrail-decision-observations.md and docs/FULLRAIL-OBSERVATIONS.md."
@@ -186,12 +188,22 @@ All hashes are BIP 340 tagged hashes. `ser_P(X)` is 33-byte compressed; `ser_x(X
 ```
 addr          = user_identity with an optional ".worker" suffix stripped at the first '.'
 (hrp, ver, B_scan ‖ B_spend) = bech32m_decode(addr)
-REQUIRE hrp == "sp" (mainnet) | "tsp" (testnet4/signet/regtest), per pool network
+REQUIRE hrp == "sp" (mainnet) | "tsp" (testnet3/testnet4/testnet5/signet/regtest), per pool address encoding
 REQUIRE ver == 0  (character 'q'); payload == 66 bytes; both keys valid compressed points
 sp_id         = tagged_hash("SPc/Id", ser_P(B_scan) ‖ ser_P(B_spend))
 ```
 
 Any failure → channel rejected (§3.1). A v0 address is 116 (`sp`) / 117 (`tsp`) characters, inside `STR0_255`.
+
+**Consensus identity (draft 2026-11-15).** `ChainNetwork` selects consensus
+and known genesis; historical crypto `Network` selects SP/BIP32 encoding only.
+Testnet5 is public BIP95 with genesis
+`00000000000008c1637e7d3252dc1c333d4546fd6fff6a474b200d674a91d497`.
+Bitcoin endpoints MUST match `getblockhash(0)` before use; authoritative
+settlement/scanner/template reads MUST revalidate the same configured authenticated endpoint. Shared
+`tsp`, `tb`, Base58 and tpub/tprv MUST NOT substitute. SPc/Id and derivation/
+descriptor bytes are unchanged. This selects a chain; it does not prove full
+validation or authenticated job ancestry from an untrusted endpoint.
 
 ### 2.2 Sending key schedule (pool side)
 
@@ -326,6 +338,25 @@ A client whose `RequestExtensions.Error` lists `0x0003` MUST NOT run JD mode (PR
 
 ### 3.3 Pool-template mode: job construction
 
+**Template consensus (2026-11-15).** The RPC adapter MUST request `segwit` and
+`consensuscleanup` and inspect the returned active rules. Unknown required
+rules MUST fail the refresh. When `consensuscleanup` is active, the pool MUST
+build the coinbase with `nLockTime = H - 1` and `nSequence = 0xfffffffe`;
+BIP54 permits other non-final sequences but this is the pool's chosen value.
+Height zero and `H - 1 >= 500000000` are unsupported and MUST fail closed.
+Legacy templates retain their existing coinbase fields. The job's serialized
+suffix MUST bind the actual sequence and locktime; a consensus-field change
+MUST issue a new generation. The active template MUST reject transactions
+whose stripped size is exactly 64 bytes. Prevout-dependent BIP54 sigops and
+contextual target validity remain the trusted full node's responsibility.
+
+GBT `mintime` MUST be retained, `curtime` MUST satisfy it and any supplied
+`maxtime`, and these bounds MUST be frozen per issued job. Changing bounds
+MUST retire old work, while ordinary curtime-only refreshes retain the
+existing immutable-job policy. GBT target MUST match checked compact nBits.
+Malformed fee overflow or coinbase-value underflow MUST reject the template.
+TDP/IPC and live JD support MUST NOT be inferred from the RPC implementation.
+
 Per `NewTemplate` (and per `SetNewPrevHash`) `front`:
 
 1. Looks up `a_send[H]` (§2.2).
@@ -388,6 +419,12 @@ evidence. Witness-free templates are byte-for-byte unchanged. See
 docs/decisions/2026-11-08-pool-witness-commitment.md.
 
 ### 3.4 Share handling
+
+Before credit, the front MUST check submitted time against the job's issued
+roll window and retained node bounds, and check the coinbase against the
+template's consensus fields and the complete issued prefix/extranonce/suffix.
+Block assembly, including witness injection, MUST retain those validated
+coinbase fields and the submitted header time.
 
 Share target validation is versioned. **v1** follows changelog (d) and
 `docs/decisions/2026-11-02-share-target-policy.md`: every ingress validates a
@@ -782,12 +819,21 @@ docs/decisions/2026-11-08-pool-witness-commitment.md.
 
 ### 5.1 Postgres (written only by `payout`; migrations via `sqlx`, advisory-locked at boot)
 
+**Chain binding (draft 2026-11-15).** Additive migration 0013 adds singleton
+`pool_chain_identity(id=1,binding JSONB)`, exact canonical
+`{version:1,network,network_code,genesis_hash}` with display-order lowercase hex.
+Payout initializes only empty chain state. Existing unbound data MUST NOT be
+assigned from config/HRP; it needs reviewed provenance migration. Every role
+rejects a present mismatch before migrations and requires matching metadata
+before reads/writes. Missing/unknown/malformed bindings fail closed, never wipe
+or reinitialize. Codes 0..3 remain; 4 is Testnet5 and 5 is Testnet3 (§2.1).
+
 ```sql
 CREATE TABLE sp_identity (
   sp_id       BYTEA PRIMARY KEY,                 -- 32 B, §2.1
   b_scan      BYTEA NOT NULL CHECK (octet_length(b_scan) = 33),
   b_spend     BYTEA NOT NULL CHECK (octet_length(b_spend) = 33),
-  network     SMALLINT NOT NULL,                 -- 0 mainnet, 1 testnet4, 2 signet, 3 regtest
+  network     SMALLINT NOT NULL,                 -- 0 mainnet, 1 testnet4, 2 signet, 3 regtest, 4 testnet5, 5 testnet3
   first_seen  TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_seen   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -975,6 +1021,13 @@ Byte-level formats of the stream payloads above, the `spc:arkreg` entry and the 
 
 ### 5.3 `front` process memory
 
+**Chain-bound restore (draft 2026-11-15).** Before SQL bootstrap apply, front
+verifies §5.1's binding. Remote bootstrap uses WIRE §3.5's `{chain,snapshot}`
+envelope and validates chain/row codes before apply. Payout atomically binds
+a dedicated empty SPc Redis DB with non-expiring `spc:chain-identity`; readers
+require exact metadata before groups/listeners. Unbound nonempty state needs
+explicit migration. The key stays SPc-side; Ark receives no new ACL access.
+
 Front RAM holds channels/identity keys, registration and epoch-mailbox caches,
 the height's zeroizing send secret/ECDH cache, open/sealed slices, replay set,
 v1-only type-32 blobs, output budget and bounded outbox. Its pending cache is
@@ -998,6 +1051,10 @@ Loss on crash: the open slice (≤ `max_slice_shares` shares, typically seconds 
 ### 6.1 HTTP API (`api` role, read-only, JSON)
 
 Public endpoints expose **pool-wide** data only; anything per-identity requires proof of `b_scan`, otherwise the API is an attribution oracle for anyone holding a miner's public address.
+
+`GET /api/pool` additionally reports configured `chain_identity` in §5.1's
+version-1 shape. This is expected chain metadata, not live synchronization,
+consensus-validation or funded-readiness evidence.
 
 | Method / path | Auth | Returns |
 |---|---|---|
@@ -1023,12 +1080,18 @@ spc-scan audit   --pool <host:port> --address … --block <hash> [--slices 4 --s
 spc-scan vectors                                                                          # run the SPc vectors
 ```
 
+RPC find requires canonical `--network mainnet|testnet3|testnet4|testnet5|signet|regtest`
+and validates genesis. Offline recovery keeps its existing format without a
+chain ancestry claim; `find --blocks --network` refuses because sparse files
+have no authenticated genesis ancestry contract. `gen-address` recognizes
+Testnet5 encoding and rejects unknown names instead of defaulting to regtest.
+
 ### 6.3 Configuration (TOML; one file per binary)
 
 ```toml
 # spc-pool.toml
 [pool]
-network = "testnet4"            # fixes HRP ("tsp") and TP params
+network = "testnet4"            # exact consensus chain; HRP alone cannot select a test chain (§2.1)
 roles = ["front", "payout", "api"]
 listen = "0.0.0.0:34254"
 authority_public_key = "…"      # Noise static key (SRI convention); public pin
@@ -1216,6 +1279,12 @@ bitcoin-core (IPC) + `spc-pool` (JDS module included) + 2 × `spc-translator` + 
 Grinding `a_send` to collide with a known earlier payment (must be a fixed-point search — test asserts the naive solve fails); JDC distribution shopping across the grace id and the current id at the same height (accepted by design, bounded by `distribution_rebalance_bps`); 10 k channels with distinct valid addresses (memory, autoscaler, decomposition cost at population scale).
 
 ## 9. Deployment
+
+**Testnet5 staging (draft 2026-11-15).** Identity support is not deployment
+authorization. Future integration requires owner lab approval, BIP54 template/
+coinbase support, separately approved public-network work/audit policy and
+supported stock Ark. v2 stays regtest-only. Old unbound SQL/Redis state is held
+for explicit migration, never automatically adopted by the staged source.
 
 **Topology.** One `spc-pool` binary; dev/testnet runs `--roles front,payout,api` in one process, and MAY add `ark` to it on regtest/signet only; production splits `front` (one per region; RAM-only state — no durable state of its own) from a single `payout` (sole Postgres writer), N `api` replicas, and a single `ark` on its own host. Each `front` listens for SV2 (Noise) and native SV1 (plain TCP, §3.1) on separate ports; both listeners feed the same share and distribution path. Any listener (SV2, SV1, JDP, `api`) MAY be published as a Tor onion service, in which case it binds loopback and the address is advertised via `[reach]` (§3.8); a multi-front deployment publishes one address per front or fronts them with OnionBalance, and the onion key is backed up with that front's other secrets. Each `front` claims its `front_id` at start with a Redis `SET NX` lease (heartbeat-refreshed, holding an instance UUID) and refuses to start if the lease is held — a duplicate `front_id` would silently collide `distribution_id`s and `slice_id`s (MULTI-REGION §10). The `spc-jds` module is part of `front` — JD is always on, and `a_send` is shared in-process (§2.2). Redis and Postgres are the only durable state of the SPc side, and **no spending key lives on it**: it holds only the xpub of `pool_payout_descriptor`. The pool has exactly one hot seed, the `ark` seed (bark wallet + pool output keychain), held only by the `ark` role on its own host with its own secret store and no access to the attribution data (§11.3). Its blast radius is the float plus whatever pool revenue the operator leaves under it; moving surplus elsewhere is operator policy and out of scope.
 
@@ -1596,6 +1665,13 @@ with a leading version byte.
 
 ### 11.5 Miner side (`spc-agent`)
 
+**Unsupported new-chain runtime (draft 2026-11-15).** The agent recognizes an
+explicit Testnet5 selection but refuses execution until job/source and wallet
+interfaces carry real chain identity. Pinned stock Bark has no Testnet5 backend;
+encoding compatibility MUST NOT select another testnet on its behalf. Current
+WalletKeys also refuses explicit Testnet4 rather than selecting its old
+Testnet3 backend. Existing wallet schemas/labels/derivations are not relabeled.
+
 **Ladder recovery clarification (2026-11-09).** A coinbase output does not
 close the block's Ark mailbox: a kept miner can still be owed a remainder.
 Recovery returns every owned `(k, vout, amount, tweak)`. Amount audit requires
@@ -1765,7 +1841,7 @@ scan_xprv = "/run/secrets/spc/scan.xprv"  # m/352'/0'/0'/1' branch account xprv 
 ark_xprv = "/run/secrets/spc/ark.xprv"    # m/352'/0'/0'/2' branch account xprv (0600)
 datadir = "/var/lib/spc-agent/wallet"     # state.sqlite + bark/ (dirs 0700, files 0600)
 status_listen = "127.0.0.1:34256"         # loopback-only status JSON (default; enforced at bind)
-network = "regtest"                       # when the sp_address HRP cannot tell (tsp is ambiguous)
+network = "regtest"                       # explicit chain; Testnet5 is recognized but runtime unsupported
 ark_id = "…"                              # target Ark server id (8 hex chars, registration)
 ```
 

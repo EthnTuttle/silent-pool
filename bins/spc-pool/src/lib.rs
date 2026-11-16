@@ -6,6 +6,7 @@ pub mod api;
 pub mod api_backend;
 pub mod ark;
 pub mod block;
+pub mod chain_identity;
 pub mod coinbase;
 pub mod config;
 mod derivation_observation;

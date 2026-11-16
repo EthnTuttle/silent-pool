@@ -20,6 +20,7 @@
 
 pub mod address;
 pub mod carriers;
+pub mod chain;
 pub mod hd;
 pub mod identity;
 pub mod kdf;
@@ -34,6 +35,7 @@ pub use carriers::{
     emit_op_return, emit_script_sig, height_push_bytes, parse_carrier, parse_op_return,
     parse_script_sig, script_sig_budget,
 };
+pub use chain::ChainNetwork;
 pub use hd::{
     bark_mailbox_keypair, bark_vtxo_keypair, provision, spc_branch_secret, spc_branch_xprv,
     spc_child_wallet_seed, ChildWalletMaterial, ProvisionedKeys, BARK_MAILBOX_INDEX, BARK_PURPOSE,

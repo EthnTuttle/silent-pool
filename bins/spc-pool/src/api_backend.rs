@@ -24,6 +24,7 @@ pub fn pool_info(config: &Config) -> Value {
     }
     json!({
         "network": config.pool.network,
+        "chain_identity": config.chain_network().ok().map(spc_store::chain::ChainBinding::new),
         "window_n": config.accounting.window_n,
         "coinbase_threshold_sats": config.accounting.coinbase_threshold_sats,
         "pool_template_payout_format": "fixed_ladder_v1",

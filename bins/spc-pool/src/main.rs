@@ -47,13 +47,8 @@ struct Cli {
 /// Used by the `ark` role to enforce `not_before_height` against a live tip.
 /// spc `Network` -> `bitcoin::Network` for the bark wallet.
 #[cfg(feature = "ark")]
-fn bitcoin_network(n: spc_crypto::Network) -> bitcoin::Network {
-    match n {
-        spc_crypto::Network::Mainnet => bitcoin::Network::Bitcoin,
-        spc_crypto::Network::Testnet => bitcoin::Network::Testnet,
-        spc_crypto::Network::Signet => bitcoin::Network::Signet,
-        spc_crypto::Network::Regtest => bitcoin::Network::Regtest,
-    }
+fn bitcoin_network(n: spc_crypto::ChainNetwork) -> anyhow::Result<bitcoin::Network> {
+    Ok(n.stock_bitcoin_network()?)
 }
 
 #[cfg(feature = "rpc")]
@@ -138,6 +133,24 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let network = config.network().map_err(|e| anyhow::anyhow!(e))?;
+    let chain_network = config.chain_network()?;
+    // CLI overrides must not bypass the config-time unsupported-Ark gate.
+    if roles.contains(&Role::Ark) {
+        chain_network.stock_bitcoin_network()?;
+    }
+    #[cfg(feature = "rpc")]
+    if config.template.source == "rpc" {
+        let auth = if config.template.rpc_user.is_empty() {
+            bitcoincore_rpc::Auth::None
+        } else {
+            bitcoincore_rpc::Auth::UserPass(
+                config.template.rpc_user.clone(),
+                config.template.rpc_pass.clone(),
+            )
+        };
+        let client = bitcoincore_rpc::Client::new(&config.template.rpc_url, auth)?;
+        spc_pool::chain_identity::validate_rpc_genesis(&client, chain_network)?;
+    }
     let is_dev_network = matches!(config.pool.network.as_str(), "regtest" | "signet");
     let allow_unchecked = config.accounting.allow_unchecked_chain && is_dev_network;
 
@@ -146,11 +159,17 @@ async fn main() -> anyhow::Result<()> {
         "rpc" => {
             #[cfg(feature = "rpc")]
             {
-                Arc::new(RpcChainView::new(
-                    &config.template.rpc_url,
-                    &config.template.rpc_user,
-                    &config.template.rpc_pass,
-                )?)
+                Arc::new(
+                    spc_pool::chain_identity::BoundChainView::new(
+                        RpcChainView::new(
+                            &config.template.rpc_url,
+                            &config.template.rpc_user,
+                            &config.template.rpc_pass,
+                        )?,
+                        chain_network,
+                    )
+                    .await?,
+                )
             }
             #[cfg(not(feature = "rpc"))]
             {
@@ -195,6 +214,10 @@ async fn main() -> anyhow::Result<()> {
     let payout_task = if roles.contains(&Role::Payout) {
         let store =
             Store::connect_with_timeout(&config.storage.postgres, STORE_CONNECT_TIMEOUT).await?;
+        store.preflight_chain(chain_network).await?;
+        store.migrate().await?;
+        store.initialize_chain(chain_network).await?;
+        spc_store::chain::bind_redis_namespace(&config.storage.redis, chain_network, true).await?;
         let streams = Streams::connect(&config.storage.redis).await?;
         let svc = spc_pool::payout::PayoutService::new(
             store,
@@ -219,7 +242,7 @@ async fn main() -> anyhow::Result<()> {
             scrub_after_blocks: config.accounting.scrub_after_blocks,
         })
         // Identity rows are written with the configured chain code.
-        .with_network(network_code(network));
+        .with_network(chain_network.code());
         let svc = if !allow_unchecked {
             svc.with_economic_pool(
                 FrontConfig::from_config(&config).map_err(|e| anyhow::anyhow!(e))?,
@@ -236,10 +259,7 @@ async fn main() -> anyhow::Result<()> {
             svc
         };
         let svc = if let Some(ark) = config.ark.as_ref().filter(|a| a.enabled) {
-            svc.with_aggregate_server(
-                ark.server.clone(),
-                config.pool.network.parse::<bitcoin::Network>()?,
-            )
+            svc.with_aggregate_server(ark.server.clone(), chain_network.stock_bitcoin_network()?)
         } else {
             svc
         };
@@ -255,7 +275,9 @@ async fn main() -> anyhow::Result<()> {
     if roles.contains(&Role::Api) {
         let store =
             Store::connect_with_timeout(&config.storage.postgres, STORE_CONNECT_TIMEOUT).await?;
+        store.preflight_chain(chain_network).await?;
         store.migrate().await?;
+        store.require_chain(chain_network).await?;
         let order_pubkey = config
             .ark
             .as_ref()
@@ -317,6 +339,12 @@ async fn main() -> anyhow::Result<()> {
 
     // ---- Front role ----
     let front_task = if roles.contains(&Role::Front) {
+        // Fail before opening listeners, consuming streams or claiming a lease.
+        spc_store::chain::bind_redis_namespace(&config.storage.redis, chain_network, false).await?;
+        let bootstrap = load_bootstrap(&config).await?;
+        if bootstrap.is_none() && !allow_unchecked {
+            anyhow::bail!("front requires a chain-bound bootstrap before listeners");
+        }
         if let Some(path) = std::env::var_os("SPC_SOURCE_EVIDENCE_KEY_FILE") {
             spc_pool::evidence::configure_source_signing_key(std::path::Path::new(&path))
                 .map_err(anyhow::Error::msg)?;
@@ -398,7 +426,7 @@ async fn main() -> anyhow::Result<()> {
             "rpc" => {
                 #[cfg(feature = "rpc")]
                 {
-                    Arc::new(spc_pool::template_rpc::RpcTemplateSource::new(
+                    let source = spc_pool::template_rpc::RpcTemplateSource::new(
                         &config.template.rpc_url,
                         &config.template.rpc_user,
                         &config.template.rpc_pass,
@@ -406,6 +434,21 @@ async fn main() -> anyhow::Result<()> {
                         // pool-controlled output bound, not extranonce weight;
                         // actual complete block weight is independently checked.
                         (config.accounting.max_payout_slots as u32 + 1) * 43 + 47,
+                    )?;
+                    let auth = if config.template.rpc_user.is_empty() {
+                        bitcoincore_rpc::Auth::None
+                    } else {
+                        bitcoincore_rpc::Auth::UserPass(
+                            config.template.rpc_user.clone(),
+                            config.template.rpc_pass.clone(),
+                        )
+                    };
+                    let genesis_client =
+                        bitcoincore_rpc::Client::new(&config.template.rpc_url, auth)?;
+                    Arc::new(spc_pool::chain_identity::BoundTemplateSource::new(
+                        source,
+                        genesis_client,
+                        chain_network,
                     )?)
                 }
                 #[cfg(not(feature = "rpc"))]
@@ -448,7 +491,7 @@ async fn main() -> anyhow::Result<()> {
         // builds its first distribution. Postgres/Redis are optional for a dev
         // front, so an unavailable store logs and the front starts from empty
         // RAM state.
-        match load_bootstrap(&config).await? {
+        match bootstrap {
             Some(snapshot) => {
                 front.apply_bootstrap(&snapshot)?;
                 tracing::info!(
@@ -664,7 +707,7 @@ async fn main() -> anyhow::Result<()> {
                 // [pool] pool_payout_descriptor commits to: a mismatch
                 // would board outputs the SPc side cannot see.
                 let keychain = PoolOutputKeychain::from_seed(
-                    bitcoin_network(network),
+                    bitcoin_network(chain_network)?,
                     &seed,
                     &ark_cfg.pool_output_account,
                 )
@@ -678,7 +721,7 @@ async fn main() -> anyhow::Result<()> {
                     );
                 }
                 let client = open_bark_wallet(BarkWalletOptions {
-                    network: bitcoin_network(network),
+                    network: bitcoin_network(chain_network)?,
                     seed,
                     datadir: ark_cfg.datadir.clone(),
                     server_address: ark_cfg.server.clone(),
@@ -744,8 +787,12 @@ async fn main() -> anyhow::Result<()> {
                     keychain,
                     BoardingPolicy::new(ark_cfg.float_target_sats, ark_cfg.min_remaining_blocks),
                 );
-                let wallet_owner =
-                    StockOwner::new(client.clone(), &config, bitcoin_network(network), ark_id)?;
+                let wallet_owner = StockOwner::new(
+                    client.clone(),
+                    &config,
+                    bitcoin_network(chain_network)?,
+                    ark_id,
+                )?;
                 tokio::spawn(controller.run(wallet_owner, boarding));
                 Box::new(BarkTransport::new(
                     client,
@@ -867,7 +914,9 @@ async fn load_bootstrap(
     };
     // The 0002 watermark table must exist before the first bootstrap read;
     // the front may start before the payout role has migrated.
+    store.preflight_chain(config.chain_network()?).await?;
     store.migrate().await?;
+    store.require_chain(config.chain_network()?).await?;
     let retain = if config.accounting.work_unit_version == 2 {
         i64::try_from(V2_RETAINED_SLICES_LIMIT).unwrap_or(i64::MAX)
     } else {
@@ -875,7 +924,17 @@ async fn load_bootstrap(
         i64::from(config.accounting.retain_windows)
     };
     match store.bootstrap(retain).await {
-        Ok(snapshot) => Ok(Some(snapshot)),
+        Ok(snapshot) => {
+            let expected = config.chain_network()?.code();
+            if snapshot
+                .ark_identities
+                .iter()
+                .any(|i| i.network != expected)
+            {
+                anyhow::bail!("bootstrap identity chain mismatch");
+            }
+            Ok(Some(snapshot))
+        }
         Err(e) => {
             tracing::warn!(error = %e, "front bootstrap failed; starting from empty pending");
             Ok(None)
@@ -972,22 +1031,6 @@ fn spawn_front_event_reader(
 /// The `spc:front:events` stream (WIRE-FORMATS §3.2).
 const FRONT_EVENTS_STREAM: &str = "spc:front:events";
 
-/// Identity-row network code (SPEC §5.1): 0 mainnet, 1 testnet4, 2 signet,
-/// 3 regtest.
-///
-/// `spc_crypto::Network` carries no numeric code, so the mapping lives here.
-/// It cannot see an unknown variant (the enum is exhaustive) and mainnet is
-/// already refused by `Config::network`, so a payout role never writes a
-/// mainnet identity by accident.
-fn network_code(network: spc_crypto::Network) -> i16 {
-    match network {
-        spc_crypto::Network::Mainnet => 0,
-        spc_crypto::Network::Testnet => 1,
-        spc_crypto::Network::Signet => 2,
-        spc_crypto::Network::Regtest => 3,
-    }
-}
-
 fn demo_template() -> Template {
     Template {
         height: 1,
@@ -995,6 +1038,9 @@ fn demo_template() -> Template {
         version: 0x2000_0000,
         bits: 0x200f_ffff,
         curtime: 1_700_000_000,
+        min_time: 1_700_000_000,
+        max_time: None,
+        coinbase: spc_pool::template::CoinbaseFields::legacy(0),
         subsidy: 5_000_000_000,
         fees: 0,
         coinbase_value: 5_000_000_000,
@@ -1263,6 +1309,9 @@ mod witness_publication {
             // Regtest-easy: a short nonce search finds a block-finding share.
             bits: 0x207f_ffff,
             curtime: 1_700_000_000,
+            min_time: 1_700_000_000,
+            max_time: None,
+            coinbase: spc_pool::template::CoinbaseFields::legacy(0),
             subsidy: 312_500_000,
             fees: 0,
             coinbase_value: 312_500_000,

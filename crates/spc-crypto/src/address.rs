@@ -13,8 +13,9 @@ use bitcoin::secp256k1::PublicKey;
 
 use crate::Error;
 
-/// Bitcoin network selector (SPEC §2.1).
-/// The HRP encodes the network: `sp` for mainnet, `tsp` for others.
+/// Historical SP address/key encoding selector (SPEC §2.1).
+/// HRP distinguishes mainnet from test encodings, never individual test chains.
+/// Use `ChainNetwork` for consensus, database and endpoint identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Network {
     Mainnet,
