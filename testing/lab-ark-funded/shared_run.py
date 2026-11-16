@@ -356,7 +356,7 @@ def main():
                                                                 'executable': bool(path.stat().st_mode & 0o111)}
     root = fresh_root(args.out)
     qa_module, descriptor = load_qa(args.qa_source, args.qa_source_sha256, root / 'qa-source')
-    require(descriptor['api'] == 't3-controller-r25', 'shared live runner requires exact r25 source, acknowledged pause and query binding exports')
+    require(descriptor['api'] == 't3-controller-r26', 'shared live runner requires exact r26 source, acknowledged pause and query binding exports')
     bundle = strict_json(args.bundle.read_bytes())
     paths, source, receipt = check_bundle(bundle, full=True)  # Before actor construction.
     spec = strict_json(args.scenario.read_bytes())

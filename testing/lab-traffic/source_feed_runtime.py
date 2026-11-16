@@ -169,7 +169,7 @@ class CollectorRuntime:
         servers={}
         for parent in {path.parent for path in endpoints.values()}:
             group={identity:bound[identity] for identity,path in endpoints.items() if path.parent==parent}
-            server=FeedServer(parent,signer,group,provider);servers[parent]=server;self.servers.append(server)
+            server=FeedServer(parent,signer,group,provider,observe=c.capture.add);servers[parent]=server;self.servers.append(server)
         for identity,path in endpoints.items():
             server=servers[path.parent];self.paths.append(path)
             def serve(server=server,identity=identity,path=path):

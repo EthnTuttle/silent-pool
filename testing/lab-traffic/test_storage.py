@@ -47,6 +47,21 @@ class FixtureProcFS:
 
 
 class StorageTests(unittest.TestCase):
+    def test_all_query_layouts_pin_the_versioned_writer_timestamp_session(self):
+        from storage import query_spec
+        from storage_queries import SESSION_POLICY_ID
+        from source_feed_codec import READ_COMPATIBLE_CONTRACTS
+        from decision_observations import CONTRACT as FULLRAIL
+        for contract in (None, *READ_COMPATIBLE_CONTRACTS, FULLRAIL):
+            with self.subTest(contract=contract):
+                sql, _, _, _ = query_spec(contract)
+                self.assertTrue(sql.startswith("-- " + SESSION_POLICY_ID + ":"))
+                for setting in ("SET LOCAL TimeZone = 'UTC';", "SET LOCAL DateStyle = 'ISO, MDY';"):
+                    self.assertEqual(sql.count(setting), 1)
+                    self.assertLess(sql.index("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;"), sql.index(setting))
+                    self.assertLess(sql.index(setting), sql.index("SELECT json_build_object("))
+                self.assertIn("'postmaster_identity_file', pg_read_file('postmaster.pid', 0, 8192)", sql)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="t3-sql-vectors-", dir=TEMP_BASE)
         self.addCleanup(self.temp.cleanup)

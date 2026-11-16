@@ -417,7 +417,7 @@ class SharedRunTests(unittest.TestCase):
             finally:
                 ev.close()
 
-    def test_portable_QA_r25_import_and_descriptor_tamper_refusal(self):
+    def test_portable_QA_r26_import_and_descriptor_tamper_refusal(self):
         # Fresh interpreter avoids global module-name collisions. Imports only;
         # no Controller construction, actors, services or source observer start.
         code = '''
@@ -440,8 +440,8 @@ with tempfile.TemporaryDirectory(prefix='ap5-qa-code-') as t:
  assert callable(source_feed_runtime.CollectorRuntime.close)
  assert callable(module.Controller.require_active_finalization)
  assert callable(module.Controller.acknowledged_traffic_pause)
- print('PORTABLE_R25_IMPORT_ONLY_PASS')
+ print('PORTABLE_R26_IMPORT_ONLY_PASS')
 '''
         result = subprocess.run([sys.executable, '-B', '-c', code], cwd=Path(__file__).parent, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertIn(b'PORTABLE_R25_IMPORT_ONLY_PASS', result.stdout)
+        self.assertIn(b'PORTABLE_R26_IMPORT_ONLY_PASS', result.stdout)

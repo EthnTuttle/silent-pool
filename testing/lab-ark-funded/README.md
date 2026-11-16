@@ -16,12 +16,12 @@ The application reference documented here is the published immutable commit
 `98f0e6caa2482646e3c7073949f6388cd39f200b`. Its runtime artifacts remain independent
 of the separately released QA/AP5 Python consumer. Select a published, reviewed
 compatible consumer commit and its matching QA descriptor. This source's shared
-runner requires exactly `t3-controller-r25`, packaged as `ap5-qa-source-r25`,
+runner requires exactly `t3-controller-r26`, packaged as `ap5-qa-source-r26`,
 including validated pause-acknowledgement reuse, per-driver failure isolation,
 the pre-quiescence stage guard and source-derived SQL query binding. Select its
 published reviewed consumer release before execution. Historical consumer
 `ce7b703ac0c68e6738e5f4510f056cb1209fa982` instead requires r23; it is not the
-consumer for this r25 campaign. The application pin remains
+consumer for this r26 campaign. The application pin remains
 `98f0e6caa2482646e3c7073949f6388cd39f200b`; updating the consumer does not
 rebuild or reselect the application.
 
@@ -70,7 +70,8 @@ Assembly receipts may use a longer durable path than the actual run root.
 Set `CONSUMER_REV` to the published 40-hex commit chosen for this campaign.
 It is intentionally required rather than silently selecting a moving branch,
 the application commit, or an unpublished future QA release. Use the published
-combined r25 QA/AP5 release, including safe failure diagnostics
+combined r26 QA/AP5 release, including UTC SQL representation, earlier-genesis
+verification, source-exchange diagnostics and safe failure diagnostics
 and the normalized scenario/socket preflight fixes.
 
 ```sh

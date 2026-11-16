@@ -100,11 +100,12 @@ class Journal:
 
 
 class FeedServer:
-    def __init__(self, root, signer, agents, provider, *, now_ms=None):
+    def __init__(self, root, signer, agents, provider, *, now_ms=None, observe=None):
         from source_feed_provider import ReplayProvider
         require(type(provider) is ReplayProvider,"production collector requires the independent replay provider")
         self.root=Path(root);self.signer=signer;self.agents=agents;self.provider=provider
         self.now_ms=now_ms or (lambda:time.time_ns()//1000000)
+        self.observe=observe
         for agent, binding in agents.items():
             require(len({binding["scan_pubkey"],binding["pool_pubkey"],signer.public_key})==3,
                     "collector key must be independently pinned")
@@ -209,7 +210,8 @@ class FeedServer:
             return reply
 
     def exchange(self, stream, agent):
-        deadline=time.monotonic()+DEADLINE;frame=None
+        started=time.monotonic();deadline=started+DEADLINE;frame=None;stage="peer_binding"
+        result={"status":"COMMITTED_CONSUMPTION_ONLY","agent":agent}
         try:
             pid,uid,_=struct.unpack("3i",stream.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12))
             require(uid==os.getuid(),"collector peer UID")
@@ -221,19 +223,41 @@ class FeedServer:
                 exe=os.stat(f"/proc/{pid}/exe")
                 require([exe.st_dev,exe.st_ino,exe.st_size,exe.st_mtime_ns,exe.st_ctime_ns]==binding["executable_identity"],
                         "source verifier executable changed after admission")
-            frame=receive(stream,deadline)
-            proof=self.proof(agent,frame,deadline);send(stream,proof,deadline)
+            stage="receive_job";frame=receive(stream,deadline)
+            stage="prepare_proof";proof=self.proof(agent,frame,deadline)
+            stage="send_proof";send(stream,proof,deadline)
+            stage="receive_consumed"
             ack=receive(stream,deadline)
             require(ack.get("ack",{}).get("attempt")==frame["attempt"],"connection ACK attempt mismatch")
-            send(stream,self.consume(agent,ack),deadline)
+            stage="commit_consumption";committed=self.consume(agent,ack)
+            stage="send_committed";send(stream,committed,deadline)
         except (Exception,) as error:
-            if frame is not None and frame.get("kind")=="job":
+            frames=[];tb=error.__traceback__
+            while tb is not None:
+                frames.append({"file":Path(tb.tb_frame.f_code.co_filename).name[:128],
+                    "function":tb.tb_frame.f_code.co_name[:128],"line":tb.tb_lineno})
+                tb=tb.tb_next
+            result={"status":"INCONCLUSIVE","agent":agent,"reason":type(error).__name__,
+                "stage":stage,"traceback_frames":frames[-16:],"frames_truncated":len(frames)>16}
+            if isinstance(frame,dict) and frame.get("kind")=="job":
                 try:send(stream,{"kind":"unavailable","schema":SCHEMA,"attempt":frame["attempt"]},deadline)
                 except Exception:pass
-            return {"status":"INCONCLUSIVE","reason":type(error).__name__}
         finally:
             stream.close()
-        return {"status":"COMMITTED_CONSUMPTION_ONLY","agent":agent}
+        attempt=frame.get("attempt") if isinstance(frame,dict) else None
+        if isinstance(attempt,list) and len(attempt)==16 and all(type(v) is int and 0<=v<=255 for v in attempt):
+            result["attempt"]=bytes(attempt).hex()
+        result["elapsed_ms"]=int((time.monotonic()-started)*1000)
+        result["deadline_elapsed"]=time.monotonic()>=deadline
+        self.record_exchange("source_feed_exchange_result",result)
+        return result
+
+    def record_exchange(self,kind,result):
+        if getattr(self,"observe",None) is not None:
+            try:self.observe(kind,result)
+            except Exception:
+                self.journal.poisoned=True
+                raise
 
     def serve(self, agent, stop, socket_path=None):
         require(agent in self.agents and "/" not in agent,"collector endpoint agent")
@@ -253,6 +277,9 @@ class FeedServer:
                         try:stream,_=listener.accept()
                         except socket.timeout:continue
                         if slots.acquire(blocking=False):workers.submit(handle,stream)
-                        else:stream.close()
+                        else:
+                            stream.close()
+                            self.record_exchange("source_feed_exchange_capacity_refused",{"agent":agent,
+                                "status":"INCONCLUSIVE","stage":"capacity","concurrent_limit":4})
                 finally:
                     if path.exists() and path.stat().st_ino==inode:path.unlink()

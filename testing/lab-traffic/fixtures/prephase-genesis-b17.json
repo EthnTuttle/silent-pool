@@ -1,0 +1,1136 @@
+{
+  "commands": [
+    {
+      "boot_id": "c939a532-e2d6-4a01-87fd-a5937dc560fd",
+      "event": {
+        "binding": {
+          "acceptance_enabled": true,
+          "actor_sha256": "becf691ed06e73ee2f75d5f57be53de993166053237eb093fc3287e9fb1e981a",
+          "controller_sha256": "bd5523ba9115934b2033ba6ee0c7e1afaae5c5ec6be045809fe78b1babce693d",
+          "driver_id": "txd-0",
+          "incarnation": "cmd-000000000000000018e80f92560d398c-0000000000000000",
+          "run_id": "ap5-98f-20261114-b17"
+        },
+        "event": "session"
+      },
+      "monotonic_ms": 25163887,
+      "record": "traffic_audit",
+      "seq": 1,
+      "version": 1
+    },
+    {
+      "boot_id": "c939a532-e2d6-4a01-87fd-a5937dc560fd",
+      "event": {
+        "closed": false,
+        "command_id": null,
+        "completed_count": 0,
+        "event": "watermark",
+        "incarnation": "cmd-000000000000000018e80f92560d398c-0000000000000000",
+        "last_attempt_seq": 0,
+        "permit_revision": 1
+      },
+      "monotonic_ms": 25163911,
+      "record": "traffic_audit",
+      "seq": 2,
+      "version": 1
+    },
+    {
+      "boot_id": "c939a532-e2d6-4a01-87fd-a5937dc560fd",
+      "event": {
+        "binding": {
+          "acceptance_enabled": true,
+          "actor_sha256": "becf691ed06e73ee2f75d5f57be53de993166053237eb093fc3287e9fb1e981a",
+          "controller_sha256": "bd5523ba9115934b2033ba6ee0c7e1afaae5c5ec6be045809fe78b1babce693d",
+          "driver_id": "txd-1",
+          "incarnation": "cmd-000000000000000018e80f925b9c50f5-0000000000000001",
+          "run_id": "ap5-98f-20261114-b17"
+        },
+        "event": "session"
+      },
+      "monotonic_ms": 25163980,
+      "record": "traffic_audit",
+      "seq": 3,
+      "version": 1
+    },
+    {
+      "boot_id": "c939a532-e2d6-4a01-87fd-a5937dc560fd",
+      "event": {
+        "closed": false,
+        "command_id": null,
+        "completed_count": 0,
+        "event": "watermark",
+        "incarnation": "cmd-000000000000000018e80f925b9c50f5-0000000000000001",
+        "last_attempt_seq": 0,
+        "permit_revision": 1
+      },
+      "monotonic_ms": 25164005,
+      "record": "traffic_audit",
+      "seq": 4,
+      "version": 1
+    },
+    {
+      "boot_id": "c939a532-e2d6-4a01-87fd-a5937dc560fd",
+      "event": {
+        "attempt": {
+          "context": {
+            "chain_revision": null,
+            "command_id": null,
+            "intent_seq": null,
+            "journal_seq": 0,
+            "raw_sha256": null
+          },
+          "incarnation": "cmd-000000000000000018e80f92560d398c-0000000000000000",
+          "method": "getbestblockhash",
+          "node_id": "node-a",
+          "payload_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "permit_revision": 1,
+          "rpc_request_id": 1,
+          "send_sequence": null
+        },
+        "event": "forward_attempt"
+      },
+      "monotonic_ms": 25164011,
+      "record": "traffic_audit",
+      "seq": 5,
+      "version": 1
+    },
+    {
+      "boot_id": "c939a532-e2d6-4a01-87fd-a5937dc560fd",
+      "event": {
+        "attempt_seq": 5,
+        "event": "forward_result",
+        "outcome": "ok",
+        "response_sha256": "735582d3f675fc8bea1e2afbb796398cf2c2503ebdd6ac107a07f7b10a7f3c95",
+        "response_suppressed": false
+      },
+      "monotonic_ms": 25164021,
+      "record": "traffic_audit",
+      "seq": 6,
+      "version": 1
+    },
+    {
+      "boot_id": "c939a532-e2d6-4a01-87fd-a5937dc560fd",
+      "event": {
+        "closed": false,
+        "command_id": null,
+        "completed_count": 1,
+        "event": "watermark",
+        "incarnation": "cmd-000000000000000018e80f92560d398c-0000000000000000",
+        "last_attempt_seq": 5,
+        "permit_revision": 2
+      },
+      "monotonic_ms": 25164030,
+      "record": "traffic_audit",
+      "seq": 7,
+      "version": 1
+    },
+    {
+      "command": {
+        "actor": "runtime-phase",
+        "command_id": "ap5-native-bootstrap",
+        "issued_at_wall": 1794701572866,
+        "kind": {
+          "driver_id": "txd-0",
+          "node_id": "node-a",
+          "type": "bootstrap_fund"
+        },
+        "run_id": "ap5-98f-20261114-b17"
+      },
+      "hash_scheme": "expanded_v1",
+      "payload_hash": "6be910abac287795a8d833a8e2a0e9234e26c95605278e9609ffc5b06fb380b6",
+      "principal": "controller",
+      "record": "begin",
+      "seq": 8
+    },
+    {
+      "boot_id": "c939a532-e2d6-4a01-87fd-a5937dc560fd",
+      "event": {
+        "attempt": {
+          "context": {
+            "chain_revision": null,
+            "command_id": null,
+            "intent_seq": null,
+            "journal_seq": 0,
+            "raw_sha256": null
+          },
+          "incarnation": "cmd-000000000000000018e80f92560d398c-0000000000000000",
+          "method": "getblock",
+          "node_id": "node-a",
+          "payload_sha256": "f530e00f03ca1b2bb1e79dbd8781061b9109f4abd5b3b0accdb9aea479fddefa",
+          "permit_revision": 2,
+          "rpc_request_id": 2,
+          "send_sequence": null
+        },
+        "event": "forward_attempt"
+      },
+      "monotonic_ms": 25164051,
+      "record": "traffic_audit",
+      "seq": 9,
+      "version": 1
+    },
+    {
+      "boot_id": "c939a532-e2d6-4a01-87fd-a5937dc560fd",
+      "event": {
+        "attempt_seq": 9,
+        "event": "forward_result",
+        "outcome": "ok",
+        "response_sha256": "f294600e4ee24cbfb835fcb4a4752bef7da4306dbb66ce86d7007aa8cba52391",
+        "response_suppressed": false
+      },
+      "monotonic_ms": 25164061,
+      "record": "traffic_audit",
+      "seq": 10,
+      "version": 1
+    },
+    {
+      "boot_id": "c939a532-e2d6-4a01-87fd-a5937dc560fd",
+      "event": {
+        "closed": false,
+        "command_id": null,
+        "completed_count": 2,
+        "event": "watermark",
+        "incarnation": "cmd-000000000000000018e80f92560d398c-0000000000000000",
+        "last_attempt_seq": 9,
+        "permit_revision": 3
+      },
+      "monotonic_ms": 25164071,
+      "record": "traffic_audit",
+      "seq": 11,
+      "version": 1
+    },
+    {
+      "boot_id": "c939a532-e2d6-4a01-87fd-a5937dc560fd",
+      "event": {
+        "attempt": {
+          "context": {
+            "chain_revision": null,
+            "command_id": null,
+            "intent_seq": null,
+            "journal_seq": 0,
+            "raw_sha256": null
+          },
+          "incarnation": "cmd-000000000000000018e80f92560d398c-0000000000000000",
+          "method": "getbestblockhash",
+          "node_id": "node-a",
+          "payload_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "permit_revision": 3,
+          "rpc_request_id": 3,
+          "send_sequence": null
+        },
+        "event": "forward_attempt"
+      },
+      "monotonic_ms": 25164081,
+      "record": "traffic_audit",
+      "seq": 12,
+      "version": 1
+    },
+    {
+      "boot_id": "c939a532-e2d6-4a01-87fd-a5937dc560fd",
+      "event": {
+        "attempt_seq": 12,
+        "event": "forward_result",
+        "outcome": "ok",
+        "response_sha256": "735582d3f675fc8bea1e2afbb796398cf2c2503ebdd6ac107a07f7b10a7f3c95",
+        "response_suppressed": false
+      },
+      "monotonic_ms": 25164092,
+      "record": "traffic_audit",
+      "seq": 13,
+      "version": 1
+    },
+    {
+      "boot_id": "c939a532-e2d6-4a01-87fd-a5937dc560fd",
+      "event": {
+        "closed": false,
+        "command_id": null,
+        "completed_count": 3,
+        "event": "watermark",
+        "incarnation": "cmd-000000000000000018e80f92560d398c-0000000000000000",
+        "last_attempt_seq": 12,
+        "permit_revision": 4
+      },
+      "monotonic_ms": 25164101,
+      "record": "traffic_audit",
+      "seq": 14,
+      "version": 1
+    },
+    {
+      "boot_id": "c939a532-e2d6-4a01-87fd-a5937dc560fd",
+      "event": {
+        "attempt": {
+          "context": {
+            "chain_revision": null,
+            "command_id": null,
+            "intent_seq": null,
+            "journal_seq": 0,
+            "raw_sha256": null
+          },
+          "incarnation": "cmd-000000000000000018e80f925b9c50f5-0000000000000001",
+          "method": "getbestblockhash",
+          "node_id": "node-a",
+          "payload_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "permit_revision": 1,
+          "rpc_request_id": 1,
+          "send_sequence": null
+        },
+        "event": "forward_attempt"
+      },
+      "monotonic_ms": 25164107,
+      "record": "traffic_audit",
+      "seq": 15,
+      "version": 1
+    },
+    {
+      "boot_id": "c939a532-e2d6-4a01-87fd-a5937dc560fd",
+      "event": {
+        "attempt": {
+          "context": {
+            "chain_revision": null,
+            "command_id": null,
+            "intent_seq": null,
+            "journal_seq": 0,
+            "raw_sha256": null
+          },
+          "incarnation": "cmd-000000000000000018e80f92560d398c-0000000000000000",
+          "method": "getbestblockhash",
+          "node_id": "node-a",
+          "payload_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "permit_revision": 4,
+          "rpc_request_id": 4,
+          "send_sequence": null
+        },
+        "event": "forward_attempt"
+      },
+      "monotonic_ms": 25164112,
+      "record": "traffic_audit",
+      "seq": 16,
+      "version": 1
+    },
+    {
+      "boot_id": "c939a532-e2d6-4a01-87fd-a5937dc560fd",
+      "event": {
+        "attempt_seq": 15,
+        "event": "forward_result",
+        "outcome": "ok",
+        "response_sha256": "735582d3f675fc8bea1e2afbb796398cf2c2503ebdd6ac107a07f7b10a7f3c95",
+        "response_suppressed": false
+      },
+      "monotonic_ms": 25164118,
+      "record": "traffic_audit",
+      "seq": 17,
+      "version": 1
+    },
+    {
+      "boot_id": "c939a532-e2d6-4a01-87fd-a5937dc560fd",
+      "event": {
+        "closed": false,
+        "command_id": null,
+        "completed_count": 1,
+        "event": "watermark",
+        "incarnation": "cmd-000000000000000018e80f925b9c50f5-0000000000000001",
+        "last_attempt_seq": 15,
+        "permit_revision": 2
+      },
+      "monotonic_ms": 25164123,
+      "record": "traffic_audit",
+      "seq": 18,
+      "version": 1
+    },
+    {
+      "boot_id": "c939a532-e2d6-4a01-87fd-a5937dc560fd",
+      "event": {
+        "attempt_seq": 16,
+        "event": "forward_result",
+        "outcome": "ok",
+        "response_sha256": "735582d3f675fc8bea1e2afbb796398cf2c2503ebdd6ac107a07f7b10a7f3c95",
+        "response_suppressed": false
+      },
+      "monotonic_ms": 25164128,
+      "record": "traffic_audit",
+      "seq": 19,
+      "version": 1
+    },
+    {
+      "boot_id": "c939a532-e2d6-4a01-87fd-a5937dc560fd",
+      "event": {
+        "closed": false,
+        "command_id": null,
+        "completed_count": 4,
+        "event": "watermark",
+        "incarnation": "cmd-000000000000000018e80f92560d398c-0000000000000000",
+        "last_attempt_seq": 16,
+        "permit_revision": 5
+      },
+      "monotonic_ms": 25164138,
+      "record": "traffic_audit",
+      "seq": 20,
+      "version": 1
+    },
+    {
+      "operation": {
+        "boot_id": "c939a532-e2d6-4a01-87fd-a5937dc560fd",
+        "cancel_grace_secs": 30,
+        "deadline_monotonic_ms": 28764050,
+        "driver_id": "txd-0",
+        "hashes_per_second": 40,
+        "operation_id": "ap5-native-bootstrap",
+        "total_attempts": 4194304
+      },
+      "record": "hash_start",
+      "seq": 21
+    }
+  ],
+  "events": [
+    {
+      "actor": {
+        "id": "harness",
+        "kind": "harness"
+      },
+      "command_id": null,
+      "event_id": 1,
+      "ingested_at": 1794701560224,
+      "occurred_at_mono": 74,
+      "occurred_at_wall": 1794701560224,
+      "payload": {
+        "data": {
+          "detail": "b98d67dd99de34f73f9ea58239ef7470144d284d321807229962924c6badf3a0",
+          "topic": "public_fixture_omitted_irrelevant_payload"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "harness",
+      "source_cursor": "run-state-preparing-1794701560224"
+    },
+    {
+      "actor": {
+        "id": "harness",
+        "kind": "harness"
+      },
+      "command_id": null,
+      "event_id": 2,
+      "ingested_at": 1794701572853,
+      "occurred_at_mono": 12628808574,
+      "occurred_at_wall": 1794701572853,
+      "payload": {
+        "data": {
+          "detail": "c2c7edb057fc532bff774e7db58e5efa3c155ffcf1f4907f1387e5ee4f98d18c",
+          "topic": "public_fixture_omitted_irrelevant_payload"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "traffic-stage",
+      "source_cursor": "stage-5"
+    },
+    {
+      "actor": {
+        "id": "harness",
+        "kind": "harness"
+      },
+      "command_id": null,
+      "event_id": 3,
+      "ingested_at": 1794701572858,
+      "occurred_at_mono": 12634480006,
+      "occurred_at_wall": 1794701572858,
+      "payload": {
+        "data": {
+          "detail": "d832752578e535f19181306b136d992fb01e26c923c2c3ca5eae8d11402ebcc6",
+          "topic": "public_fixture_omitted_irrelevant_payload"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "harness",
+      "source_cursor": "run-state-running-1794701572858"
+    },
+    {
+      "actor": {
+        "id": "harness",
+        "kind": "harness"
+      },
+      "command_id": null,
+      "event_id": 4,
+      "ingested_at": 1794701572858,
+      "occurred_at_mono": 12634508826,
+      "occurred_at_wall": 1794701572858,
+      "payload": {
+        "data": {
+          "detail": "5b4d55134d73287b49953477005ae10f133aeba977b1fb3c3d7858dcfab21b36",
+          "topic": "public_fixture_omitted_irrelevant_payload"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "process-ark",
+      "source_cursor": "process-612128-2515299"
+    },
+    {
+      "actor": {
+        "id": "harness",
+        "kind": "harness"
+      },
+      "command_id": null,
+      "event_id": 5,
+      "ingested_at": 1794701572858,
+      "occurred_at_mono": 12634512592,
+      "occurred_at_wall": 1794701572858,
+      "payload": {
+        "data": {
+          "detail": "7053e289ec8469e5a26c34e995661787e24dbff481e3434671c71069f7a574c9",
+          "topic": "public_fixture_omitted_irrelevant_payload"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "process-ark-postgres",
+      "source_cursor": "process-612057-2515251"
+    },
+    {
+      "actor": {
+        "id": "harness",
+        "kind": "harness"
+      },
+      "command_id": null,
+      "event_id": 6,
+      "ingested_at": 1794701572858,
+      "occurred_at_mono": 12634515419,
+      "occurred_at_wall": 1794701572858,
+      "payload": {
+        "data": {
+          "detail": "339459a7e7ecbc7a5eb5e6120a6f15acfb0eb8e16f904292ce160f9a171b7190",
+          "topic": "public_fixture_omitted_irrelevant_payload"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "process-front",
+      "source_cursor": "process-612327-2515586"
+    },
+    {
+      "actor": {
+        "id": "harness",
+        "kind": "harness"
+      },
+      "command_id": null,
+      "event_id": 7,
+      "ingested_at": 1794701572858,
+      "occurred_at_mono": 12634517096,
+      "occurred_at_wall": 1794701572858,
+      "payload": {
+        "data": {
+          "detail": "246176b8c4c07c0e4c6df513c1194316b968b1f9cce0ae371f16f845e4114a42",
+          "topic": "public_fixture_omitted_irrelevant_payload"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "process-front",
+      "source_cursor": "process-612367-2515601"
+    },
+    {
+      "actor": {
+        "id": "harness",
+        "kind": "harness"
+      },
+      "command_id": null,
+      "event_id": 8,
+      "ingested_at": 1794701572858,
+      "occurred_at_mono": 12634518657,
+      "occurred_at_wall": 1794701572858,
+      "payload": {
+        "data": {
+          "detail": "49706d82a82aa32b715630eccfb3953dd3e90b29fd171c3573d2cb9f2c26f499",
+          "topic": "public_fixture_omitted_irrelevant_payload"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "process-miner",
+      "source_cursor": "process-612568-2516341"
+    },
+    {
+      "actor": {
+        "id": "harness",
+        "kind": "harness"
+      },
+      "command_id": null,
+      "event_id": 9,
+      "ingested_at": 1794701572858,
+      "occurred_at_mono": 12634520382,
+      "occurred_at_wall": 1794701572858,
+      "payload": {
+        "data": {
+          "detail": "17e73aa2826d59a6fdad3d762d481a57190b3303f8f6ea3ba6e70a90938abec4",
+          "topic": "public_fixture_omitted_irrelevant_payload"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "process-miner",
+      "source_cursor": "process-612574-2516355"
+    },
+    {
+      "actor": {
+        "id": "harness",
+        "kind": "harness"
+      },
+      "command_id": null,
+      "event_id": 10,
+      "ingested_at": 1794701572858,
+      "occurred_at_mono": 12634522081,
+      "occurred_at_wall": 1794701572858,
+      "payload": {
+        "data": {
+          "detail": "c75a58c47edc67a5e9c3fc24b7d46995e51313e20073b2d9f7a882d45d969921",
+          "topic": "public_fixture_omitted_irrelevant_payload"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "process-miner",
+      "source_cursor": "process-612580-2516368"
+    },
+    {
+      "actor": {
+        "id": "harness",
+        "kind": "harness"
+      },
+      "command_id": null,
+      "event_id": 11,
+      "ingested_at": 1794701572858,
+      "occurred_at_mono": 12634523868,
+      "occurred_at_wall": 1794701572858,
+      "payload": {
+        "data": {
+          "detail": "4126ddf1a7b304c393332dacf4719dfa4c78d23781cb67e84977b05eb666db8a",
+          "topic": "public_fixture_omitted_irrelevant_payload"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "process-miner",
+      "source_cursor": "process-612586-2516381"
+    },
+    {
+      "actor": {
+        "id": "harness",
+        "kind": "harness"
+      },
+      "command_id": null,
+      "event_id": 12,
+      "ingested_at": 1794701572858,
+      "occurred_at_mono": 12634525752,
+      "occurred_at_wall": 1794701572858,
+      "payload": {
+        "data": {
+          "detail": "44063c5563441431623f5f434397e7ef38357e5cec50cf6ad43a505c0b1bbeb6",
+          "topic": "public_fixture_omitted_irrelevant_payload"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "process-node",
+      "source_cursor": "process-611954-2515156"
+    },
+    {
+      "actor": {
+        "id": "harness",
+        "kind": "harness"
+      },
+      "command_id": null,
+      "event_id": 13,
+      "ingested_at": 1794701572858,
+      "occurred_at_mono": 12634532400,
+      "occurred_at_wall": 1794701572858,
+      "payload": {
+        "data": {
+          "detail": "e33b20fcde3fd3411353001681020b8f09944f61eaeff3ee2a008c581a9737ae",
+          "topic": "public_fixture_omitted_irrelevant_payload"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "process-node",
+      "source_cursor": "process-611986-2515174"
+    },
+    {
+      "actor": {
+        "id": "harness",
+        "kind": "harness"
+      },
+      "command_id": null,
+      "event_id": 14,
+      "ingested_at": 1794701572858,
+      "occurred_at_mono": 12634534452,
+      "occurred_at_wall": 1794701572858,
+      "payload": {
+        "data": {
+          "detail": "2714e70cfe34ec1015015677e9b5a74be6fb3a3ca040d26786baf1e8c4061f45",
+          "topic": "public_fixture_omitted_irrelevant_payload"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "process-pool-ark",
+      "source_cursor": "process-612207-2515316"
+    },
+    {
+      "actor": {
+        "id": "harness",
+        "kind": "harness"
+      },
+      "command_id": null,
+      "event_id": 15,
+      "ingested_at": 1794701572858,
+      "occurred_at_mono": 12634536089,
+      "occurred_at_wall": 1794701572858,
+      "payload": {
+        "data": {
+          "detail": "5a5a4b6dbd61f329069a5e6ef589c051005402b4f380b55eb8726906c8302b65",
+          "topic": "public_fixture_omitted_irrelevant_payload"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "process-pool-ark",
+      "source_cursor": "process-612243-2515411"
+    },
+    {
+      "actor": {
+        "id": "harness",
+        "kind": "harness"
+      },
+      "command_id": null,
+      "event_id": 16,
+      "ingested_at": 1794701572858,
+      "occurred_at_mono": 12634537659,
+      "occurred_at_wall": 1794701572858,
+      "payload": {
+        "data": {
+          "detail": "622f18d37e40878ec9018153067330ff6753919c593eaa4775784d4e247d153d",
+          "topic": "public_fixture_omitted_irrelevant_payload"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "process-postgres",
+      "source_cursor": "process-611938-2515143"
+    },
+    {
+      "actor": {
+        "id": "harness",
+        "kind": "harness"
+      },
+      "command_id": null,
+      "event_id": 17,
+      "ingested_at": 1794701572858,
+      "occurred_at_mono": 12634539182,
+      "occurred_at_wall": 1794701572858,
+      "payload": {
+        "data": {
+          "detail": "d951b3bc3b4c2afdec71e64e08f55647283099781d9a4c5f38a35c0e582a1074",
+          "topic": "public_fixture_omitted_irrelevant_payload"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "process-postgres",
+      "source_cursor": "process-611943-2515148"
+    },
+    {
+      "actor": {
+        "id": "harness",
+        "kind": "harness"
+      },
+      "command_id": null,
+      "event_id": 18,
+      "ingested_at": 1794701572858,
+      "occurred_at_mono": 12634540843,
+      "occurred_at_wall": 1794701572858,
+      "payload": {
+        "data": {
+          "detail": "8cde5c4c0b6a36dac42fc1196caa0823b817d19ccab9bfbb3d9b8c8eaa117ae0",
+          "topic": "public_fixture_omitted_irrelevant_payload"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "process-redis",
+      "source_cursor": "process-611926-2515139"
+    },
+    {
+      "actor": {
+        "id": "harness",
+        "kind": "harness"
+      },
+      "command_id": null,
+      "event_id": 19,
+      "ingested_at": 1794701572858,
+      "occurred_at_mono": 12634542515,
+      "occurred_at_wall": 1794701572858,
+      "payload": {
+        "data": {
+          "detail": "7778a6d7fcf78653ab8b1f0149de7fc0b4be73e07c66d2316513887c979a7f76",
+          "topic": "public_fixture_omitted_irrelevant_payload"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "process-redis",
+      "source_cursor": "process-611932-2515141"
+    },
+    {
+      "actor": {
+        "id": "harness",
+        "kind": "harness"
+      },
+      "command_id": null,
+      "event_id": 20,
+      "ingested_at": 1794701572858,
+      "occurred_at_mono": 12634544230,
+      "occurred_at_wall": 1794701572858,
+      "payload": {
+        "data": {
+          "detail": "506788698ff7e9db699dcb8e8cfdd91507ac362cbb30911a3defc63fca3d8ae3",
+          "topic": "public_fixture_omitted_irrelevant_payload"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "process-traffic_probe",
+      "source_cursor": "process-612280-2515502"
+    },
+    {
+      "actor": {
+        "id": "harness",
+        "kind": "harness"
+      },
+      "command_id": null,
+      "event_id": 21,
+      "ingested_at": 1794701572858,
+      "occurred_at_mono": 12634546193,
+      "occurred_at_wall": 1794701572858,
+      "payload": {
+        "data": {
+          "detail": "2b7fe3b80c7588915713c3dc892fd6df6accc87ac2a5ee684dd68f7b8df2ba43",
+          "topic": "public_fixture_omitted_irrelevant_payload"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "process-tx_driver",
+      "source_cursor": "process-612592-2516385"
+    },
+    {
+      "actor": {
+        "id": "harness",
+        "kind": "harness"
+      },
+      "command_id": null,
+      "event_id": 22,
+      "ingested_at": 1794701572858,
+      "occurred_at_mono": 12634547835,
+      "occurred_at_wall": 1794701572858,
+      "payload": {
+        "data": {
+          "detail": "885e44715cd8241354a0ddd4510ed42ade28bb6404ec33d1ed8e5cb8007c6e48",
+          "topic": "public_fixture_omitted_irrelevant_payload"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "process-tx_driver",
+      "source_cursor": "process-612596-2516395"
+    },
+    {
+      "actor": {
+        "id": "harness",
+        "kind": "harness"
+      },
+      "command_id": null,
+      "event_id": 23,
+      "ingested_at": 1794701572858,
+      "occurred_at_mono": 12634549330,
+      "occurred_at_wall": 1794701572858,
+      "payload": {
+        "data": {
+          "detail": "da7daa9a81bfebacb21575c8d7e544a7133db186202deb359963ef01e0018170",
+          "topic": "public_fixture_omitted_irrelevant_payload"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "process-wallet",
+      "source_cursor": "process-612402-2515636"
+    },
+    {
+      "actor": {
+        "id": "harness",
+        "kind": "harness"
+      },
+      "command_id": null,
+      "event_id": 24,
+      "ingested_at": 1794701572858,
+      "occurred_at_mono": 12634552804,
+      "occurred_at_wall": 1794701572858,
+      "payload": {
+        "data": {
+          "detail": "25c0b7512c43ced436714b229c1196a0302e28465b59b52cee0e11affee1ede6",
+          "topic": "public_fixture_omitted_irrelevant_payload"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "process-wallet",
+      "source_cursor": "process-612437-2515738"
+    },
+    {
+      "actor": {
+        "id": "harness",
+        "kind": "harness"
+      },
+      "command_id": null,
+      "event_id": 25,
+      "ingested_at": 1794701572858,
+      "occurred_at_mono": 12634554288,
+      "occurred_at_wall": 1794701572858,
+      "payload": {
+        "data": {
+          "detail": "7ffd3df2e94e8e0ed3059e863f22f17b85eb9e69590c78d38fc9813591860cd3",
+          "topic": "public_fixture_omitted_irrelevant_payload"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "process-wallet",
+      "source_cursor": "process-612485-2515846"
+    },
+    {
+      "actor": {
+        "id": "harness",
+        "kind": "harness"
+      },
+      "command_id": null,
+      "event_id": 26,
+      "ingested_at": 1794701572858,
+      "occurred_at_mono": 12634556014,
+      "occurred_at_wall": 1794701572858,
+      "payload": {
+        "data": {
+          "detail": "f516f2d4064161343a63f7a8f3a83b8d5de4e3f9a905545a5bf31b9543b07feb",
+          "topic": "public_fixture_omitted_irrelevant_payload"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "process-wallet",
+      "source_cursor": "process-612513-2515968"
+    },
+    {
+      "actor": {
+        "id": "node-a",
+        "kind": "node"
+      },
+      "command_id": null,
+      "event_id": 27,
+      "ingested_at": 1794701572860,
+      "occurred_at_mono": 12636038365,
+      "occurred_at_wall": 1794701572860,
+      "payload": {
+        "data": {
+          "anchored_tip": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+          "block_hash": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+          "detail": "tip sampler: atomic getbestblockhash/getblockheader/getblockhash observation; not full canonical coverage or reorg tracking",
+          "height": 0,
+          "node_id": "node-a",
+          "observed_at": 1794701572860,
+          "result": "yes",
+          "source": "node-node-a"
+        },
+        "kind": "canonical_at"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "node-node-a",
+      "source_cursor": "canonical-0-0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"
+    },
+    {
+      "actor": {
+        "id": "node-b",
+        "kind": "node"
+      },
+      "command_id": null,
+      "event_id": 28,
+      "ingested_at": 1794701572860,
+      "occurred_at_mono": 12636196979,
+      "occurred_at_wall": 1794701572860,
+      "payload": {
+        "data": {
+          "anchored_tip": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+          "block_hash": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+          "detail": "tip sampler: atomic getbestblockhash/getblockheader/getblockhash observation; not full canonical coverage or reorg tracking",
+          "height": 0,
+          "node_id": "node-b",
+          "observed_at": 1794701572860,
+          "result": "yes",
+          "source": "node-node-b"
+        },
+        "kind": "canonical_at"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "node-node-b",
+      "source_cursor": "canonical-0-0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"
+    },
+    {
+      "actor": {
+        "id": "runtime-metrics",
+        "kind": "observer"
+      },
+      "command_id": null,
+      "event_id": 29,
+      "ingested_at": 1794701572860,
+      "occurred_at_mono": 12636281930,
+      "occurred_at_wall": 1794701572860,
+      "payload": {
+        "data": {
+          "detail": "bbfac041733b0be5c80fda6557104822dd9f3128e2ee67c1661fcb50539ece28",
+          "topic": "public_fixture_omitted_irrelevant_payload"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "metrics",
+      "source_cursor": "metrics-28"
+    },
+    {
+      "actor": {
+        "id": "runtime-scanner",
+        "kind": "harness"
+      },
+      "command_id": null,
+      "event_id": 30,
+      "ingested_at": 1794701572860,
+      "occurred_at_mono": 12636443904,
+      "occurred_at_wall": 1794701572860,
+      "payload": {
+        "data": {
+          "detail": "c3cfc2bc3e8f922890f8575f20bc42c2e74a00b1746e023b612209abd0868c71",
+          "topic": "public_fixture_omitted_irrelevant_payload"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "scanner",
+      "source_cursor": "scan-0-29"
+    },
+    {
+      "actor": {
+        "id": "runtime-operator",
+        "kind": "observer"
+      },
+      "command_id": null,
+      "event_id": 31,
+      "ingested_at": 1794701572863,
+      "occurred_at_mono": 12638859426,
+      "occurred_at_wall": 1794701572863,
+      "payload": {
+        "data": {
+          "detail": "{\"front\":\"front-a1\",\"listen\":\"127.0.0.1:32865\",\"loopback\":true,\"observation_route\":true,\"page_served\":true}",
+          "topic": "operator_observation"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "operator",
+      "source_cursor": "operator-readiness-30"
+    },
+    {
+      "actor": {
+        "id": "runtime-operator",
+        "kind": "observer"
+      },
+      "command_id": null,
+      "event_id": 32,
+      "ingested_at": 1794701572866,
+      "occurred_at_mono": 12641986338,
+      "occurred_at_wall": 1794701572866,
+      "payload": {
+        "data": {
+          "detail": "{\"front\":\"front-b1\",\"listen\":\"127.0.0.1:36979\",\"loopback\":true,\"observation_route\":true,\"page_served\":true}",
+          "topic": "operator_observation"
+        },
+        "kind": "unknown"
+      },
+      "run_id": "ap5-98f-20261114-b17",
+      "source": "operator",
+      "source_cursor": "operator-readiness-31"
+    }
+  ],
+  "genesis": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+  "original_command_prefix_sha256": "4bbf5e2a80edf894210eddab8315063b50a615743437ad2e0f4387b5ef2f6fb8",
+  "original_evidence_prefix_sha256": "7ce6475773427224d1827167168c9ae0e6c880a78ef616848693b4e7994e838e",
+  "scenario": {
+    "expanded_access": true,
+    "fronts": [
+      {
+        "id": "front-a1"
+      },
+      {
+        "id": "front-b1"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "node-a"
+      },
+      {
+        "id": "node-b"
+      }
+    ],
+    "phases": [
+      {
+        "commands": [
+          {
+            "command_id": "ap5-native-bootstrap",
+            "kind": {
+              "driver_id": "txd-0",
+              "node_id": "node-a",
+              "type": "bootstrap_fund"
+            }
+          }
+        ],
+        "id": "native-bootstrap"
+      }
+    ],
+    "run": {
+      "id": "ap5-98f-20261114-b17"
+    },
+    "traffic": {
+      "driver": {
+        "actors": [
+          {
+            "hosts_bootstrap_funding": true,
+            "id": "txd-0"
+          },
+          {
+            "hosts_bootstrap_funding": false,
+            "id": "txd-1"
+          }
+        ],
+        "bootstrap": {
+          "cancel_grace_secs": 30,
+          "deadline_secs": 3600,
+          "hashes_per_second": 40,
+          "total_attempts": 4194304
+        }
+      }
+    }
+  },
+  "scope": "derived public regression: relevant original genesis/marker records and command prefix; other evidence payloads replaced with digests; not a complete original runtime export",
+  "source_binding": {
+    "binary_sha256": "bd5523ba9115934b2033ba6ee0c7e1afaae5c5ec6be045809fe78b1babce693d",
+    "profile_id": "qualified-98f-opaque-cleanup",
+    "runtime_source_sha256": "78c81ae25b7794d93ab88a1842ab2fe45a5e2a3c3e0c1ac978944cedea8283e0",
+    "txd_sha256": "becf691ed06e73ee2f75d5f57be53de993166053237eb093fc3287e9fb1e981a"
+  }
+}

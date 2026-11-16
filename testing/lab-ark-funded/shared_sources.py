@@ -29,9 +29,11 @@ PROFILES = {
                           'c0a6bfa3283b2976a8c3e7c5a6a042758bfbe6ddd4cf194a53f4336bf957531c', 145, 'ap5_bound_t3_r24'),
     't3-controller-r25': ('dc4b5565c8bf625326b64ddd8071b50e22de4c5c2350a85a5f77f693604aa574',
                           '6aa8af5a28a84b79f9dc9708c3bfdf5d54c627ccffb5a2ba1d890921402fe108', 148, 'ap5_bound_t3_r25'),
+    't3-controller-r26': ('cec97f46656c634be69d46a8ce1cc32710967f4927949f41912fd8bf62ee4c9c',
+                          '5cdd273c9c1de757f64b4527f57fbfc82dddfcf739da74844c5b8c991aed51fd', 153, 'ap5_bound_t3_r26'),
 }
 PORTABLE_BYTES = {'t3-controller-r21': 1456511, 't3-controller-r22': 1493665, 't3-controller-r23': 1647413,
-                  't3-controller-r24': 1676072, 't3-controller-r25': 1717365}
+                  't3-controller-r24': 1676072, 't3-controller-r25': 1717365, 't3-controller-r26': 1775218}
 
 
 class BoundModules(importlib.abc.MetaPathFinder, importlib.abc.Loader):
@@ -143,18 +145,18 @@ def import_content(value, content, output, module_name, rows=None):
     module = importlib.import_module(module_name)
     for name in ('prerequisites', 'start', 'bootstrap', 'measured', 'reorg', 'witness', 'audit', 'receipt', 'check', 'result'):
         require(callable(getattr(module.Controller, name, None)), 'shared QA Controller export missing: ' + name)
-    if value['api'] in {'t3-controller-r19', 't3-controller-r20', 't3-controller-r21', 't3-controller-r22', 't3-controller-r23', 't3-controller-r24', 't3-controller-r25'}:
+    if value['api'] in {'t3-controller-r19', 't3-controller-r20', 't3-controller-r21', 't3-controller-r22', 't3-controller-r23', 't3-controller-r24', 't3-controller-r25', 't3-controller-r26'}:
         require(callable(getattr(module, 'operator_arguments', None)), 'shared QA operator export missing')
         runtime = importlib.import_module('source_feed_runtime')
         require(callable(getattr(runtime, 'collector_socket_path', None)), 'shared QA collector-root export missing')
-    if value['api'] in {'t3-controller-r20', 't3-controller-r21', 't3-controller-r22', 't3-controller-r23', 't3-controller-r24', 't3-controller-r25'}:
+    if value['api'] in {'t3-controller-r20', 't3-controller-r21', 't3-controller-r22', 't3-controller-r23', 't3-controller-r24', 't3-controller-r25', 't3-controller-r26'}:
         for name in ('audit_live', 'final_audit_after_drain'):
             require(callable(getattr(module.Controller, name, None)), 'shared QA final API missing: ' + name)
         require(callable(getattr(runtime.CollectorRuntime, 'final_audit_after_drain', None)), 'shared QA final collector API missing')
-    if value['api'] in {'t3-controller-r24', 't3-controller-r25'}:
+    if value['api'] in {'t3-controller-r24', 't3-controller-r25', 't3-controller-r26'}:
         require(callable(getattr(module.Controller, 'require_active_finalization', None)),
                 'shared QA active-finalization guard missing')
-    if value['api'] == 't3-controller-r25':
+    if value['api'] in {'t3-controller-r25', 't3-controller-r26'}:
         require(callable(getattr(module.Controller, 'acknowledged_traffic_pause', None)),
                 'shared QA acknowledged-pause helper missing')
     return module, value

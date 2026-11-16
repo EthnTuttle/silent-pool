@@ -1,5 +1,6 @@
 """Migration-0011 byte/SQL/journal vectors, not a claimed PG execution receipt."""
 import copy
+from datetime import datetime, timedelta
 import hashlib
 import json
 import unittest
@@ -36,6 +37,27 @@ def captured():
 
 
 class InitialCheckpointTests(unittest.TestCase):
+    def test_checkpoint_timestamp_representation_and_microseconds_remain_exact(self):
+        # Public timestamps from b17's two pools; all other row data is synthetic.
+        for utc, local in (("2026-11-15T00:12:44.794926+00:00", "2026-11-14T19:12:44.794926-05:00"),
+                           ("2026-11-15T00:12:44.941091+00:00", "2026-11-14T19:12:44.941091-05:00")):
+            with self.subTest(utc=utc):
+                observation, _, _, migrations = captured()
+                row = observation["tables"]["economic_checkpoint"][0]
+                record = observation["tables"]["source_accounting_history"][1]
+                row["recorded_at"] = utc
+                record["after_row"]["recorded_at"] = utc
+                validate_initial(observation, migration_checksums=migrations, source_contract=CONTRACT)
+                self.assertEqual(datetime.fromisoformat(utc), datetime.fromisoformat(local))
+                for changed in (local, (datetime.fromisoformat(utc) + timedelta(microseconds=1)).isoformat()):
+                    row["recorded_at"] = changed
+                    with self.assertRaisesRegex(Invalid, "checkpoint readback differs from actual journal INSERT"):
+                        validate_initial(observation, migration_checksums=migrations, source_contract=CONTRACT)
+                row["recorded_at"] = utc
+                record["after_row"]["snapshot_boundary"] = "999:1000:"
+                with self.assertRaisesRegex(Invalid, "checkpoint readback differs from actual journal INSERT"):
+                    validate_initial(observation, migration_checksums=migrations, source_contract=CONTRACT)
+
     def test_actual_checkpoint_INSERT_supplies_exact_missing_seed_without_history_rewrite(self):
         observation,job,chain,migrations=captured();history=copy.deepcopy(observation["tables"]["source_accounting_history"])
         seed=validate_initial(observation,migration_checksums=migrations,source_contract=CONTRACT)

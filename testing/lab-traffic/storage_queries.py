@@ -7,6 +7,7 @@ PostgreSQL's lossless JSON bytea representation; NUMERIC is decoded exactly.
 import hashlib
 
 QUERY_ID = "spc-lab-immutable-payout-rows/2"
+SESSION_POLICY_ID = "spc-lab-sql-session/1"
 ROW_CAP = 65536
 # table: (explicit columns, stable primary-key ordering)
 TABLES = {
@@ -41,12 +42,18 @@ def _render(definitions, query_id, schema):
                       "(SELECT " + _identifiers(columns) + ' FROM public."' + name + '" ORDER BY '
                       + _identifiers(order) + " LIMIT " + str(ROW_CAP + 1) + ") AS t)")
         counts.append("'" + name + "', (SELECT count(*) FROM public.\"" + name + '\")')
-    return ("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;\n"
+    # sqlx-postgres 0.8.0 sends these settings at writer connection startup.
+    # Journal JSONB row images retain that representation; changing the reader
+    # session does not rewrite their strings. Exact row equality stays required.
+    return ("-- " + SESSION_POLICY_ID + ": sqlx-compatible timestamp representation\n"
+            "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;\n"
             "SET LOCAL statement_timeout = '10000ms';\n"
             "SET LOCAL lock_timeout = '2000ms';\n"
             "SET LOCAL idle_in_transaction_session_timeout = '12000ms';\n"
             "SET LOCAL search_path = pg_catalog;\n"
             "SET LOCAL bytea_output = 'hex';\n"
+            "SET LOCAL TimeZone = 'UTC';\n"
+            "SET LOCAL DateStyle = 'ISO, MDY';\n"
             "SELECT json_build_object(\n"
             "'schema', '" + schema + "',\n"
             "'query_id', '" + query_id + "',\n"

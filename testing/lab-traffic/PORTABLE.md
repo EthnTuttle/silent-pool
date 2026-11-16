@@ -33,7 +33,7 @@ relative to the checked-out test files. Historical archive replayers require
 an explicitly supplied archive and are optional, not startup prerequisites.
 
 `portable_source.py` creates `source.tar.gz`, `manifest.json`, `qa-source.json`.
-The descriptor has schema `spc.lab.ap5.qa-source/v1`, API `t3-controller-r25`;
+The descriptor has schema `spc.lab.ap5.qa-source/v1`, API `t3-controller-r26`;
 its artifact paths resolve relative to the descriptor directory. Its printed
 SHA256 is the external descriptor pin supplied to AP5. The versioned snapshot
 recipe sorts all source paths, validates regular files/bytes/SHA256, preserves
@@ -43,14 +43,14 @@ It excludes build/cache/private directories. Archive modes/bytes/hashes must
 be checked by the AP5 loader; relative paths are not permission to traverse out
 of the descriptor root. Source modules must be loaded from this one bound tree.
 
-## r25 pause/SQL consumer release against the already-compiled 98f applications
+## r26 source-feed/genesis consumer against the already-compiled 98f applications
 
 Package this Python consumer independently using `portable_source.py snapshot`.
 Keep the qualified application package, compiler source, outputs aggregation and
 selected durable 3cf18a8e bundle pinned. A new QA release does not require rebuilding them.
 See [RUNTIME-PROFILES.md](RUNTIME-PROFILES.md) for the complete reviewed profile.
 
-The AP5 loader must admit API `t3-controller-r25` and call:
+The AP5 loader must admit API `t3-controller-r26` and call:
 
 ```python
 qa = coordinated_qa_class(qa_module)(
@@ -91,11 +91,20 @@ Measured pause now acknowledges every declared actor before the common interval
 and resumes every actor after a valid interval. Journal census is exact, not zip.
 
 Fresh inputs must include `source_feed.sql_query` with exact fields sql_contract,
-query_id, schema, sha256, bytes and table_count derived from the loaded r25 QA
-query renderer. The fullrail query is 8699 bytes / 22 tables / SHA256
-`16c8d72f970d1aed7a776e2b7a1f1269277d3f39dddb6cf6b78306f3d3802a1b`.
+query_id, schema, sha256, bytes and table_count derived from the loaded r26 QA
+query renderer. The fullrail query is 8828 bytes / 22 tables / SHA256
+`7d4c64aa165618cac9b73024042a858161d03e812612abd3dfe174185d204dac`.
 The same query ID/schema with old r24 bytes is rejected before startup. See
 [MEASURED-PAUSE-AND-SQL.md](MEASURED-PAUSE-AND-SQL.md).
+
+r26 transaction-local UTC/ISO settings match the source-reviewed SQL writer's
+timestamp representation, while exact checkpoint row equality remains strict.
+Source-feed exchange failures retain bounded code locations and stage/attempt
+metadata, with no exception values or locals. Late initial QA samples can use
+the reviewed controller's earlier pre-phase RPC genesis observations, strictly
+ordered before its synchronous operator-publication marker. This is not a
+posthoc ancestry fallback and does not alter old run receipts. See
+[SOURCE-FEED-LIVENESS-AND-GENESIS.md](SOURCE-FEED-LIVENESS-AND-GENESIS.md).
 
 ## Produce actual build/check inventory
 

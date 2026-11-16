@@ -23,7 +23,7 @@ root=Path(tmp.name).resolve()
 package_qa(Path(os.environ.get('AP5_QA_TEST_SOURCE',str(Path.cwd().parents[1]))),root/'package')
 descriptor=root/'package/qa-source.json'
 module,profile=load_qa(descriptor,sha(descriptor),root/'source')
-assert profile['api']=='t3-controller-r25'
+assert profile['api']=='t3-controller-r26'
 from runtime_bootstrap import RuntimeBootstrap
 from source_feed_runtime import CollectorRuntime
 from test_runtime_bootstrap import fixture,finish,encoded

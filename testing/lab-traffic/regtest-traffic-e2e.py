@@ -327,13 +327,26 @@ class Controller:
         if fresh.tip["height"] == 0:
             self.result("fresh_chain", "PASSED", {"height": 0, "hash": fresh.tip["hash"], "run_id": self.run_id})
         else:
-            self.result("fresh_chain", "INCONCLUSIVE", {"reason": "Runtime auto-bootstrap preceded the initial observer sample; earlier genesis evidence required",
-                "first_observed_height": fresh.tip["height"], "run_id": self.run_id})
+            self.check("fresh_chain", self.prephase_genesis)
         self.check("config_binding", self.audit_config_binding)
         if self.binding.get("source_feed"):
             from source_feed_runtime import CollectorRuntime
             self.source_feed_runtime=CollectorRuntime(self)
             self.source_feed_runtime.start()
+
+    def prephase_genesis(self):
+        """Use retained initial controller samples, never later raw ancestry."""
+        from fresh_genesis import verify_prephase_genesis
+        from source_jobs import MissingComponent
+        source=self.results.get("runtime_entrypoint_binding",{})
+        if source.get("status")!="PASSED":raise MissingComponent("initial_genesis_Runtime_source_binding_unavailable")
+        with self.observation_lock:
+            commands=self.journal_prefix("commands.jsonl")
+            evidence=self.journal_prefix("evidence.jsonl")
+            binding={**source["detail"],"txd_sha256":self.binding["binaries"]["txd"]["sha256"]}
+            proof=verify_prephase_genesis(evidence,commands,self.scenario,self.policy.genesis,binding)
+            self.capture.add("prephase_genesis_proof",proof)
+            return proof
 
     def audit_config_binding(self):
         actual = load(self.run / "private" / "scenario.json")

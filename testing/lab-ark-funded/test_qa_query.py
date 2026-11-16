@@ -55,15 +55,17 @@ except Blocked:pass
 else:raise AssertionError('collector/final-audit query disagreement admitted')
 ''')
 
-    def test_r25_query_matches_stock_gate_and_rejects_actual_r24_digest(self):
+    def test_r26_query_matches_stock_gate_and_rejects_actual_r24_and_r25_digests(self):
         self.execute('''
-assert binding['sha256']=='16c8d72f970d1aed7a776e2b7a1f1269277d3f39dddb6cf6b78306f3d3802a1b'
-assert binding['bytes']==8699 and b"'postmaster_identity_file'" in raw
-old=copy.deepcopy(feed)
-old['sql_query'].update(sha256='dbf0473d9747316f6852fc760f8b7604414c2e7d43a305e9520441063a25f1f0',bytes=8710)
-try:validate_query_binding(old)
-except Blocked:pass
-else:raise AssertionError('r24 SQL admitted merely because contract/id/schema match')
+assert binding['sha256']=='7d4c64aa165618cac9b73024042a858161d03e812612abd3dfe174185d204dac'
+assert binding['bytes']==8828 and b"'postmaster_identity_file'" in raw
+assert b"SET LOCAL TimeZone = 'UTC';" in raw and b"SET LOCAL DateStyle = 'ISO, MDY';" in raw
+for digest,size in (('dbf0473d9747316f6852fc760f8b7604414c2e7d43a305e9520441063a25f1f0',8710),
+                    ('16c8d72f970d1aed7a776e2b7a1f1269277d3f39dddb6cf6b78306f3d3802a1b',8699)):
+ old=copy.deepcopy(feed);old['sql_query'].update(sha256=digest,bytes=size)
+ try:validate_query_binding(old)
+ except Blocked:pass
+ else:raise AssertionError('old SQL admitted merely because contract/id/schema match')
 ''')
 
     def test_shared_preflight_rejects_stale_query_before_runtime_or_metadata_work(self):

@@ -18,7 +18,7 @@ root=Path(tmp.name).resolve()
 package_qa(Path(os.environ.get('AP5_QA_TEST_SOURCE',str(Path.cwd().parents[1]))),root/'package')
 p=root/'package/qa-source.json'
 module,profile=load_qa(p,sha(p),root/'source')
-assert profile['api']=='t3-controller-r25'
+assert profile['api']=='t3-controller-r26'
 from test_measured_pause import MeasuredPauseTests
 from oracle import Inconclusive
 fixture=MeasuredPauseTests();fixture.setUp()
