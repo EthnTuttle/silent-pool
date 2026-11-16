@@ -51,6 +51,11 @@ pkgs.rustPlatform.buildRustPackage {
     cp ${nodeSource.outPath}/Cargo.lock "$out/share/testnet5-dev/Cargo.lock"
     makeWrapper ${pkgs.python3}/bin/python3 "$out/bin/testnet5-validate-node" \
       --add-flags "-B $out/share/testnet5-dev/validate-node.py"
+  '';
+  # Checksums MUST be taken after the fixup phase (strip/patchelf) has made
+  # its final modifications to the installed executables; hashing in
+  # postInstall records pre-fixup bytes that never match the store output.
+  postFixup = ''
     sha256sum "$out/bin/rbitcoin-node" "$out/bin/rbitcoin-cli" \
       > "$out/share/testnet5-dev/binaries.sha256"
   '';
@@ -62,6 +67,10 @@ pkgs.rustPlatform.buildRustPackage {
     "$out/bin/rbitcoin-node" --help > "$TMPDIR/testnet5-node-help" 2>&1
     grep -F testnet5 "$TMPDIR/testnet5-node-help"
     ${pkgs.python3}/bin/python3 -B ${./testnet5}/test-validator.py
+    # The recorded manifest must match the actual installed binaries as they
+    # exist in the store output; a mismatch fails the build rather than
+    # shipping a manifest that cannot be verified by a consumer.
+    sha256sum --check "$out/share/testnet5-dev/binaries.sha256"
     runHook postInstallCheck
   '';
   passthru = {
