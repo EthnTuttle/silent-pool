@@ -447,7 +447,22 @@ impl Supervisor {
                 }
             }
         } else {
-            process_executable(pid).unwrap_or_else(|| spec.program.clone())
+            // /proc/<pid>/exe read immediately after spawn can still show the
+            // pre-exec image (fork/exec race), which records the supervisor's
+            // own binary as the child's identity under load. Wait briefly for
+            // the exec to land before trusting it.
+            let own_exe = std::env::current_exe().ok();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+            let mut resolved = process_executable(pid);
+            while resolved.is_some()
+                && resolved == own_exe
+                && resolved.as_ref() != Some(&spec.program)
+                && std::time::Instant::now() < deadline
+            {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                resolved = process_executable(pid);
+            }
+            resolved.unwrap_or_else(|| spec.program.clone())
         };
         let executable_sha256 = hash_file(&executable_path).unwrap_or_default();
         let record = ProcessRecord {
