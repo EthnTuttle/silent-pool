@@ -4,6 +4,58 @@ Live build board. `docs/IMPLEMENTATION-PLAN.md` defines the packets and gates.
 A packet is Done only when its tests exist, `nix flake check` passes, both
 reviews are recorded for risky packets, and the commit is pushed.
 
+## Focus wave (2026-11-17)
+
+Dispatched and merged per the MERGE-QUEUE focus-packet table. Base was master
+after fast-forwarding `dev/testnet5`.
+
+- **testnet5 + BIP54 (`dev/testnet5`, fast-forwarded):** consensus
+  `ChainNetwork` distinct from SP/BIP32 encoding (Testnet5 code 4, BIP95
+  genesis), endpoint/SQL/Redis/bootstrap chain bindings (migration 0013),
+  BIP54 template negotiation on the rpc source, opt-in pinned
+  `rbitcoin-node-testnet5-dev` package. Stock bark cannot represent Testnet5
+  yet; agent Testnet5 runtime remains fail-closed.
+- **Denomination ladder (`wp-ladder-audit`):** the 2026-11-03 decision was
+  already fully implemented on master via the source union + ladder-entry-v2;
+  the audit (`docs/reviews/2026-11-17-ladder-implementation-audit.md`) maps
+  every checklist item to code and re-lands three union-dropped tests (era-1
+  619 bound, coinbase-remainder scheduling, banded e2e assertion). The old
+  `ladder` branch is superseded and archived as tag `archive/ladder-pre-union`.
+- **SV2 Template Provider stages 1+2 (`wp-sv2-tp-port`):** `source = "sv2-tp"`
+  is a live TDP client (`template_tp.rs`) with BIP54-over-TDP, witness
+  transactions allowed, `SubmitSolution` behind the `BlockSubmitter` seam, and
+  `rpc_url` as chain view only (decision
+  `docs/decisions/2026-11-05-sv2-tp-chain-view.md`, ported).
+  `testing/regtest-rbitcoin-tp-e2e.sh` passed live against the pinned
+  testnet5-dev rbitcoin node in regtest. `source = "ipc"` is deferred, not
+  stubbed: startup fails closed with an explicit error (new deps and an IPC
+  node are a separate packet).
+- **Prometheus families (`wp-metrics-families`):** roles publish identity-free
+  JSON snapshots to TTL'd Redis keys; the api role exports `a_send` age/repeat,
+  open-slice/sealed-slice, distribution slots/budget, channel and JD rejection
+  codes, type-32 requests, ark float/rejects, overdue, orphaned settlements,
+  registration lag and per-stream consumer lag. Absent snapshot = absent
+  family, never zero. Outbox/tip-divergence/surplus stay with multi-region.
+- **Cheat-slice statistical test (`wp-cheat-slice`):** SPEC §8.3 fixture
+  landed; seeded 400-trial run catches the misstating pool within 2 windows
+  (per-window 0.9425 vs 0.9375 model), release builds with the feature refuse
+  to compile.
+- **Grafana lab observability (`wp-grafana-lab`):** opt-in
+  `spc-lab-observability` Nix wrapper (Grafana + Prometheus, loopback-only,
+  run-dir state, scrape targets rendered from the run manifest), provisioned
+  dashboards split exported/planned. LAB-RUNTIME §13.
+- Repo hygiene: AGENTS.md no longer claims spec-only status and machine-local
+  build policy (disk budget, lock files) left the repo contract; older
+  harnesses pass explicit `--network regtest` to `spc-scan find`.
+
+Known issues carried out of the wave:
+- `ark::tests::held_order_stays_unacked_until_due` fails under
+  `SPC_TEST_REDIS_URL` (fair-cursor retry needs a wrap pass the test does not
+  perform); pre-existing at `3c2df0d`, needs its own diagnosis packet.
+- `main_sv2_pipeline` requires a local Redis holding the regtest
+  `spc:chain-identity` binding since the chain-identity gate; verify the
+  `nix flake check` sandbox is not exposed.
+
 ## Session roster (merge wave 2, 2026-11-02)
 
 | Role | Session | State |
@@ -204,28 +256,27 @@ Both harnesses bind bitcoind on 18443, so they must be run sequentially.
 
 ## Remaining
 
-1. **Denomination-ladder implementation** (decision `d62bf23`): band
-   `{500k, 1M, 3M, 5M}`, greedy, remainder over Ark, `max_payout_slots` 1024,
-   the settlement predicate change, the band-aware miner check and tests. The
-   largest open packet; spec and record are done, no code yet.
-2. **SV2 Template Provider stage 2**: `SubmitSolution` submission seam, the
-   chain-view config decision, and `testing/regtest-rbitcoin-tp-e2e.sh`.
-   Stage 1 (TDP client, mapping, mock tests) is committed on `sv2-tp`.
-3. `[template] source = "ipc"` (bitcoin-core Cap'n Proto) - the other declared
-   source; rpc and sv2-tp cover the node backends in use.
-4. Role-sourced metric families (front `a_send` age, `ark` float, JD rejection
-   codes, stream lag) are planned in OPERATIONS §7; only the exporter's
-   current families are served today.
-5. The seeded `--features cheat-slice-difficulty` statistical test.
-6. Testnet soak and third-party `spc-scan` recovery.
-7. rbitcoin upstream: the testnet4 branch is pushed to the fork and PLAN §7
-   passes (sync to 159,175, GBT bits re-derived, BIP94 boundary checked); the
-   upstream PR is not opened.
-8. Multi-region (Phase 3 multi-front, Phase 8) per MULTI-REGION.md.
+1. `[template] source = "ipc"` (bitcoin-core Cap'n Proto): deferred
+   fail-closed by the sv2-tp packet; needs the pinned `bitcoin_core_sv2`
+   client, Cap'n Proto toolchain and an IPC-enabled Core node (SPEC §7.1 pin
+   requirement stands). rpc and sv2-tp cover the node backends in use.
+2. Testnet soak and third-party `spc-scan` recovery (SPEC §12 rollout gate:
+   testnet4 `tsp` soak >= 24 h). Testnet5 chain identity is merged but its
+   public-network soak additionally waits on ecosystem support (stock bark
+   cannot represent Testnet5; agent runtime fail-closed).
+3. rbitcoin upstream: the testnet4 branch is pushed to the fork and PLAN §7
+   passes; the upstream PR is not opened.
+4. Multi-region (Phase 3 multi-front, Phase 8) per MULTI-REGION.md — includes
+   the deferred `spc_outbox_*`, `spc_tip_divergence_seconds` and
+   `spc_ark_surplus_sats` metric families.
+5. `held_order_stays_unacked_until_due` diagnosis packet (see Focus wave
+   known issues).
 
-Done since the previous board: bark transport, JD fallback, window-target
-persistence, Tor scope decision, ladder decision, rbitcoin RPC harness and
-reorg invariant, rbitcoin testnet4 acceptance.
+Done since the previous board: the 2026-11-17 focus wave (testnet5 + BIP54,
+ladder audit, SV2 TP stages 1+2, role-sourced metric families, cheat-slice
+statistical test, Grafana lab observability). Before that: bark transport,
+JD fallback, window-target persistence, Tor scope decision, ladder decision,
+rbitcoin RPC harness and reorg invariant, rbitcoin testnet4 acceptance.
 
 ## Considered, not adopted
 

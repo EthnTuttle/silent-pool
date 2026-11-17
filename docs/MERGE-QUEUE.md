@@ -391,8 +391,21 @@ master at `3c2df0d`):
 
 | branch | base SHA | ready SHA | owned paths | merge notes | gate |
 |---|---|---|---|---|---|
-| `wp-sv2-tp-port` | `3c2df0d` | pending | sv2-tp template client, SubmitSolution seam, `testing/regtest-rbitcoin-tp-e2e.sh`, ipc source disposition, own decision/changelog fragments | port of stale `sv2-tp` branch onto the union+BIP54 tree; config/main hunks reported as merge notes | fmt/clippy/test -> merge session |
-| `wp-metrics-families` | `3c2df0d` | pending | metrics exporter families (a_send age, ark float, stream lag, JD rejections), role plumbing, changelog fragment | OPERATIONS section 7 "Planned" -> "Exported today" hunk via merge note | fmt/clippy/test -> merge session |
-| `wp-cheat-slice` | `3c2df0d` | pending | `cheat-slice-difficulty` dev feature + seeded statistical test, changelog fragment | feature compiled out of release builds | fmt/clippy/test both feature states -> merge session |
-| `wp-grafana-lab` | `3c2df0d` | pending | `nix/lab` Grafana/Prometheus wrapper, provisioned dashboards, LAB-RUNTIME section, changelog fragment | panels only on exported families; planned-family panels staged separately | nix eval/build evidence -> merge session |
-| `wp-ladder-audit` | `3c2df0d` | pending | ladder completeness audit vs decision `d62bf23`, gap fixes/tests, audit review doc, changelog fragment | stale `ladder` branch is read-only input; archive it if superseded | fmt/clippy/test -> merge session |
+| `wp-sv2-tp-port` | `3c2df0d` | `97299ff` | sv2-tp template client, SubmitSolution seam, `testing/regtest-rbitcoin-tp-e2e.sh`, ipc source disposition, own decision/changelog fragments | port of stale `sv2-tp` branch onto the union+BIP54 tree; config/main hunks reported as merge notes | fmt/clippy/test -> merge session |
+| `wp-metrics-families` | `3c2df0d` | `wp-metrics-families` tip (4 commits) | metrics exporter families (a_send age, ark float, stream lag, JD rejections), role plumbing, changelog fragment | OPERATIONS section 7 "Planned" -> "Exported today" hunk via merge note | fmt/clippy/test -> merge session |
+| `wp-cheat-slice` | `3c2df0d` | `9d47079` | `cheat-slice-difficulty` dev feature + seeded statistical test, changelog fragment | feature compiled out of release builds | fmt/clippy/test both feature states -> merge session |
+| `wp-grafana-lab` | `3c2df0d` | `1adccbf` | `nix/lab` Grafana/Prometheus wrapper, provisioned dashboards, LAB-RUNTIME section, changelog fragment | panels only on exported families; planned-family panels staged separately | nix eval/build evidence -> merge session |
+| `wp-ladder-audit` | `3c2df0d` | `a86bae5` | ladder completeness audit vs decision `d62bf23`, gap fixes/tests, audit review doc, changelog fragment | stale `ladder` branch is read-only input; archive it if superseded | fmt/clippy/test -> merge session |
+
+Outcomes (merge session, 2026-11-17): `dev/testnet5` fast-forwarded
+(`3c2df0d`); baseline test regression fixed (`dbd9d08`); `wp-grafana-lab`
+merged clean (`968cc34` incl. splice); `wp-cheat-slice` merged clean
+(`3ef65df` incl. splice); `wp-ladder-audit` merged, one expected
+`spc-agent/config.rs` conflict resolved keeping master's test fix
+(`1d27e33` incl. splice); `wp-sv2-tp-port` merged clean, SPEC 6.3/7.1 body
+hunks and harness `--network regtest` fixes applied (`8d0f3e8`);
+`wp-metrics-families` merged clean, OPERATIONS section 7 hunk applied and
+merge notes consumed (`5412f21`). Old `ladder` branch archived as tag
+`archive/ladder-pre-union` and deleted. Each merge pushed to the `fork`
+remote; `origin` refuses this machine's key (EthnTuttle, no write access to
+average-gary/silent-pool).
