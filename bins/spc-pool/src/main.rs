@@ -176,6 +176,51 @@ async fn main() -> anyhow::Result<()> {
                 anyhow::bail!("template source 'rpc' requires the `rpc` feature");
             }
         }
+        // With source = "sv2-tp" the [template] rpc_url still supplies the
+        // chain view, but ONLY confirmations/orphan checks and block reads,
+        // never templates (decision 2026-11-05-sv2-tp-chain-view). TDP has
+        // no confirmation query, so an sv2-tp payout role without this view
+        // would settle blind: refuse at startup instead.
+        "sv2-tp" => {
+            #[cfg(feature = "rpc")]
+            {
+                if !config.template.rpc_url.trim().is_empty() {
+                    Arc::new(
+                        spc_pool::chain_identity::BoundChainView::new(
+                            RpcChainView::new(
+                                &config.template.rpc_url,
+                                &config.template.rpc_user,
+                                &config.template.rpc_pass,
+                            )?,
+                            chain_network,
+                        )
+                        .await?,
+                    )
+                } else if allow_unchecked && !roles.contains(&Role::Payout) {
+                    tracing::warn!(
+                        "DEV MODE: sv2-tp front has no chain view (allow_unchecked_chain=true, empty rpc_url)"
+                    );
+                    Arc::new(spc_pool::payout::AlwaysConfirm)
+                } else {
+                    anyhow::bail!(
+                        "template source 'sv2-tp' requires template.rpc_url as the settlement chain view (confirmations/orphans, never templates)"
+                    );
+                }
+            }
+            #[cfg(not(feature = "rpc"))]
+            {
+                if allow_unchecked && !roles.contains(&Role::Payout) {
+                    tracing::warn!(
+                        "DEV MODE: payout has no chain view (allow_unchecked_chain=true); settlement books without an active-chain check"
+                    );
+                    Arc::new(spc_pool::payout::AlwaysConfirm)
+                } else {
+                    anyhow::bail!(
+                        "template source 'sv2-tp' requires the `rpc` feature for the settlement chain view"
+                    );
+                }
+            }
+        }
         other => {
             if allow_unchecked {
                 tracing::warn!(
@@ -185,7 +230,7 @@ async fn main() -> anyhow::Result<()> {
                 Arc::new(spc_pool::payout::AlwaysConfirm)
             } else {
                 anyhow::bail!(
-                    "template source '{}' has no chain view; settlement requires `template.source = \"rpc\"` (or dev-only `accounting.allow_unchecked_chain = true` on regtest/signet)",
+                    "template source '{}' has no chain view; settlement requires `template.source = \"rpc\"` or `\"sv2-tp\"` with `template.rpc_url` as the chain view (or dev-only `accounting.allow_unchecked_chain = true` on regtest/signet)",
                     other
                 );
             }
@@ -422,7 +467,10 @@ async fn main() -> anyhow::Result<()> {
         let (jds_addr, _jds_handle) = jds.bind(&config.jd.listen).await?;
         tracing::info!(%jds_addr, "JDS listener ready");
 
-        let source: Arc<dyn TemplateSource> = match config.template.source.as_str() {
+        let (source, submitter): (
+            Arc<dyn TemplateSource>,
+            Arc<dyn spc_pool::template::BlockSubmitter>,
+        ) = match config.template.source.as_str() {
             "rpc" => {
                 #[cfg(feature = "rpc")]
                 {
@@ -445,20 +493,86 @@ async fn main() -> anyhow::Result<()> {
                     };
                     let genesis_client =
                         bitcoincore_rpc::Client::new(&config.template.rpc_url, auth)?;
-                    Arc::new(spc_pool::chain_identity::BoundTemplateSource::new(
+                    let bound = Arc::new(spc_pool::chain_identity::BoundTemplateSource::new(
                         source,
                         genesis_client,
                         chain_network,
-                    )?)
+                    )?);
+                    (bound.clone(), bound)
                 }
                 #[cfg(not(feature = "rpc"))]
                 {
                     anyhow::bail!("this spc-pool was built without the `rpc` feature");
                 }
             }
+            "sv2-tp" => {
+                let address: std::net::SocketAddr = config
+                    .template
+                    .sv2_tp_address
+                    .parse()
+                    .map_err(|e| anyhow::anyhow!("template.sv2_tp_address: {e}"))?;
+                let authority = spc_pool::template_tp::parse_tp_authority_key(
+                    &config.template.sv2_tp_authority_pubkey,
+                )
+                .map_err(|e| anyhow::anyhow!(e))?;
+                // Subsidy schedule of the network: regtest halves every 150
+                // blocks; every other network halves every 210_000.
+                let halving_interval = if network == spc_crypto::Network::Regtest {
+                    150
+                } else {
+                    210_000
+                };
+                let tp = Arc::new(spc_pool::template_tp::Sv2TpTemplateSource::spawn(
+                    spc_pool::template_tp::Sv2TpConfig {
+                        address,
+                        authority,
+                        coinbase_output_max_additional_size:
+                            spc_pool::template_tp::coinbase_budget_additional_size(
+                                config.budget.ceiling_wu,
+                            ),
+                        coinbase_output_max_additional_sigops:
+                            spc_pool::template_tp::coinbase_additional_sigops(),
+                        halving_interval,
+                        chain: chain_network,
+                    },
+                ));
+                // The TDP session pushes its first template asynchronously;
+                // startup waits (bounded) for it rather than falling into a
+                // no-template refresh error on a healthy node.
+                let mut first = None;
+                for attempt in 0..40u32 {
+                    match tp.get_template().await {
+                        Ok(t) => {
+                            first = Some(t);
+                            break;
+                        }
+                        Err(e) if attempt == 39 => {
+                            anyhow::bail!(
+                                "sv2-tp never delivered a usable template (handshake, IBD, chain or decode check): {e}"
+                            )
+                        }
+                        Err(_) => tokio::time::sleep(Duration::from_millis(250)).await,
+                    }
+                }
+                let Some(first) = first else {
+                    anyhow::bail!("sv2-tp delivered no template");
+                };
+                tracing::info!(height = first.height, "sv2-tp first template ready");
+                (tp.clone(), tp)
+            }
+            "ipc" => {
+                // Declared in SPEC §6.3 but not implemented in this build:
+                // the Cap'n Proto Template Distribution client and its pinned
+                // bitcoin_core_sv2 dependency are not vendored. Fail closed
+                // with the alternatives named; never a silent fallback.
+                anyhow::bail!(
+                    "template source 'ipc' (bitcoin-core Cap'n Proto Template Distribution over IPC) is not implemented in this build; use \"rpc\" or \"sv2-tp\""
+                );
+            }
             "mock" => {
                 if allow_unchecked {
-                    Arc::new(MockTemplateSource::new(demo_template()))
+                    let mock = Arc::new(MockTemplateSource::new(demo_template()));
+                    (mock.clone(), mock)
                 } else {
                     anyhow::bail!("template source 'mock' requires dev network and accounting.allow_unchecked_chain = true");
                 }
@@ -584,7 +698,7 @@ async fn main() -> anyhow::Result<()> {
                         match result {
                             Ok(Some(block)) => {
                                 tracing::info!(merkle = %block.merkle_root.iter().map(|b| format!("{b:02x}")).collect::<String>(), "share found a block; submitting");
-                                if let Err(e) = source.submit_block(&block.block).await {
+                                if let Err(e) = submitter.submit_assembled(&block).await {
                                     tracing::error!(error = %e, "block submit failed");
                                 }
                                 publish_events(&streams, front.take_events()).await;

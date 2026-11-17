@@ -77,6 +77,24 @@ impl<S: crate::template::TemplateSource, C: bitcoincore_rpc::RpcApi + Send + Syn
     }
 }
 
+/// The genesis bracket also guards submission: a found block must never be
+/// handed to an endpoint that stopped being the configured chain.
+#[cfg(feature = "rpc")]
+#[async_trait::async_trait]
+impl<S, C> crate::template::BlockSubmitter for BoundTemplateSource<S, C>
+where
+    S: crate::template::BlockSubmitter,
+    C: bitcoincore_rpc::RpcApi + Send + Sync + 'static,
+{
+    async fn submit_assembled(
+        &self,
+        block: &crate::block::AssembledBlock,
+    ) -> Result<(), crate::template::TemplateError> {
+        self.check()?;
+        self.inner.submit_assembled(block).await
+    }
+}
+
 /// Bind settlement's existing view without changing its economics interface.
 /// Every authoritative read is bracketed by genesis checks on that same view.
 pub struct BoundChainView<T> {

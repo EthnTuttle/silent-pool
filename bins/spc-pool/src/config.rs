@@ -170,6 +170,14 @@ pub struct Template {
     pub rpc_user: String,
     #[serde(default)]
     pub rpc_pass: String,
+    /// `--sv2-tp-listen` address of the node (`source = "sv2-tp"`).
+    #[serde(default)]
+    pub sv2_tp_address: String,
+    /// Authority public key of the TP, as logged by the node at startup:
+    /// key-utils base58check (`9b…`), or 64-hex x-only. Required with
+    /// `source = "sv2-tp"`; the connection is refused without it.
+    #[serde(default)]
+    pub sv2_tp_authority_pubkey: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -528,6 +536,8 @@ impl Default for Template {
             rpc_url: default_rpc_url(),
             rpc_user: String::new(),
             rpc_pass: String::new(),
+            sv2_tp_address: String::new(),
+            sv2_tp_authority_pubkey: String::new(),
         }
     }
 }
@@ -698,6 +708,8 @@ pub enum ConfigError {
     OperatorNotLoopback(String),
     #[error("[operator] listen requires the api role; the operator listener runs inside the pool API process")]
     OperatorRequiresApiRole,
+    #[error("invalid sv2-tp config: {0}")]
+    Sv2Tp(String),
 }
 
 impl Pool {
@@ -972,6 +984,41 @@ impl Config {
                 )))
             }
         }
+        if self.template.source == "sv2-tp" {
+            // Fail closed: a typo'd endpoint or an absent/wrong authority key
+            // would leave the front polling an unresolvable or unauthenticated
+            // template source forever.
+            if self.template.sv2_tp_address.is_empty() {
+                return Err(ConfigError::Sv2Tp(
+                    "template.sv2_tp_address is required with source \"sv2-tp\"".into(),
+                ));
+            }
+            parse_listen(&self.template.sv2_tp_address)?;
+            if self.template.sv2_tp_authority_pubkey.is_empty() {
+                return Err(ConfigError::Sv2Tp(
+                    "template.sv2_tp_authority_pubkey is required with source \"sv2-tp\"".into(),
+                ));
+            }
+            crate::template_tp::parse_tp_authority_key(&self.template.sv2_tp_authority_pubkey)
+                .map_err(ConfigError::Sv2Tp)?;
+            // TDP carries only templates and SubmitSolution. Confirmations,
+            // orphan checks and block economics still come from the node's
+            // RPC: [template] rpc_url is the chain view, never a template
+            // source (decision 2026-11-05-sv2-tp-chain-view). Starting the
+            // payout role without it would settle blind.
+            if self.pool.roles.iter().any(|r| r == "payout")
+                && self.template.rpc_url.trim().is_empty()
+            {
+                return Err(ConfigError::Sv2Tp(
+                    "source \"sv2-tp\" with the payout role requires template.rpc_url as the chain view (confirmations/orphans, not templates)"
+                        .into(),
+                ));
+            }
+            // Building without `rpc` cannot supply that view either; that is
+            // refused by main.rs at startup, where CLI --roles overrides are
+            // known too. Validating a config with ["front", "payout", "api"]
+            // must not require `rpc` here.
+        }
 
         // The height push is at most 5 bytes and push32 is 33; reserve the
         // worst case at the current height (height 0 uses 1, but the check is
@@ -1224,6 +1271,8 @@ front_id = 0
 
 [template]
 source = "sv2-tp"
+sv2_tp_address = "127.0.0.1:18447"
+sv2_tp_authority_pubkey = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72"
 extranonce_bytes = 16
 
 [sv1]
@@ -1248,6 +1297,73 @@ listen = "127.0.0.1:8080"
         assert_eq!(cfg.accounting.window_n, 8);
         assert_eq!(cfg.accounting.coinbase_threshold_sats, 330);
         assert!(cfg.jd.grace_same_height_only);
+    }
+
+    #[test]
+    fn sv2_tp_requires_endpoint_and_valid_authority_key() {
+        // The SAMPLE above is the fully specified sv2-tp source and validates.
+        sample().validate().unwrap();
+
+        let mut cfg = sample();
+        cfg.template.sv2_tp_address = String::new();
+        assert!(matches!(cfg.validate(), Err(ConfigError::Sv2Tp(_))));
+
+        let mut cfg = sample();
+        cfg.template.sv2_tp_address = "not-an-address".into();
+        assert!(matches!(cfg.validate(), Err(ConfigError::Listen(_))));
+
+        let mut cfg = sample();
+        cfg.template.sv2_tp_authority_pubkey = String::new();
+        assert!(matches!(cfg.validate(), Err(ConfigError::Sv2Tp(_))));
+
+        for bad in [
+            // checksum flipped
+            "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH74",
+            // version 2 instead of 1
+            "JAYQfbtaNR7bYpQZNtA3WSpY15rdSWz11a1scRn7diKBa6MRbxT",
+            // missing payload byte
+            "2worxZd7cunTHiqG2F7B3a9uEo3DhA7zDuJyDw5Ss4Y1s5fyKt",
+            "09",
+        ] {
+            let mut cfg = sample();
+            cfg.template.sv2_tp_authority_pubkey = bad.into();
+            assert!(
+                matches!(cfg.validate(), Err(ConfigError::Sv2Tp(_))),
+                "{bad} must be refused"
+            );
+        }
+
+        // Hex x-only keys are accepted as the alternate form.
+        let mut cfg = sample();
+        cfg.template.sv2_tp_authority_pubkey =
+            "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798".into();
+        cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn sv2_tp_payout_requires_a_chain_view() {
+        // rpc_url is the settlement chain view: empty = settle blind, refuse.
+        let mut cfg = sample();
+        cfg.template.rpc_url = String::new();
+        assert!(matches!(cfg.validate(), Err(ConfigError::Sv2Tp(_))));
+
+        // A front-only TP deployment has no payout role to settle blind,
+        // so an empty chain view is fine (and so is a no-rpc-feature build).
+        let mut cfg = sample();
+        cfg.pool.roles = vec!["front".into()];
+        cfg.template.rpc_url = String::new();
+        cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn other_sources_do_not_require_tp_settings() {
+        for source in ["rpc", "ipc"] {
+            let mut cfg = sample();
+            cfg.template.source = source.into();
+            cfg.template.sv2_tp_address = String::new();
+            cfg.template.sv2_tp_authority_pubkey = String::new();
+            cfg.validate().unwrap();
+        }
     }
 
     #[test]

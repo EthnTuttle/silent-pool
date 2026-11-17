@@ -38,9 +38,16 @@ onion = { sv2 = "", sv1 = "", jd = "", api = "" }   # "<id>.onion:<port>"
 
 [template]
 source = "rpc"                      # "ipc" | "sv2-tp" | "rpc" | "mock"
-rpc_url = "http://127.0.0.1:18443"
+rpc_url = "http://127.0.0.1:18443"  # with source = "sv2-tp": CHAIN VIEW ONLY (confirmations/orphans/block reads), never templates
 rpc_user = "user"
 rpc_pass = "pass"
+# With source = "sv2-tp": the node's TDP listener (rbitcoin-node
+# --sv2-tp-listen) and its authority public key from the startup log
+# ("sv2 TP on ADDR (authority pubkey KEY)"). Both are required with sv2-tp;
+# startup refuses a missing or malformed key. key-utils base58check, or
+# 64-hex x-only.
+# sv2_tp_address = "127.0.0.1:18447"
+# sv2_tp_authority_pubkey = "9b..."
 extranonce_bytes = 16
 # How often the front polls for a new template (ms). Bounds how long an
 # external new block leaves miner jobs and the JDS distribution stale.
