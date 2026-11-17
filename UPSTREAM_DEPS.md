@@ -50,6 +50,83 @@ deployment. Adopt this entry, the package files, root flake wiring and its
 new lock node atomically. Future repins update the source record and lock
 together. Validation recipe: `nix/dev/testnet5/README.md`.
 
+## bark testnet5 tracking (2026-11-17)
+
+Status check for the blocker "Stock bark c419159 still cannot represent
+Testnet5" (decision 2026-11-15-testnet5-chain-identity.md item 8). The bark
+pin `c419159` and all lockfiles are unchanged by this entry.
+
+**Canonical home and mirrors (verified 2026-11-17).**
+Canonical: `https://gitlab.com/ark-bitcoin/bark` - second.tech links it as
+"View bark on GitLab" / "bark repo" and its footer links the
+`gitlab.com/ark-bitcoin` group. GitHub mirror: `https://github.com/ark-bitcoin/bark`
+exists and its `master` is the same SHA as GitLab `master`
+(`34c532e6a358a7434b4c20e0060b25e3a36d7dc8` on both, 2026-11-17), but it is
+partial: 43 refs (11 branches, stale `refs/pull/1..36`) versus 2762 refs on
+GitLab. Treat GitLab as the only source of truth for branches/MRs.
+`github.com/second-tech/bark` does not exist (repository not found).
+
+**bark testnet5/BIP95 support: NONE upstream (2026-11-17).** Evidence:
+
+- `git ls-remote https://gitlab.com/ark-bitcoin/bark.git` (2762 refs) and
+  `git ls-remote https://github.com/ark-bitcoin/bark.git` (43 refs): zero
+  refs matching `testnet|bip95|bip-95` (case-insensitive).
+- GitLab API MR search (`/projects/ark-bitcoin%2Fbark/merge_requests?search=`)
+  for `testnet5` and `bip95`: empty. Same for issues (`/issues?search=`).
+  MR search `testnet&state=all` returns only !2802 (board lifetime,
+  unrelated).
+- Shallow clone of `master` @ `34c532e6a358a7434b4c20e0060b25e3a36d7dc8`:
+  `grep -riE 'testnet5|bip95'` over the whole tree matches nothing
+  (changelogs included).
+- bark `master` still depends on the rust-bitcoin 0.32 line:
+  `Cargo.toml` `bitcoin = "0.32.7"`, `Cargo.lock` resolves 0.32.9. Neither
+  has a Testnet5 variant.
+
+**rust-bitcoin situation (the actual gate).** No released `bitcoin` crate
+supports Testnet5: latest stable 0.32.102 (2026-09-27; what the silent-pool
+workspace Cargo.lock resolves) has `Network = {Bitcoin, Testnet, Testnet4,
+Signet, Regtest}`, and 0.33.0-beta predates BIP95 work (2026-07-22). One
+open PR exists: `rust-bitcoin/rust-bitcoin#7160` "Support Testnet5 (BIP95)
+network" (opened 2026-11-04 by polespinasa, open as of 2026-11-17; head
+`polespinasa/rust-bitcoin` branch `2026-11-04-addtestnet5` @
+`0b6d7bc4cf174dbbf26174040dbd53c6b141e42a`, 2 commits, +187/-11 over 9
+files, base master @ `271f662a6890db459e5ab9088f2b09a3598a43ec`;
+force-pushed 2026-11-16 to add the live genesis data). Constants-only
+change checked against Core PR #35861; collaborator feedback is mildly
+positive but unreviewed in detail. It targets `master` (the post-0.33
+line), and `Network` is an exhaustive enum, so Testnet5 cannot arrive as a
+0.32.x patch release; no 0.32-branch backport PR exists (GitHub issue
+search in the repo for `testnet5`/`bip95` returns only #7160). bark can
+therefore only gain Testnet5 after (a) #7160 or a successor merges, (b) a
+rust-bitcoin release ships it, and (c) bark bumps its `bitcoin` major -
+none of which has started upstream.
+
+**Adoption path when a bark branch/MR appears.** Record its ref + head SHA
+here, then re-pin per the Rules/Verification sections: the new bark SHA,
+`UPSTREAM_DEPS.md`, and every affected lockfile (workspace `Cargo.lock`,
+`spc_ark_client/Cargo.lock` if touched) move in one change citing a
+decision document. Crate identity of `ark-lib` across `spc-crypto`, the
+adapter and RPC bindings (row `c419159`) must be preserved by the same
+change. Do not bump ahead of upstream: the agent-side refusal in decision
+2026-11-15 item 8 stays until the wallet and job/source contracts carry
+chain identity.
+
+**Re-check procedure (run and date-stamp a new paragraph here):**
+
+```
+git ls-remote https://gitlab.com/ark-bitcoin/bark.git | grep -iE 'testnet5|bip95' # expect empty
+git ls-remote https://github.com/ark-bitcoin/bark.git | grep -iE 'testnet5|bip95' # expect empty
+curl -s 'https://gitlab.com/api/v4/projects/ark-bitcoin%2Fbark/merge_requests?search=testnet5&state=all'  # expect []
+curl -s 'https://gitlab.com/api/v4/projects/ark-bitcoin%2Fbark/issues?search=testnet5&state=all'          # expect []
+curl -s https://api.github.com/repos/rust-bitcoin/rust-bitcoin/pulls/7160 | jq '{state, merged_at, head: .head.sha}'
+curl -s https://crates.io/api/v1/crates/bitcoin | jq '.crate.max_stable_version'  # 0.32.102 as of 2026-11-17
+```
+
+Watch points: rust-bitcoin PR #7160 (merge/close/successor), a Testnet5
+variant in a released `bitcoin` crate, bark's `bitcoin` dependency major
+bump, and the bark MR tracker (`gitlab.com/ark-bitcoin/bark/-/merge_requests`)
+for `testnet5`/`bip95`.
+
 ## Project-owned canonical lab probe (2026-11-12)
 
 The Python canonical probe is maintained in `testing/ark-rpc`, not in an
