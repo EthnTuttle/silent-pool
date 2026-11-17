@@ -435,3 +435,36 @@ files fail closed, and `--params` requires an actual JSON array.
 
 The implementation report records the frozen run directory, exact commands,
 provenance, crash-cleanup proof and all remaining non-claims.
+
+## 13. Optional metrics dashboard (Grafana + Prometheus)
+
+`spc-lab-observability` is an opt-in wrapper from the same locked nixpkgs. It
+is never started by `spc-lab` or the self-hosted Ark wrapper, changes no lab
+scenario or binary, and an existing run is byte-identical without it. Start it
+in a second terminal after the lab run is up:
+
+```sh
+nix build --max-jobs 1 "$APP_REF#spc-lab-observability" --no-link
+OBS="$(nix eval --raw "$APP_REF#packages.x86_64-linux.spc-lab-observability.outPath")/bin/spc-lab-observability"
+"$OBS" --run-dir "$RUN_DIR"
+```
+
+It waits for the run's manifest, renders the Prometheus scrape targets from
+the run's actual allocated pool api-role listeners (`front.<id>.api`; only
+those loopback host:port pairs are read out of the private manifest, no
+credential field), and launches loopback-only Prometheus
+(`http://127.0.0.1:19464`) and Grafana (`http://127.0.0.1:13000`; override
+with `--prometheus-port`/`--grafana-port`). Open the Grafana URL. Analytics,
+update checks and the news feed are disabled; nothing calls out. Anonymous
+admin is enabled because the listener is loopback on a single-operator lab
+machine - do not re-bind it. All state is ephemeral run-directory state under
+`<run>/observability`, like the lab's Postgres/Redis datadirs. Ctrl-C stops
+both processes; the lab run is unaffected.
+
+Two dashboards are provisioned. "SPc pool - exported metrics" uses only the
+families this build actually emits (`docs/OPERATIONS.md` section 7, "Exported
+today"). "SPc pool - planned metrics" holds panels for the SPEC §9 families a
+parallel packet is instrumenting and shows "No data" until they land; that
+means not instrumented, never zero. A dashboard panel is an observation, not
+a funded-acceptance result (section 7). v1 scrapes host-profile loopback
+listeners only; a namespaced topology run's fronts are skipped with a warning.

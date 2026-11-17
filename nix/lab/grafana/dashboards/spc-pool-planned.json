@@ -1,0 +1,86 @@
+{
+  "uid": "spc-pool-planned",
+  "title": "SPc pool - planned metrics (not exported in this build)",
+  "description": "SPEC section 9 contract families a parallel packet is instrumenting (docs/OPERATIONS.md section 7, 'Planned'). Every panel here reads a family the current exporter does NOT emit, so 'No data' is the expected state until that packet lands; nothing on this dashboard is evidence of pool health today.",
+  "tags": ["spc-lab", "spc-pool", "planned"],
+  "timezone": "browser",
+  "editable": false,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "Why this dashboard is empty",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "mode": "markdown",
+        "content": "These families are **not exported by this build** (docs/OPERATIONS.md section 7, 'Planned'). A parallel packet is implementing `spc_a_send_age_seconds`, `spc_ark_float_sats`, `spc_stream_lag_seconds{stream}` and `spc_jd_declaration_reject_total{code}`; the panels below light up as each lands. 'No data' here means *not instrumented yet*, never 'zero'."
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "A_send age (alarm > 1h: a stuck height)",
+      "datasource": { "type": "prometheus", "uid": "spc-lab-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "spc_a_send_age_seconds",
+          "legendFormat": "{{front}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Ark float (sats; alarm below float_target_sats)",
+      "datasource": { "type": "prometheus", "uid": "spc-lab-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "spc_ark_float_sats",
+          "legendFormat": "{{front}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Stream lag by stream (alarm on rising lag)",
+      "datasource": { "type": "prometheus", "uid": "spc-lab-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "spc_stream_lag_seconds",
+          "legendFormat": "{{front}} {{stream}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "JD declaration rejects (10m increase, by code; alarm on any single code trending)",
+      "datasource": { "type": "prometheus", "uid": "spc-lab-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "increase(spc_jd_declaration_reject_total[10m])",
+          "legendFormat": "{{front}} {{code}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    }
+  ]
+}

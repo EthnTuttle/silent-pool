@@ -1,0 +1,196 @@
+{
+  "uid": "spc-pool-exported",
+  "title": "SPc pool - exported metrics",
+  "description": "Pool api-role /metrics families actually exported by this build (docs/OPERATIONS.md section 7, 'Exported today'). A missing series means unknown, never empty; any growth of spc_metrics_scrape_errors_total means a store query failed.",
+  "tags": ["spc-lab", "spc-pool"],
+  "timezone": "browser",
+  "editable": false,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Pool API up (per front)",
+      "datasource": { "type": "prometheus", "uid": "spc-lab-prometheus" },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "up{job=\"spc-pool\"}",
+          "legendFormat": "{{front}}",
+          "instant": true
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Process uptime (restart detection)",
+      "datasource": { "type": "prometheus", "uid": "spc-lab-prometheus" },
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "spc_process_uptime_seconds",
+          "legendFormat": "{{front}}",
+          "instant": true
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Exporter store-query errors (alarm on any growth)",
+      "datasource": { "type": "prometheus", "uid": "spc-lab-prometheus" },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "increase(spc_metrics_scrape_errors_total[5m])",
+          "legendFormat": "{{front}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Blocks (10m increase, by status; alarm on orphaned/pending growth)",
+      "datasource": { "type": "prometheus", "uid": "spc-lab-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "increase(spc_blocks_total[10m])",
+          "legendFormat": "{{front}} {{status}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Ark payouts (10m increase, by status; alarm on failed_to_pending)",
+      "datasource": { "type": "prometheus", "uid": "spc-lab-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "increase(spc_ark_payouts_total[10m])",
+          "legendFormat": "{{front}} {{status}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Pending liability (sats; reconcile against /api/pool/liability)",
+      "datasource": { "type": "prometheus", "uid": "spc-lab-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 14 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "spc_pending_liability_sats",
+          "legendFormat": "{{front}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Ark due (sats; alarm on growth without sent payouts)",
+      "datasource": { "type": "prometheus", "uid": "spc-lab-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 14 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "spc_ark_due_sats",
+          "legendFormat": "{{front}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Forfeited sats (1h increase; alarm beyond expected unregistered miners)",
+      "datasource": { "type": "prometheus", "uid": "spc-lab-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 14 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "increase(spc_forfeited_sats_total[1h])",
+          "legendFormat": "{{front}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "Config: window N",
+      "datasource": { "type": "prometheus", "uid": "spc-lab-prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 22 },
+      "targets": [
+        { "refId": "A", "expr": "spc_config_window_n", "legendFormat": "{{front}}", "instant": true }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "Config: coinbase threshold (sats)",
+      "datasource": { "type": "prometheus", "uid": "spc-lab-prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 22 },
+      "targets": [
+        { "refId": "A", "expr": "spc_config_coinbase_threshold_sats", "legendFormat": "{{front}}", "instant": true }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "Config: budget floor (WU)",
+      "datasource": { "type": "prometheus", "uid": "spc-lab-prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 22 },
+      "targets": [
+        { "refId": "A", "expr": "spc_config_budget_floor_wu", "legendFormat": "{{front}}", "instant": true }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "Config: budget ceiling (WU)",
+      "datasource": { "type": "prometheus", "uid": "spc-lab-prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 22 },
+      "targets": [
+        { "refId": "A", "expr": "spc_config_budget_ceiling_wu", "legendFormat": "{{front}}", "instant": true }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    }
+  ]
+}
