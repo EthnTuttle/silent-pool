@@ -4375,7 +4375,7 @@ for line in sys.stdin:
               "result": {"status": "bootstrap_window_open"}})
 "#;
         ScriptedActor(
-            Command::new("/usr/bin/python3")
+            Command::new(crate::namespace::resolve_tool("python3").expect("python3 on PATH"))
                 .args(["-c", script])
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
@@ -4506,8 +4506,10 @@ for line in sys.stdin:
                         &std::env::current_exe().unwrap(),
                     )
                     .unwrap(),
-                    actor_sha256: crate::supervisor::hash_file(Path::new("/usr/bin/python3"))
-                        .unwrap(),
+                    actor_sha256: crate::supervisor::hash_file(
+                        &crate::namespace::resolve_tool("python3").expect("python3 on PATH"),
+                    )
+                    .unwrap(),
                     acceptance_enabled: false,
                 },
             )

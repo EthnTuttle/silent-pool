@@ -791,15 +791,16 @@ with open(marker, "w") as f:
         let dir = Temp::new();
         let marker = dir.0.join("eof.marker");
         let log = dir.0.join("peer.log");
-        let mut peer = Command::new("/usr/bin/python3")
-            .arg("-c")
-            .arg(PEER)
-            .arg(&marker)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .expect("python3 peer");
+        let mut peer =
+            Command::new(crate::namespace::resolve_tool("python3").expect("python3 on PATH"))
+                .arg("-c")
+                .arg(PEER)
+                .arg(&marker)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::inherit())
+                .spawn()
+                .expect("python3 peer");
         let control = MinerControl::spawn(
             MinerId::trusted("m-stream-half-open"),
             "stream-test".into(),

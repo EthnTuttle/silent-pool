@@ -73,7 +73,7 @@ fn prepared(enabled: bool) -> (Arc<RunEngine>, Peer, PathBuf) {
     )
     .unwrap();
     let mut peer = Peer(
-        Command::new("/usr/bin/python3")
+        Command::new(crate::namespace::resolve_tool("python3").expect("python3 on PATH"))
             .args(["-c", "import time; time.sleep(60)"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -89,7 +89,10 @@ fn prepared(enabled: bool) -> (Arc<RunEngine>, Peer, PathBuf) {
                 incarnation: "stage-peer".into(),
                 controller_sha256: crate::supervisor::hash_file(&std::env::current_exe().unwrap())
                     .unwrap(),
-                actor_sha256: crate::supervisor::hash_file(Path::new("/usr/bin/python3")).unwrap(),
+                actor_sha256: crate::supervisor::hash_file(
+                    &crate::namespace::resolve_tool("python3").expect("python3 on PATH"),
+                )
+                .unwrap(),
                 acceptance_enabled: enabled,
             },
         )
