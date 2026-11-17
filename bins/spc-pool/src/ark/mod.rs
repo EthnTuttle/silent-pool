@@ -908,7 +908,10 @@ mod tests {
 
     /// The blocker regression: an order that is not due must stay in the
     /// consumer group's pending list, and the pending retry must execute it
-    /// once the tip reaches `not_before_height`.
+    /// once the tip reaches `not_before_height`. The retry uses the durable
+    /// fair cursor (decision 2026-11-10): a pass that finds nothing after
+    /// the cursor wraps it to zero and the next pass revisits the PEL from
+    /// the start, so revisiting a held entry takes at most two passes.
     #[tokio::test]
     async fn held_order_stays_unacked_until_due() {
         let Ok(url) = std::env::var("SPC_TEST_REDIS_URL") else {
@@ -949,12 +952,33 @@ mod tests {
         );
         assert_eq!(streams.len(&receipts).await.unwrap(), 0);
 
-        // A retry at the same tip is still held and still not acked.
+        // A retry at the same tip is still held, still pending, not acked.
+        // The fair cursor now sits past the lone entry.
         svc.retry_pending().await.unwrap();
         assert_eq!(streams.len(&receipts).await.unwrap(), 0);
+        assert_eq!(
+            streams
+                .read_pending(&orders, group, consumer, 10)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
 
-        // Due: the same pending entry is sent and acknowledged.
+        // Due: the first pass observes an exhausted cursor and wraps it to
+        // zero without processing (still no receipt, entry still pending);
+        // the wrapped pass revisits the same entry, sends and acknowledges.
         svc.set_tip(800_006);
+        svc.retry_pending().await.unwrap();
+        assert_eq!(streams.len(&receipts).await.unwrap(), 0);
+        assert_eq!(
+            streams
+                .read_pending(&orders, group, consumer, 10)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
         svc.retry_pending().await.unwrap();
         assert_eq!(streams.len(&receipts).await.unwrap(), 1);
         assert!(streams
@@ -962,6 +986,12 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+
+        // The acked entry is gone for good: a further full wrap cycle finds
+        // nothing and never double-sends.
+        svc.retry_pending().await.unwrap();
+        svc.retry_pending().await.unwrap();
+        assert_eq!(streams.len(&receipts).await.unwrap(), 1);
     }
 
     #[tokio::test]
