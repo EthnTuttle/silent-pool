@@ -71,6 +71,11 @@ pub struct Sv2Server {
     next_extranonce_prefix: Arc<AtomicU32>,
     outcomes: ShareOutcomeHub,
     registration: Option<Arc<dyn ArkRegistrationHandler>>,
+    /// `spc_channel_reject_total{reason}` (SPEC §9), shared with the
+    /// metrics publisher.
+    channel_rejects: crate::role_metrics::CounterMap,
+    /// `spc_ext32_requests_total{msg}` (SPEC §9).
+    ext32_requests: crate::role_metrics::CounterMap,
 }
 
 /// Final front-side outcome for one ingress submission. A success is sent only
@@ -171,7 +176,20 @@ impl Sv2Server {
             next_extranonce_prefix: Arc::new(AtomicU32::new(0)),
             outcomes: ShareOutcomeHub::default(),
             registration: None,
+            channel_rejects: crate::role_metrics::CounterMap::default(),
+            ext32_requests: crate::role_metrics::CounterMap::default(),
         }
+    }
+
+    /// Share the SPEC §9 listener counters with the metrics publisher.
+    pub fn with_listener_counters(
+        mut self,
+        channel_rejects: crate::role_metrics::CounterMap,
+        ext32_requests: crate::role_metrics::CounterMap,
+    ) -> Self {
+        self.channel_rejects = channel_rejects;
+        self.ext32_requests = ext32_requests;
+        self
     }
 
     /// Install the real `0x5350` handler. Without it negotiation omits the
@@ -362,6 +380,7 @@ impl Sv2Server {
                             let identity = match parse_identity(&raw, self.network()) {
                                 Ok(id) => id,
                                 Err(_) => {
+                                    self.channel_rejects.incr("invalid-user-identity");
                                     let err = open_channel_error(msg.request_id, "invalid-user-identity");
                                     write_msg(&mut write, err, MESSAGE_TYPE_OPEN_MINING_CHANNEL_ERROR, false).await?;
                                     continue;
@@ -675,6 +694,14 @@ impl Sv2Server {
                 return write_type32(write, &err).await;
             }
         };
+        match &message {
+            Type32Message::GetWindow { .. } => self.ext32_requests.incr("get_window"),
+            Type32Message::GetShares { .. } => self.ext32_requests.incr("get_shares"),
+            Type32Message::GetTransactionsInJob { .. } => {
+                self.ext32_requests.incr("get_transactions_in_job")
+            }
+            _ => {}
+        }
         if !self.type32_enabled {
             let request_id = match message {
                 Type32Message::GetWindow { request_id, .. }

@@ -69,6 +69,9 @@ pub struct JdsServer {
     dist_tx: broadcast::Sender<Vec<u8>>,
     pk: Secp256k1PublicKey,
     sk: Secp256k1SecretKey,
+    /// `spc_jd_declaration_reject_total{code}` (SPEC §9), shared with the
+    /// metrics publisher.
+    declines: crate::role_metrics::CounterMap,
 }
 
 impl JdsServer {
@@ -87,7 +90,14 @@ impl JdsServer {
             dist_tx,
             pk: Secp256k1PublicKey(kp.x_only_public_key().0),
             sk: Secp256k1SecretKey(kp.secret_key()),
+            declines: crate::role_metrics::CounterMap::default(),
         }
+    }
+
+    /// Share the SPEC §9 decline counter with the metrics publisher.
+    pub fn with_decline_counters(mut self, counters: crate::role_metrics::CounterMap) -> Self {
+        self.declines = counters;
+        self
     }
 
     pub async fn publish(
@@ -144,6 +154,7 @@ impl JdsServer {
             sk: self.sk,
             token_seq: Arc::new(Mutex::new(0)),
             job_seq: Arc::new(Mutex::new(0)),
+            declines: self.declines.clone(),
         });
         let handle = tokio::spawn(async move {
             while let Ok((socket, _)) = listener.accept().await {
@@ -169,6 +180,7 @@ struct JdsServerRef {
     sk: Secp256k1SecretKey,
     token_seq: Arc<Mutex<u64>>,
     job_seq: Arc<Mutex<u32>>,
+    declines: crate::role_metrics::CounterMap,
 }
 
 impl JdsServerRef {
@@ -263,6 +275,7 @@ impl JdsServerRef {
                                     return Err("answer policy: simulated JDS hangup".into())
                                 }
                                 AnswerPolicy::ForceDecline(code) => {
+                                    self.declines.incr(&code);
                                     send_declare_error(&mut write, msg.request_id, &code).await?;
                                 }
                                 AnswerPolicy::Natural => {
@@ -290,6 +303,7 @@ impl JdsServerRef {
                                         }
                                         Err(decline) => {
                                             tracing::warn!(height, code = decline.code(), %decline, "declared coinbase declined");
+                                            self.declines.incr(decline.code());
                                             send_declare_error(&mut write, msg.request_id, decline.code()).await?;
                                         }
                                     }
@@ -326,6 +340,7 @@ impl JdsServerRef {
                                 }
                                 Err(decline) => {
                                     tracing::warn!(height, code = decline.code(), %decline, "SetCustomMiningJob declined");
+                                    self.declines.incr(decline.code());
                                     if let Ok(msg) = parsed {
                                         send_custom_job_error(
                                             &mut write,

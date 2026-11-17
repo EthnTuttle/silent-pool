@@ -243,6 +243,11 @@ async fn main() -> anyhow::Result<()> {
         })
         // Identity rows are written with the configured chain code.
         .with_network(chain_network.code());
+        // `spc_ark_overdue_total` boundary (SPEC §9, OPERATIONS §7).
+        let svc = match config.ark.as_ref() {
+            Some(ark) => svc.with_ark_retry_blocks(ark.retry_blocks),
+            None => svc,
+        };
         let svc = if !allow_unchecked {
             svc.with_economic_pool(
                 FrontConfig::from_config(&config).map_err(|e| anyhow::anyhow!(e))?,
@@ -303,7 +308,17 @@ async fn main() -> anyhow::Result<()> {
                     budget_ceiling_wu: u64::from(config.budget.ceiling_wu),
                 },
             )
-            .with_order_pubkey(order_pubkey),
+            .with_order_pubkey(order_pubkey)
+            // Role-sourced metric families (SPEC §9) and stream lag come
+            // from Redis; without it they are absent and each scrape counts
+            // one source error.
+            .with_streams(match Streams::connect(&config.storage.redis).await {
+                Ok(streams) => Some(streams),
+                Err(e) => {
+                    tracing::warn!(error = %e, "api: redis unavailable; role-sourced metric families will be absent");
+                    None
+                }
+            }),
         );
         let app = spc_pool::api::router(backend, network);
         let listener = tokio::net::TcpListener::bind(&config.api.listen).await?;
@@ -380,13 +395,18 @@ async fn main() -> anyhow::Result<()> {
         // miner jobs stale (SPEC §2.2, §3.5).
         let refresh_interval = Duration::from_millis(config.template.refresh_interval_ms);
         let dust_limit = u32::try_from(config.accounting.dust_limit_sats).unwrap_or(u32::MAX);
+        // SPEC §9 listener counters, shared with the role-metrics publisher.
+        let channel_rejects = spc_pool::role_metrics::CounterMap::default();
+        let ext32_requests = spc_pool::role_metrics::CounterMap::default();
+        let jd_declines = spc_pool::role_metrics::CounterMap::default();
         let server = Sv1Server::new(
             network,
             config.sv1.extranonce1_bytes,
             config.sv1.extranonce2_bytes,
             share_difficulty as f64,
             tx.clone(),
-        );
+        )
+        .with_channel_rejects(channel_rejects.clone());
         if config.sv1.enabled {
             let (addr, _handle) = server.bind(&config.sv1.listen).await?;
             tracing::info!(%addr, "native SV1 listener ready");
@@ -404,6 +424,7 @@ async fn main() -> anyhow::Result<()> {
         .with_authority_secret_key(authority_secret)
         .with_share_difficulty(share_difficulty)
         .with_type32_enabled(config.extensions.share_accounting)
+        .with_listener_counters(channel_rejects.clone(), ext32_requests.clone())
         .with_front_id(config.pool.front_id);
         if let (Some(metadata), Some(registration_streams)) =
             (ark_metadata.as_ref(), streams.as_ref())
@@ -418,7 +439,7 @@ async fn main() -> anyhow::Result<()> {
         let (sv2_addr, _sv2_handle) = sv2.bind(&config.pool.listen).await?;
         tracing::info!(%sv2_addr, "native SV2 listener ready");
 
-        let jds = JdsServer::new(config.pool.front_id);
+        let jds = JdsServer::new(config.pool.front_id).with_decline_counters(jd_declines.clone());
         let (jds_addr, _jds_handle) = jds.bind(&config.jd.listen).await?;
         tracing::info!(%jds_addr, "JDS listener ready");
 
@@ -552,7 +573,25 @@ async fn main() -> anyhow::Result<()> {
             let mut ticker = tokio::time::interval(refresh_interval);
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             ticker.tick().await; // the interval fires immediately
+                                 // Role metrics (SPEC §9): publish immediately, then on the interval.
+            let mut last_metrics = std::time::Instant::now()
+                .checked_sub(spc_pool::role_metrics::PUBLISH_INTERVAL)
+                .unwrap_or_else(std::time::Instant::now);
             loop {
+                if last_metrics.elapsed() >= spc_pool::role_metrics::PUBLISH_INTERVAL {
+                    last_metrics = std::time::Instant::now();
+                    if let Some(streams) = &streams {
+                        let mut sample = front.metrics_sample();
+                        sample.channel_reject_total = channel_rejects.snapshot();
+                        sample.ext32_requests_total = ext32_requests.snapshot();
+                        sample.jd_declaration_reject_total = jd_declines.snapshot();
+                        if let Err(e) =
+                            spc_pool::role_metrics::publish_front(streams, &sample).await
+                        {
+                            tracing::warn!(error = %e, "front metrics publish failed");
+                        }
+                    }
+                }
                 tokio::select! {
                     _ = ticker.tick() => {
                         refresh_and_publish(

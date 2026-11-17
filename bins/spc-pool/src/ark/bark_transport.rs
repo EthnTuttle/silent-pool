@@ -312,6 +312,15 @@ impl<C: BarkClient + 'static> ArkTransport for BarkTransport<C> {
         }
         Ok((receipt.vtxo_id.to_vec(), receipt.expiry_height))
     }
+    async fn float_sats(&self) -> Option<u64> {
+        // Spendable float only; pending boards/refreshes are not spendable
+        // capacity. A wallet error makes the family unknown, never zero.
+        let vtxos = self.client.list_vtxos().await.ok()?;
+        vtxos
+            .iter()
+            .filter(|v| v.spendable)
+            .try_fold(0u64, |n, v| n.checked_add(v.sats))
+    }
 }
 
 #[cfg(test)]

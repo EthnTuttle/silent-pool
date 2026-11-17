@@ -73,6 +73,23 @@ pub enum Action {
     Hold,
 }
 
+/// The `reason` label for `spc_ark_orders_rejected_total` (SPEC §9). Values
+/// are stable label strings, not `Display` output.
+fn reject_reason(e: &ArkError) -> &'static str {
+    match e {
+        ArkError::Signature => "bad-signature",
+        ArkError::TooLarge => "too-large",
+        ArkError::NotDue => "not-due",
+        ArkError::Duplicate => "duplicate",
+        ArkError::Ambiguous => "ambiguous",
+        ArkError::DailyCap => "daily-cap",
+        ArkError::Address => "bad-address",
+        ArkError::WrongServer => "wrong-server",
+        ArkError::Transport(_) => "transport",
+        ArkError::Redis(_) => "redis",
+    }
+}
+
 /// What happened to one order. `Held` must stay unacknowledged: its stream
 /// entry is retried from this consumer's pending list when the tip advances.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -280,6 +297,10 @@ pub struct ArkService<T: ArkTransport, D: OrderDedupe> {
     group: String,
     consumer: String,
     fresh_authorization: bool,
+    /// Terminal order rejections by reason
+    /// (`spc_ark_orders_rejected_total{reason}`, SPEC §9). Aggregate counts
+    /// only; no identity ever reaches this role (SPEC §11.3).
+    rejected: crate::role_metrics::CounterMap,
 }
 
 impl<T: ArkTransport, D: OrderDedupe> ArkService<T, D> {
@@ -305,6 +326,7 @@ impl<T: ArkTransport, D: OrderDedupe> ArkService<T, D> {
             group: GROUP.to_string(),
             consumer: CONSUMER.to_string(),
             fresh_authorization: false, // explicit library/legacy fixture constructor
+            rejected: crate::role_metrics::CounterMap::default(),
         }
     }
 
@@ -339,6 +361,11 @@ impl<T: ArkTransport, D: OrderDedupe> ArkService<T, D> {
         self.tip.clone()
     }
 
+    /// The terminal-rejection counters (`spc_ark_orders_rejected_total`).
+    pub fn rejected_counters(&self) -> crate::role_metrics::CounterMap {
+        self.rejected.clone()
+    }
+
     pub async fn run(&mut self) -> Result<(), ArkError> {
         self.streams
             .ensure_group(&self.orders_stream, &self.group)
@@ -346,13 +373,37 @@ impl<T: ArkTransport, D: OrderDedupe> ArkService<T, D> {
         let mut last_pending = Instant::now()
             .checked_sub(PENDING_RETRY_INTERVAL)
             .unwrap_or_else(Instant::now);
+        // Role metrics (SPEC §9): publish immediately so a scrape right
+        // after startup sees the float, then on the interval.
+        let mut last_metrics = Instant::now()
+            .checked_sub(crate::role_metrics::PUBLISH_INTERVAL)
+            .unwrap_or_else(Instant::now);
         loop {
             self.pump_once().await?;
             if last_pending.elapsed() >= PENDING_RETRY_INTERVAL {
                 last_pending = Instant::now();
                 self.retry_pending().await?;
             }
+            if last_metrics.elapsed() >= crate::role_metrics::PUBLISH_INTERVAL {
+                last_metrics = Instant::now();
+                self.publish_metrics().await;
+            }
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+    }
+
+    /// Publish this role's metric snapshot (`spc:metrics:ark`). Best effort:
+    /// a failed publish only ages the previous snapshot toward its TTL.
+    async fn publish_metrics(&self) {
+        let sample = crate::role_metrics::ArkSample {
+            float_sats: self.transport.float_sats().await,
+            // The boarding loop owns matured-pool-output knowledge; until it
+            // reports, surplus is unknown (absent), never zero.
+            surplus_sats: None,
+            orders_rejected_total: self.rejected.snapshot(),
+        };
+        if let Err(e) = crate::role_metrics::publish_ark(&self.streams, &sample).await {
+            tracing::warn!(error = %e, "ark metrics publish failed");
         }
     }
 
@@ -455,6 +506,7 @@ impl<T: ArkTransport, D: OrderDedupe> ArkService<T, D> {
                 // A rejected or failed order is a terminal verdict for this
                 // entry: emit Failed so `payout` moves the sats to pending,
                 // then ack (decision record 5; SPEC §11.3).
+                self.rejected.incr(reject_reason(&e));
                 tracing::warn!(error = %e, "ark order not executed");
                 self.emit_receipt(ArkSendReceipt {
                     order_id: order.order_id,
