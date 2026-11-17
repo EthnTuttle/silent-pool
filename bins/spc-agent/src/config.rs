@@ -690,8 +690,22 @@ mailbox_mode = "epoch_derived"
             origin: "http://127.0.0.1:38001/".into(),
             order_pubkey: key,
         });
+        // The chain-identity gate now refuses a tsp address under an explicit
+        // mainnet chain before aggregate_api is reached; the mainnet origin
+        // rule is asserted on the validator directly.
         cfg.ark.as_mut().unwrap().network = Some("mainnet".into());
-        assert_eq!(cfg.validate(), Err(ConfigError::AggregateApi));
+        assert_eq!(cfg.validate(), Err(ConfigError::InvalidAddress));
+        assert_eq!(
+            cfg.ark
+                .as_ref()
+                .unwrap()
+                .aggregate_api
+                .as_ref()
+                .unwrap()
+                .validated(Network::Mainnet)
+                .unwrap_err(),
+            ConfigError::AggregateApi
+        );
         cfg.ark.as_mut().unwrap().network = Some("regtest".into());
         cfg.ark
             .as_mut()
