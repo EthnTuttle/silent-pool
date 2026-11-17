@@ -289,11 +289,21 @@ impl RunEngine {
             .process("miner", miner.as_str())
             .cloned()
             .ok_or_else(|| failure("miner process missing"))?;
+        // The recorded executable identity comes from /proc/<pid>/exe, which
+        // resolves through bind mounts (nix sandbox, containers) to a path
+        // that can differ from the configured program path. Match by path
+        // first and fall back to the supervisor's own sha256 identity, the
+        // same binding `verify_adopted` enforces.
         let profiles: Vec<_> = self
             .config
             .miners
             .values()
-            .filter(|a| a.program == process.executable_path)
+            .filter(|a| {
+                a.program == process.executable_path
+                    || (!process.executable_sha256.is_empty()
+                        && crate::supervisor::hash_file(&a.program)
+                            .is_ok_and(|h| h == process.executable_sha256))
+            })
             .collect();
         let unaudited = !profiles.is_empty()
             && profiles.iter().all(|a| {
