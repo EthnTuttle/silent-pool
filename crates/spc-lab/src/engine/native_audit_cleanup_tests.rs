@@ -62,7 +62,7 @@ fn native_audit_traffic_engine() -> Arc<RunEngine> {
     ]);
     let scenario: Scenario = serde_json::from_value(s).unwrap();
     scenario.validate().unwrap();
-    let adapter: crate::config::AdapterConfig = serde_json::from_value(serde_json::json!({"program":"/bin/true","args":[],"fixture":true,"capabilities":["fixture.scripted","spc.node.regtest.mempool_rpc.v1","spc.pool.work_unit_v2","spc.pool.network_block_work"],"effective_profile":{
+    let adapter: crate::config::AdapterConfig = serde_json::from_value(serde_json::json!({"program":"/bin/sh","args":[],"fixture":true,"capabilities":["fixture.scripted","spc.node.regtest.mempool_rpc.v1","spc.pool.work_unit_v2","spc.pool.network_block_work"],"effective_profile":{
         "implementation":"fixture-node","network":"regtest","consensus_profile_id":"fixture.regtest.retarget","profile_fingerprint":null,"pow_limit_bits":"207fffff","retarget_floor_bits":"1e7fffff","initial_target_bits":"1e7fffff","regtest_pow_bits_overlay":"1e7fffff","target_spacing_secs":10,"target_timespan_secs":240,"retarget_interval_blocks":24,"no_pow_retargeting":false,"allow_min_difficulty_blocks":false,"minimum_difficulty_time_gap_secs":null,"subsidy_initial_sats":"5000000000","subsidy_halving_interval_blocks":150,"coinbase_maturity_blocks":100,"witness_commitment_supported":true,"tdp_session_cap":8},"rpc_auth":null,"env":{}})).unwrap();
     let mut config = LabConfig::default();
     config.nodes.insert("fixture-node".into(), adapter.clone());
@@ -354,11 +354,11 @@ fn native_record(
         pid: u32::MAX,
         pgid: u32::MAX,
         start_time_ticks: 1,
-        executable_path: PathBuf::from("/bin/true"),
-        executable_sha256: crate::supervisor::hash_file(Path::new("/bin/true")).unwrap(),
+        executable_path: PathBuf::from("/bin/sh"),
+        executable_sha256: crate::supervisor::hash_file(Path::new("/bin/sh")).unwrap(),
         run_token: "native-audit-reap-test".into(),
         args: vec![
-            "/bin/true".into(),
+            "/bin/sh".into(),
             "--config".into(),
             config_path.to_string_lossy().into_owned(),
         ],

@@ -39,7 +39,7 @@ fn traffic_engine_with_nodes(node_count: usize) -> Arc<RunEngine> {
     }
     s["phases"] = serde_json::json!([{"id":"bootstrap","commands":[{"kind":{"type":"bootstrap_fund","driver_id":"txd-0","node_id":s["nodes"][0]["id"]}}]}]);
     let scenario: Scenario = serde_json::from_value(s).unwrap();
-    let adapter: crate::config::AdapterConfig = serde_json::from_value(serde_json::json!({"program":"/bin/true","args":[],"fixture":true,"capabilities":["fixture.scripted","spc.node.regtest.mempool_rpc.v1","spc.pool.work_unit_v2","spc.pool.network_block_work"],"effective_profile":{
+    let adapter: crate::config::AdapterConfig = serde_json::from_value(serde_json::json!({"program":"/bin/sh","args":[],"fixture":true,"capabilities":["fixture.scripted","spc.node.regtest.mempool_rpc.v1","spc.pool.work_unit_v2","spc.pool.network_block_work"],"effective_profile":{
         "implementation":"fixture-node","network":"regtest","consensus_profile_id":"fixture.regtest.retarget","profile_fingerprint":null,"pow_limit_bits":"207fffff","retarget_floor_bits":"1e7fffff","initial_target_bits":"1e7fffff","regtest_pow_bits_overlay":"1e7fffff","target_spacing_secs":10,"target_timespan_secs":240,"retarget_interval_blocks":24,"no_pow_retargeting":false,"allow_min_difficulty_blocks":false,"minimum_difficulty_time_gap_secs":null,"subsidy_initial_sats":"5000000000","subsidy_halving_interval_blocks":150,"coinbase_maturity_blocks":100,"witness_commitment_supported":true,"tdp_session_cap":8},"rpc_auth":null,"env":{}})).unwrap();
     let mut config = LabConfig::default();
     config.nodes.insert("fixture-node".into(), adapter.clone());
@@ -121,7 +121,7 @@ fn peered_profile() -> crate::traffic::launch_profile::LaunchProfile {
     .map(|argument| argument.to_string())
     .collect();
     crate::traffic::launch_profile::LaunchProfile::capture(
-        crate::supervisor::hash_file(Path::new("/bin/true")).unwrap(),
+        crate::supervisor::hash_file(Path::new("/bin/sh")).unwrap(),
         argv,
         BTreeMap::new(),
     )
@@ -137,7 +137,7 @@ fn node_record(profile: &crate::traffic::launch_profile::LaunchProfile) -> Proce
         pid: u32::MAX,
         pgid: u32::MAX,
         start_time_ticks: 1,
-        executable_path: PathBuf::from("/bin/true"),
+        executable_path: PathBuf::from("/bin/sh"),
         executable_sha256: profile.binary_sha256.clone(),
         run_token: "reap-cleanup-test".into(),
         args: profile.argv.clone(),

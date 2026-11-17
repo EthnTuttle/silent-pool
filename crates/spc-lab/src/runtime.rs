@@ -4428,7 +4428,7 @@ for line in sys.stdin:
         ]);
         let scenario: Scenario = serde_json::from_value(scenario).unwrap();
         let adapter: AdapterConfig = serde_json::from_value(serde_json::json!({
-            "program": "/bin/true", "args": [], "fixture": true,
+            "program": "/bin/sh", "args": [], "fixture": true,
             "capabilities": ["fixture.scripted", "spc.node.regtest.mempool_rpc.v1",
                 "spc.pool.work_unit_v2", "spc.pool.network_block_work"],
             "effective_profile": {

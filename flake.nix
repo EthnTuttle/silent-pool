@@ -400,6 +400,12 @@
             pname = "spc-workspace-tests";
             version = "0.1.0";
             doCheck = true;
+            # Same sandbox provisioning as test-ark below: lab/cpu-miner test
+            # fixtures spawn python3 and use the /tmp/opencode scratch root
+            # (workstation convention); provision both inside this build's
+            # private sandbox instead of changing reviewed test sources.
+            nativeBuildInputs = common.nativeBuildInputs ++ [ pkgs.python3 ];
+            preConfigure = "mkdir -p /tmp/opencode";
             checkPhase = ''
               runHook preCheck
               cargo test --workspace --offline
