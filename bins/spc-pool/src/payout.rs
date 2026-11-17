@@ -1210,6 +1210,11 @@ pub struct PayoutService {
     registration_ack_ttl_secs: u64,
     registration_ark_id: Option<[u8; 4]>,
     aggregate_server: Option<(String, bitcoin::Network)>,
+    /// `[ark] retry_blocks`, for `spc_ark_overdue_total` (SPEC §9).
+    ark_retry_blocks: u32,
+    /// Orphan settlements by reason
+    /// (`spc_orphaned_settlement_total{reason}`, SPEC §9).
+    orphaned: crate::role_metrics::CounterMap,
 }
 
 /// How one group entry ends up after handling.
@@ -1333,7 +1338,16 @@ impl PayoutService {
             registration_ack_ttl_secs: 3_600,
             registration_ark_id: None,
             aggregate_server: None,
+            ark_retry_blocks: 6,
+            orphaned: crate::role_metrics::CounterMap::default(),
         }
+    }
+
+    /// `[ark] retry_blocks`, the overdue boundary for `spc_ark_overdue_total`
+    /// (OPERATIONS §7: scheduled past `due_height + ark_retry_blocks` pages).
+    pub fn with_ark_retry_blocks(mut self, retry_blocks: u32) -> Self {
+        self.ark_retry_blocks = retry_blocks;
+        self
     }
 
     /// Supply the configured accounting parameters (SPEC §4.1). Settlement
@@ -1405,6 +1419,43 @@ impl PayoutService {
         self
     }
 
+    /// Publish this role's metric snapshot (`spc:metrics:payout`, SPEC §9).
+    /// Best effort: a failed source leaves its field unknown (absent), and a
+    /// failed publish only ages the previous snapshot toward its TTL.
+    async fn publish_metrics(&self) {
+        let committed_rev = match self.store.front_rev().await {
+            Ok(rev) => Some(rev),
+            Err(e) => {
+                tracing::warn!(error = %e, "metrics: front_rev failed");
+                None
+            }
+        };
+        // Overdue = still scheduled past `due_height + ark_retry_blocks`
+        // (OPERATIONS §7: page). Unknown without a chain tip.
+        let ark_overdue_total = match self.chain.tip_height().await {
+            Ok(tip) => match self.store.scheduled_ark_emissions().await {
+                Ok(rows) => Some(
+                    rows.iter()
+                        .filter(|row| tip > row.due_height.saturating_add(self.ark_retry_blocks))
+                        .count() as u64,
+                ),
+                Err(e) => {
+                    tracing::warn!(error = %e, "metrics: scheduled_ark_emissions failed");
+                    None
+                }
+            },
+            Err(_) => None,
+        };
+        let sample = crate::role_metrics::PayoutSample {
+            committed_rev,
+            ark_overdue_total,
+            orphaned_settlement_total: self.orphaned.snapshot(),
+        };
+        if let Err(e) = crate::role_metrics::publish_payout(&self.streams, &sample).await {
+            tracing::warn!(error = %e, "payout metrics publish failed");
+        }
+    }
+
     pub async fn run(&self) -> Result<(), PayoutError> {
         self.store.migrate().await?;
         let _observation_task = AbortTask(
@@ -1444,6 +1495,10 @@ impl PayoutService {
         let mut last_republish = Instant::now()
             .checked_sub(REPUBLISH_INTERVAL)
             .unwrap_or_else(Instant::now);
+        // Role metrics (SPEC §9): publish immediately, then on the interval.
+        let mut last_metrics = Instant::now()
+            .checked_sub(crate::role_metrics::PUBLISH_INTERVAL)
+            .unwrap_or_else(Instant::now);
         loop {
             if let Err(e) = self.reconcile_economics().await {
                 let _ = self
@@ -1473,6 +1528,10 @@ impl PayoutService {
                 if let Err(e) = self.republish_unpublished_ledger_events().await {
                     tracing::error!(error = %e, "ledger republish failed");
                 }
+            }
+            if last_metrics.elapsed() >= crate::role_metrics::PUBLISH_INTERVAL {
+                last_metrics = Instant::now();
+                self.publish_metrics().await;
             }
             let mut did = false;
             for (stream, kind) in [("spc:slices", Kind::Slice), ("spc:blocks", Kind::Block)] {
@@ -1695,6 +1754,7 @@ impl PayoutService {
                 if e.economic.is_some() {
                     self.store.orphan(&e.block_hash).await?;
                 }
+                self.orphaned.incr("competing_branch");
                 tracing::warn!(
                     block = %display_hash(&e.block_hash),
                     height = e.height,
@@ -1891,6 +1951,7 @@ impl PayoutService {
             }
             for hash in self.store.economic_displaced(fork).await? {
                 self.store.orphan(&hash).await?;
+                self.orphaned.incr("economic_displaced");
             }
             let hash = self
                 .store

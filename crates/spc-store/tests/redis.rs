@@ -276,3 +276,65 @@ async fn one_raw_client_still_reproduces_blocking_xadd_serialization() {
         .await
         .expect("cleanup");
 }
+
+/// `kv_set_ex` writes atomically with a TTL, `scan_keys` finds exactly the
+/// matching keys, and expiry removes a snapshot from the scan (the
+/// `spc:metrics:*` staleness contract).
+#[tokio::test]
+async fn kv_set_ex_and_scan_keys_round_trip() {
+    let Some(streams) = streams().await else {
+        return;
+    };
+    let ns = format!("spc:test:metrics:{}", uuid::Uuid::new_v4());
+    let a = format!("{ns}:front:0");
+    let b = format!("{ns}:front:1");
+    streams.kv_set_ex(&a, "{\"x\":1}", 60).await.unwrap();
+    streams.kv_set_ex(&b, "{\"x\":2}", 60).await.unwrap();
+    streams
+        .kv_set_ex(&format!("{ns}:ark"), "{}", 60)
+        .await
+        .unwrap();
+
+    let keys = streams.scan_keys(&format!("{ns}:front:*")).await.unwrap();
+    assert_eq!(keys, vec![a.clone(), b.clone()]);
+    assert_eq!(
+        streams.kv_get(&a).await.unwrap().as_deref(),
+        Some("{\"x\":1}")
+    );
+
+    // TTL 1 s: the key must be gone from both GET and SCAN after expiry.
+    streams.kv_set_ex(&a, "{\"x\":1}", 1).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    assert_eq!(streams.kv_get(&a).await.unwrap(), None);
+    let keys = streams.scan_keys(&format!("{ns}:front:*")).await.unwrap();
+    assert_eq!(keys, vec![b]);
+}
+
+/// `group_lag_ms`: absent stream and group-less stream are unknown (`None`),
+/// a caught-up group reports 0, and an undelivered entry reports a positive
+/// lag bounded by the entry's age.
+#[tokio::test]
+async fn group_lag_measures_delivery_lag() {
+    let Some(streams) = streams().await else {
+        return;
+    };
+    let stream = format!("spc:test:lag:{}", uuid::Uuid::new_v4());
+    // Never written: unknown.
+    assert_eq!(streams.group_lag_ms(&stream).await.unwrap(), None);
+
+    streams.add(&stream, b"one").await.unwrap();
+    // No consumer group yet: still unknown, not zero.
+    assert_eq!(streams.group_lag_ms(&stream).await.unwrap(), None);
+
+    streams.ensure_group_from(&stream, "g", "0").await.unwrap();
+    // Group exists but has not read the entry: positive lag, at most the
+    // entry's age (which is below 60 s in any healthy test run).
+    let lag = streams.group_lag_ms(&stream).await.unwrap().unwrap();
+    assert!(lag > 0, "undelivered entry must show lag");
+    assert!(lag < 60_000, "lag {lag} ms exceeds the test's own runtime");
+
+    let entries = streams.read_group(&stream, "g", "c", 10).await.unwrap();
+    assert_eq!(entries.len(), 1);
+    // Delivered (even unacked): caught up.
+    assert_eq!(streams.group_lag_ms(&stream).await.unwrap(), Some(0));
+}

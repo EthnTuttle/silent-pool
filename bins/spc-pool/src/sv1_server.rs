@@ -25,6 +25,9 @@ pub struct Sv1Server {
     current: Arc<Mutex<Option<Job>>>,
     jobs: broadcast::Sender<Job>,
     shares: mpsc::Sender<Share>,
+    /// `spc_channel_reject_total{reason}` (SPEC §9), shared with the
+    /// metrics publisher.
+    channel_rejects: crate::role_metrics::CounterMap,
 }
 
 impl Sv1Server {
@@ -59,7 +62,14 @@ impl Sv1Server {
             current: Arc::new(Mutex::new(None)),
             jobs,
             shares,
+            channel_rejects: crate::role_metrics::CounterMap::default(),
         }
+    }
+
+    /// Share the SPEC §9 identity-reject counter with the metrics publisher.
+    pub fn with_channel_rejects(mut self, counters: crate::role_metrics::CounterMap) -> Self {
+        self.channel_rejects = counters;
+        self
     }
 
     /// The share difficulty this listener announces and enforces.
@@ -120,6 +130,15 @@ impl Sv1Server {
                 line = lines.next_line() => {
                     let Some(line) = line? else { break };
                     let (notifications, response) = session.handle_line(&line);
+                    if let Some(response) = response.as_ref() {
+                        if let Ok(reply) = serde_json::from_str::<serde_json::Value>(response) {
+                            // The SV1 channel-open identity check fails on
+                            // the authorize line (SPEC §3.1).
+                            if reply["error"][1] == "invalid-user-identity" {
+                                self.channel_rejects.incr("invalid-user-identity");
+                            }
+                        }
+                    }
                     if let (Ok(request),Some(response))=(serde_json::from_str::<serde_json::Value>(&line),response.as_ref()) {
                         if request["method"]=="mining.submit" {
                             if let Ok(reply)=serde_json::from_str::<serde_json::Value>(response) {

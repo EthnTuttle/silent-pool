@@ -50,6 +50,12 @@ pub trait ArkTransport: Send + Sync + 'static {
     async fn send_proven(&self, _address: &str, _sats: u64) -> Result<Vec<Vec<u8>>, String> {
         Err("transport cannot return complete delivery proof".into())
     }
+    /// Spendable sats in the float, for `spc_ark_float_sats` (SPEC §9).
+    /// `None` when the transport cannot report a balance (the dev command
+    /// transport); the family is then absent, never zero.
+    async fn float_sats(&self) -> Option<u64> {
+        None
+    }
 }
 
 /// Blanket implementation for Box<dyn ArkTransport>
@@ -85,6 +91,9 @@ impl ArkTransport for Box<dyn ArkTransport> {
     }
     async fn send_proven(&self, address: &str, sats: u64) -> Result<Vec<Vec<u8>>, String> {
         (**self).send_proven(address, sats).await
+    }
+    async fn float_sats(&self) -> Option<u64> {
+        (**self).float_sats().await
     }
 }
 

@@ -158,6 +158,18 @@ pub struct Front {
     cfg: FrontConfig,
     source: Arc<dyn TemplateSource>,
     send: Option<SendKey>,
+    /// When the current `send` was generated, for `spc_a_send_age_seconds`.
+    send_derived_at: Option<std::time::Instant>,
+    /// `ser_x(A_send)` values this front has used, for the SPEC §2.2 repeat
+    /// alarm ("MUST alarm if ser_x(A_send) repeats across heights within its
+    /// own sequence"). Bounded; clearing on overflow keeps memory flat while
+    /// the persisted `distribution_snapshot.a_send_x` column stays the
+    /// complete retrospective record (MULTI-REGION §3).
+    a_send_seen: HashSet<[u8; 32]>,
+    /// Repeats detected in `a_send_seen` (also raised as an error log).
+    a_send_repeats: u64,
+    /// Sealed slices per reason, for `spc_slices_sealed_total{reason}`.
+    slices_sealed: BTreeMap<&'static str, u64>,
     height: u32,
     template: Option<Template>,
     job: Option<Job>,
@@ -364,6 +376,10 @@ impl Front {
             cfg,
             source,
             send: None,
+            send_derived_at: None,
+            a_send_seen: HashSet::new(),
+            a_send_repeats: 0,
+            slices_sealed: BTreeMap::new(),
             height: 0,
             template: None,
             job: None,
@@ -1173,9 +1189,12 @@ impl Front {
             bumped = true;
         }
         if chain_moved {
-            self.roll_slice()?;
+            self.roll_slice("chain_moved")?;
             if self.send.is_none() || self.height != template.height {
-                self.send = Some(SendKey::generate(template.height)?);
+                let send = SendKey::generate(template.height)?;
+                self.observe_a_send(send.x_only());
+                self.send = Some(send);
+                self.send_derived_at = Some(std::time::Instant::now());
             }
             self.height = template.height;
             self.open_slice(template.height, template.prev_hash, template.fees);
@@ -1346,7 +1365,7 @@ impl Front {
         {
             self.job_seq = self.job_seq.wrapping_add(1);
             bumped = true;
-            self.roll_slice()?;
+            self.roll_slice("distribution_change")?;
             self.open_slice(template.height, template.prev_hash, template.fees);
         }
         self.published_fingerprint = Some(distribution.fingerprint);
@@ -1631,8 +1650,12 @@ impl Front {
             self.cfg.slice_fee_delta_sats,
             self.cfg.max_slice_shares,
         ) {
-            spc_accounting::Seal::Seal(_) => {
-                self.roll_slice()?;
+            spc_accounting::Seal::Seal(reason) => {
+                self.roll_slice(match reason {
+                    spc_accounting::SealReason::FeeBand => "fee_band",
+                    spc_accounting::SealReason::MaxShares => "max_shares",
+                    spc_accounting::SealReason::NewPrevHash => "chain_moved",
+                })?;
                 self.open_slice(self.height, template.prev_hash, template.fees);
                 let slice = self.open.as_mut().ok_or(FrontError::NoSlice)?;
                 if self.share_policy.version() == WorkUnitVersion::V2 {
@@ -1796,9 +1819,75 @@ impl Front {
         &self.slices
     }
 
-    fn roll_slice(&mut self) -> Result<(), FrontError> {
+    /// SPEC §2.2 repeat alarm: a `ser_x(A_send)` seen before within this
+    /// front's own sequence is counted and raised. The set is bounded; a
+    /// cleared set only narrows live detection, the persisted
+    /// `distribution_snapshot.a_send_x` record stays complete.
+    fn observe_a_send(&mut self, x: &[u8; 32]) {
+        const MAX_TRACKED: usize = 65_536;
+        if self.a_send_seen.len() >= MAX_TRACKED {
+            self.a_send_seen.clear();
+        }
+        if !self.a_send_seen.insert(*x) {
+            self.a_send_repeats += 1;
+            tracing::error!(
+                front_id = self.cfg.front_id,
+                "ser_x(A_send) repeated across heights; unlinkability is broken (SPEC §2.2)"
+            );
+        }
+    }
+
+    /// This front's role-metrics snapshot (SPEC §9 families the front
+    /// sources). Listener-side counters (channel rejects, JD declines,
+    /// type-32 requests) live with their listeners; the publisher fills
+    /// them in.
+    pub fn metrics_sample(&self) -> crate::role_metrics::FrontSample {
+        let mut sample = crate::role_metrics::FrontSample {
+            front_id: self.cfg.front_id,
+            a_send_age_seconds: self
+                .send
+                .as_ref()
+                .and(self.send_derived_at)
+                .map(|t| t.elapsed().as_secs_f64()),
+            a_send_repeat_total: self.a_send_repeats,
+            open_slice_shares: self
+                .open
+                .as_ref()
+                .map(|s| s.shares.len() as u64)
+                .unwrap_or(0),
+            slices_sealed_total: self
+                .slices_sealed
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), *v))
+                .collect(),
+            applied_rev: self.last_rev,
+            ..Default::default()
+        };
+        if let Some(routing) = &self.routing {
+            sample.distribution_slots = Some(std::collections::BTreeMap::from([
+                ("kept".to_string(), routing.kept.len() as u64),
+                ("ark".to_string(), routing.ark_due.len() as u64),
+                ("error".to_string(), routing.pending.len() as u64),
+            ]));
+            // The same weight model `route_coinbase` reserves against:
+            // per-output 172 WU plus the CompactSize step at 253 outputs.
+            let slots = routing.kept.len() as u64;
+            let count_wu = if slots + 2 >= 253 { 8 } else { 0 };
+            let used_wu = u64::from(self.cfg.overhead_wu) + slots * 172 + count_wu;
+            let budget = u64::from(self.cfg.budget_wu);
+            sample.budget_wu = Some(budget);
+            sample.budget_utilisation = Some(used_wu as f64 / budget.max(1) as f64);
+        }
+        if let Some(distribution) = &self.distribution {
+            sample.distribution_outputs_total = Some(distribution.outputs.len() as u64);
+        }
+        sample
+    }
+
+    fn roll_slice(&mut self, reason: &'static str) -> Result<(), FrontError> {
         if let Some(mut open) = self.open.take() {
             if !open.shares.is_empty() {
+                *self.slices_sealed.entry(reason).or_insert(0) += 1;
                 open.seal();
                 let aggregate = match self.share_policy.version() {
                     WorkUnitVersion::V1 => open.agg(),
@@ -2801,6 +2890,49 @@ pool_payout_descriptor = "DESCRIPTOR"
         assert_eq!(newest >> 56, 3);
         assert!(newest > first);
         assert!(events.iter().all(|e| e.slice_id > first));
+    }
+
+    /// SPEC §9 front-sourced families: sealing counts its reason, the
+    /// sample carries a_send age / open-slice shares / distribution shape,
+    /// and a repeated `ser_x(A_send)` is detected (SPEC §2.2).
+    #[tokio::test]
+    async fn metrics_sample_reports_seal_reasons_distribution_and_a_send() {
+        let source = Arc::new(MutableSource::new(template_at(800_000, 0x1c00_ffff, 0)));
+        let cfg = cfg_with(cfg(), |c| c.max_slice_shares = 1);
+        let mut front = Front::new(cfg, source.clone(), type32());
+        front.refresh().await.unwrap();
+
+        let sample = front.metrics_sample();
+        assert_eq!(sample.front_id, 0);
+        assert!(sample.a_send_age_seconds.is_some(), "a_send exists");
+        assert_eq!(sample.a_send_repeat_total, 0);
+        assert_eq!(sample.open_slice_shares, 0);
+        let slots = sample.distribution_slots.expect("routing exists");
+        assert_eq!(slots.get("kept"), Some(&0));
+        assert_eq!(slots.get("ark"), Some(&0));
+        assert_eq!(slots.get("error"), Some(&0));
+        // Empty window: the distribution is the pool output alone.
+        assert_eq!(sample.distribution_outputs_total, Some(1));
+        assert_eq!(sample.budget_wu, Some(100_000));
+        assert_eq!(sample.budget_utilisation, Some(0.0));
+
+        front.on_share(share(&front, 1)).unwrap();
+        assert_eq!(front.metrics_sample().open_slice_shares, 1);
+        front.on_share(share(&front, 2)).unwrap(); // seals the first slice
+        let sample = front.metrics_sample();
+        assert_eq!(sample.slices_sealed_total.get("max_shares"), Some(&1));
+
+        // A height move seals the open slice under the chain_moved reason.
+        source.set(template_at(800_001, 0x1c00_ffff, 0));
+        front.refresh().await.unwrap();
+        let sample = front.metrics_sample();
+        assert_eq!(sample.slices_sealed_total.get("chain_moved"), Some(&1));
+
+        // The §2.2 repeat alarm: a fresh x is silent, a repeat counts.
+        front.observe_a_send(&[0x42; 32]);
+        assert_eq!(front.metrics_sample().a_send_repeat_total, 0);
+        front.observe_a_send(&[0x42; 32]);
+        assert_eq!(front.metrics_sample().a_send_repeat_total, 1);
     }
 
     /// SPEC §5.3 / WIRE-FORMATS §3.5: a restarted front rebuilds its window
