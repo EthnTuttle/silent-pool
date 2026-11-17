@@ -381,3 +381,18 @@ superseded finalgreen freeze. Reconcile migration slot 0006 without changing
 existing migration checksums; merge main/front/payout/SPEC hunks preserving
 T4/AP-3/T0. Real DB/Redis and merged RPC/Ark-feature checks are required.
 The currently running hub gate must close before any queued source transfer.
+
+## Focus packets (2026-11-17)
+
+Orchestrator/merge session: this session. Machine-local build policy (disk
+budget, lock files) is no longer repo contract; see AGENTS.md. Dispatched
+after fast-forwarding `dev/testnet5` (testnet5 chain identity + BIP54, now on
+master at `3c2df0d`):
+
+| branch | base SHA | ready SHA | owned paths | merge notes | gate |
+|---|---|---|---|---|---|
+| `wp-sv2-tp-port` | `3c2df0d` | pending | sv2-tp template client, SubmitSolution seam, `testing/regtest-rbitcoin-tp-e2e.sh`, ipc source disposition, own decision/changelog fragments | port of stale `sv2-tp` branch onto the union+BIP54 tree; config/main hunks reported as merge notes | fmt/clippy/test -> merge session |
+| `wp-metrics-families` | `3c2df0d` | pending | metrics exporter families (a_send age, ark float, stream lag, JD rejections), role plumbing, changelog fragment | OPERATIONS section 7 "Planned" -> "Exported today" hunk via merge note | fmt/clippy/test -> merge session |
+| `wp-cheat-slice` | `3c2df0d` | pending | `cheat-slice-difficulty` dev feature + seeded statistical test, changelog fragment | feature compiled out of release builds | fmt/clippy/test both feature states -> merge session |
+| `wp-grafana-lab` | `3c2df0d` | pending | `nix/lab` Grafana/Prometheus wrapper, provisioned dashboards, LAB-RUNTIME section, changelog fragment | panels only on exported families; planned-family panels staged separately | nix eval/build evidence -> merge session |
+| `wp-ladder-audit` | `3c2df0d` | pending | ladder completeness audit vs decision `d62bf23`, gap fixes/tests, audit review doc, changelog fragment | stale `ladder` branch is read-only input; archive it if superseded | fmt/clippy/test -> merge session |

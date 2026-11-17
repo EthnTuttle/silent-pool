@@ -1,6 +1,11 @@
 # AGENTS.md — entry point for implementation agents
 
-This repo is a **specification set plus validated prototypes**. There is no `spc-pool` or `spc-agent` code yet; your job is to build it from the docs below. Read this file first, then follow the reading order.
+This repo is a **specification set plus a working implementation**: the
+`spc-pool`, `spc-agent`, `spc-scan`, `spc-cpu-miner` and `spc-lab` binaries and
+their crates are built and tested from the docs below. The spec remains
+authoritative; code follows it, not the other way around. Read this file first,
+then follow the reading order. `docs/STATUS.md` is the live build board;
+`docs/MERGE-QUEUE.md` is the parallel-packet protocol.
 
 ## Reading order
 
@@ -60,31 +65,12 @@ Every upstream commit is pinned by SHA in `UPSTREAM_DEPS.md` (with a verificatio
 - **Fail closed.** Address/descriptor parsing, order verification, and distribution validation reject on any ambiguity. There is no donation fallback.
 - Do not git-commit on behalf of a human unless explicitly asked in the current task.
 
-## Build disk budget
+Machine-local concerns (disk headroom, build locks, cache reclamation,
+session coordination files) are per-machine operational policy, not repo
+contract, and are deliberately not specified here.
 
-- Before a Rust/Nix build or test invocation, check available space on the
-  actual target/store filesystem. Do not start below 50 GiB available, or if
-  estimated peak growth would leave less than 20 GiB. Report the blocked step;
-  continue lightweight source/review work rather than retrying into ENOSPC.
-- Run only one heavy build across cooperating agents. Coordinate with the
-  parent and hold `/tmp/opencode/silent-pool-heavy-build.lock` with nonblocking
-  `flock` for the build's lifetime; check space after acquiring the lock.
-- Respect `/tmp/opencode/silent-pool-build-priority.json` when present: only
-  its named session may acquire the next build slot. Other sessions finish
-  any already-held invocation, then yield; the parent clears the reservation.
-- Reuse the existing target directory for a topic and its reviews. Do not
-  create another target per revision or repeat passing broad checks without a
-  new change or unresolved verification requirement.
-- Source snapshots must exclude `.git`, all `target` directories, runtime
-  datadirs and generated caches. Record snapshot size before Nix ingestion;
-  never feed a multi-gigabyte build tree to a raw `path:` source.
-- Reclaim completed build caches only with explicit cleanup authorization,
-  after checking ownership, active users and executable/evidence references.
-  Preserve referenced binaries by hash and keep sources, frozen manifests,
-  receipts and user feedback. Age or filesystem owner alone is not proof that
-  another session's artifacts are disposable. No unapproved shared-cache or
-  Nix-store garbage collection.
+## Current status
 
-## Current status (2026-10-15)
-
-All findings from `docs/reviews/2026-10-14-implementation-readiness-review.md` are resolved. Phases 0-3 and single-region Phase 4/7 are ready to implement; multi-region work (Phase 3 multi-front, Phase 8) should start from `MULTI-REGION.md` with all §10 deltas now applied to the spec.
+See `docs/STATUS.md` — the live build board with the done/remaining packet
+lists and the latest merge-gate results. Do not trust dated status prose in
+other documents over it.

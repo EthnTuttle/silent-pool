@@ -35,9 +35,9 @@ accounts. No identity-bearing data is added to the Ark role's input streams
 ## 2. Fresh-machine source and Nix setup
 
 Use x86_64 Linux, Nix with flakes enabled, Git and Python 3, and an ordinary
-non-root user (PostgreSQL does not run as root). Before building, follow
-`AGENTS.md`'s disk budget: at least 50 GiB available and projected peak growth
-leaving at least 20 GiB; one heavy build at a time. Reuse realized Nix outputs.
+non-root user (PostgreSQL does not run as root). Disk headroom and build
+concurrency are per-machine concerns: leave comfortable margin for Nix store
+and Cargo target growth. Reuse realized Nix outputs.
 
 These Bash variables select immutable application source and a new HOME-local
 workspace. Commands may be run from any checkout; the flake URL pins the source.
