@@ -52,6 +52,10 @@ pub struct MetricsConfig {
 pub struct StoreBackend {
     order_pubkey: Option<bitcoin::secp256k1::XOnlyPublicKey>,
     store: Store,
+    /// Redis, for the role-sourced metric snapshots and per-stream lag
+    /// (SPEC §9). `None` leaves those families absent and counts one scrape
+    /// error per scrape.
+    streams: Option<spc_store::redis::Streams>,
     pool: Value,
     capacity: Value,
     metrics_cfg: MetricsConfig,
@@ -74,6 +78,7 @@ impl StoreBackend {
         Self {
             order_pubkey: None,
             store,
+            streams: None,
             pool,
             capacity,
             metrics_cfg,
@@ -81,6 +86,12 @@ impl StoreBackend {
     }
     pub fn with_order_pubkey(mut self, key: Option<bitcoin::secp256k1::XOnlyPublicKey>) -> Self {
         self.order_pubkey = key;
+        self
+    }
+    /// Attach Redis so `/metrics` can serve the role-sourced families
+    /// (SPEC §9) and per-stream lag.
+    pub fn with_streams(mut self, streams: Option<spc_store::redis::Streams>) -> Self {
+        self.streams = streams;
         self
     }
 }
@@ -243,6 +254,17 @@ impl ApiBackend for StoreBackend {
             }
         }
         snap.scrape_errors = failed;
+        match &self.streams {
+            Some(streams) => {
+                let gathered = crate::role_metrics::gather(streams).await;
+                crate::role_metrics::merge_into(&mut snap, &gathered);
+            }
+            None => {
+                // The role-sourced families (SPEC §9) have no source in this
+                // process: absent, and visibly a failed source.
+                snap.scrape_errors += 1;
+            }
+        }
         render(&snap)
     }
 }

@@ -21,6 +21,7 @@ pub mod operator;
 pub mod payout;
 mod payout_observation;
 pub mod registration;
+pub mod role_metrics;
 pub mod sv1;
 pub mod sv1_server;
 pub mod sv2_server;
