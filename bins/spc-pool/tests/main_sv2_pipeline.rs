@@ -251,6 +251,24 @@ fn append_log<R: Read + Send + 'static>(mut reader: R, log: Arc<Mutex<String>>) 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn main_sv2_real_front_outcome_distinguishes_non_block_and_block() {
+    // The front role refuses to start without the Redis chain-identity
+    // binding (spc:chain-identity). Seed it like a payout role would on a
+    // fresh DB; skip when no local Redis is reachable at the binary's
+    // default URL (mirrors the store suite's DB-less skip convention).
+    if tokio::net::TcpStream::connect("127.0.0.1:6379")
+        .await
+        .is_err()
+    {
+        eprintln!("skipping: no Redis at 127.0.0.1:6379 for the front chain-identity binding");
+        return;
+    }
+    spc_store::chain::bind_redis_namespace(
+        "redis://localhost:6379",
+        spc_crypto::ChainNetwork::Regtest,
+        true,
+    )
+    .await
+    .expect("bind regtest chain identity on local Redis");
     let addr = free_addr();
     let config = format!(
         r#"

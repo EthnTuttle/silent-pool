@@ -404,10 +404,14 @@
             # fixtures spawn python3 and use the /tmp/opencode scratch root
             # (workstation convention); provision both inside this build's
             # private sandbox instead of changing reviewed test sources.
-            nativeBuildInputs = common.nativeBuildInputs ++ [ pkgs.python3 ];
+            nativeBuildInputs = common.nativeBuildInputs ++ [ pkgs.python3 pkgs.redis ];
             preConfigure = "mkdir -p /tmp/opencode";
             checkPhase = ''
               runHook preCheck
+              # Disposable loopback Redis for the front chain-identity gate
+              # (main_sv2_pipeline seeds the binding itself, or skips when no
+              # server is reachable).
+              redis-server --port 6379 --bind 127.0.0.1 --save "" --daemonize yes
               cargo test --workspace --offline
               runHook postCheck
             '';
@@ -492,7 +496,7 @@
               # The two native_audit fixture-CPU tests spawn `python3` (the
               # reviewed test module's owned fixture interpreter), which is
               # not on the buildRustPackage sandbox PATH by default.
-              nativeBuildInputs = common.nativeBuildInputs ++ [ pkgs.python3 ];
+              nativeBuildInputs = common.nativeBuildInputs ++ [ pkgs.python3 pkgs.redis ];
               inherit (joint) preBuild preCheck;
               preConfigure = "mkdir -p /tmp/opencode";
               installPhase = ''
@@ -503,6 +507,9 @@
               '';
               checkPhase = ''
                 runHook preCheck
+                # Disposable loopback Redis for the front chain-identity gate
+                # (same provision as the workspace-tests check).
+                redis-server --port 6379 --bind 127.0.0.1 --save "" --daemonize yes
                 # --release aligns this check with the production-artifact
                 # profile and committed gate plan. Historical debug timing
                 # failures are retained; their mechanism is unproven.
