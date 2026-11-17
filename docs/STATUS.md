@@ -48,10 +48,13 @@ after fast-forwarding `dev/testnet5`.
   build policy (disk budget, lock files) left the repo contract; older
   harnesses pass explicit `--network regtest` to `spc-scan find`.
 
-Known issues carried out of the wave:
-- `ark::tests::held_order_stays_unacked_until_due` fails under
-  `SPC_TEST_REDIS_URL` (fair-cursor retry needs a wrap pass the test does not
-  perform); pre-existing at `3c2df0d`, needs its own diagnosis packet.
+Known issues carried out of the wave: none remaining.
+`ark::tests::held_order_stays_unacked_until_due` was diagnosed 2026-11-17:
+the test predated the durable fair PEL cursor (decision
+2026-11-10-pre-request-ark-readiness) and skipped the wrap pass the cursor
+requires on exhaustion; the Held-stays-unacked property was never violated.
+The test now covers the full held -> wrap -> sent -> no-double-send
+lifecycle and still skips without `SPC_TEST_REDIS_URL`.
 
 CI resurrection (post-wave): `nix flake check` had been failing at eval since
 the ap5 intake exported a non-derivation (`ap5Packages`) under `packages`, so
@@ -278,8 +281,10 @@ Both harnesses bind bitcoind on 18443, so they must be run sequentially.
 4. Multi-region (Phase 3 multi-front, Phase 8) per MULTI-REGION.md — includes
    the deferred `spc_outbox_*`, `spc_tip_divergence_seconds` and
    `spc_ark_surplus_sats` metric families.
-5. `held_order_stays_unacked_until_due` diagnosis packet (see Focus wave
-   known issues).
+5. Bark/testnet5 upstream watch: no bark branch exists; the gate is
+   rust-bitcoin PR #7160 (BIP95 Network variant), then a release, then bark's
+   `bitcoin` major bump. Tracking section + re-check procedure in
+   UPSTREAM_DEPS.md ("bark testnet5 tracking (2026-11-17)").
 
 Done since the previous board: the 2026-11-17 focus wave (testnet5 + BIP54,
 ladder audit, SV2 TP stages 1+2, role-sourced metric families, cheat-slice
