@@ -100,7 +100,11 @@
         # The pilot package in `packages` is its only consumer.
         craneLib = (crane.mkLib pkgs).overrideToolchain rust;
       in {
-        packages = pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+        # ap5Packages is an attrset (not a derivation): it must not be a
+        # flake `packages` output or `nix flake check` fails. The rec-set
+        # members that consume it (ap5-tools, spc-lab-ap5-qualified, ...)
+        # remain exported; removeAttrs drops only the aggregate.
+        packages = removeAttrs (pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           rbitcoin-node-testnet5-dev = import ./nix/dev/testnet5-node.nix {
             inherit pkgs;
             nodeSource = testnet5-node-src;
@@ -381,7 +385,7 @@
             buildInputs = [ pkgs.openssl pkgs.sqlite ];
             PROTOC = "${pkgs.protobuf}/bin/protoc";
           };
-        };
+        }) [ "ap5Packages" ];
 
         checks = {
           fmt = mkCargoCheck "spc-fmt" "cargo fmt --all -- --check";
