@@ -52,9 +52,18 @@ Known issues carried out of the wave:
 - `ark::tests::held_order_stays_unacked_until_due` fails under
   `SPC_TEST_REDIS_URL` (fair-cursor retry needs a wrap pass the test does not
   perform); pre-existing at `3c2df0d`, needs its own diagnosis packet.
-- `main_sv2_pipeline` requires a local Redis holding the regtest
-  `spc:chain-identity` binding since the chain-identity gate; verify the
-  `nix flake check` sandbox is not exposed.
+
+CI resurrection (post-wave): `nix flake check` had been failing at eval since
+the ap5 intake exported a non-derivation (`ap5Packages`) under `packages`, so
+the lab-era tests had never run in the sandbox. Resurrecting it surfaced and
+fixed: workstation-convention paths in tests (`/tmp/opencode`,
+`/usr/bin/python3`, `/bin/true`), the front chain-identity Redis dependency in
+`main_sv2_pipeline` (now seed-or-skip, with a disposable redis-server in the
+check derivations), and two real runtime bugs - the lab miner-profile lookup
+breaking under bind mounts (now falls back to the supervisor's sha256
+executable identity) and a supervisor fork/exec race that could record the
+supervisor's own binary as a child's identity. `nix flake check` is green
+again and is the merge gate it was always supposed to be.
 
 ## Session roster (merge wave 2, 2026-11-02)
 
