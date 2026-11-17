@@ -690,7 +690,9 @@ mailbox_mode = "epoch_derived"
             origin: "http://127.0.0.1:38001/".into(),
             order_pubkey: key,
         });
-        cfg.ark.as_mut().unwrap().network = Some("mainnet".into());
+        // Off-regtest (signet keeps the tsp sample address parseable under
+        // the c55b737 chain gate) an http origin is rejected.
+        cfg.ark.as_mut().unwrap().network = Some("signet".into());
         assert_eq!(cfg.validate(), Err(ConfigError::AggregateApi));
         cfg.ark.as_mut().unwrap().network = Some("regtest".into());
         cfg.ark

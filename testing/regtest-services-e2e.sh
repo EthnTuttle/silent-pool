@@ -132,6 +132,32 @@ curl -sf "http://127.0.0.1:$API_PORT/api/pool/blocks?limit=5" | jq .
 BLOCKS=$(curl -sf "http://127.0.0.1:$API_PORT/api/pool/blocks?limit=5" | jq '.blocks | length')
 [ "$BLOCKS" -ge 1 ] || { echo "FAIL: payout did not settle a block"; tail -80 "$POOL_LOG"; exit 1; }
 
+# The found block carries the banded contract, not one exact-owed output.
+# This fixture has one miner and a 1% pool fee: 4.95 BTC = 990 x 5M-sat rungs.
+FOUND_JSON="$TMP/found-block.json"
+$CLI getblock "$($CLI getblockhash "$AFTER")" 2 > "$FOUND_JSON"
+python3 - "$FOUND_JSON" "$POOL_SCRIPT" <<'PY'
+import json
+import sys
+from decimal import Decimal
+
+with open(sys.argv[1]) as f:
+    block = json.load(f, parse_float=Decimal)
+outputs = block["tx"][0]["vout"]
+# Value-bearing miner outputs only: the pool output and any zero-value
+# commitment/carrier outputs are not ladder pieces.
+miner = [
+    o for o in outputs
+    if o["scriptPubKey"]["hex"] != sys.argv[2] and o["value"] > 0
+]
+amounts = [int(o["value"] * Decimal(100_000_000)) for o in miner]
+rungs = {500_000, 1_000_000, 3_000_000, 5_000_000}
+assert len(amounts) == 990, f"expected 990 rung outputs, got {len(amounts)}"
+assert all(v in rungs for v in amounts), "non-rung miner output"
+assert sum(amounts) == 4_950_000_000, f"wrong banded paid sum {sum(amounts)}"
+print(f"banded settlement: outputs={len(amounts)} paid_sats={sum(amounts)}")
+PY
+
 echo "==> scan"
 "$ROOT/target/debug/spc-scan" find --address "$MINER_ADDR" --scan-key "$MINER_KEY" \
   --from 1 --to "$AFTER" --rpc "http://127.0.0.1:$RPC_PORT" --rpc-user "$RPC_USER" --rpc-pass "$RPC_PASS" \
