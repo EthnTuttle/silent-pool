@@ -9,7 +9,7 @@ use bitcoin::BlockHash;
 use bitcoincore_rpc::{Auth, Client, RpcApi};
 use serde::Deserialize;
 
-use crate::template::{CoinbaseFields, Template, TemplateError, TemplateSource};
+use crate::template::{BlockSubmitter, CoinbaseFields, Template, TemplateError, TemplateSource};
 
 // The pinned RPC crate has closed rule enums predating consensuscleanup.
 // Decode the actual result, without deleting unknown rules to satisfy that
@@ -140,6 +140,19 @@ impl TemplateSource for RpcTemplateSource {
             .submit_block(&block)
             .map_err(|e| TemplateError::Rejected(e.to_string()))?;
         Ok(())
+    }
+}
+
+/// The RPC submission path is unchanged: `submitblock` with the assembled
+/// block. Kept behind the submitter seam so `main.rs` treats every template
+/// source uniformly.
+#[async_trait]
+impl BlockSubmitter for RpcTemplateSource {
+    async fn submit_assembled(
+        &self,
+        block: &crate::block::AssembledBlock,
+    ) -> Result<(), TemplateError> {
+        TemplateSource::submit_block(self, &block.block).await
     }
 }
 

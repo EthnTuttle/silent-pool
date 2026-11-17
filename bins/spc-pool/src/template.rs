@@ -60,6 +60,29 @@ impl CoinbaseFields {
         })
     }
 
+    /// Coinbase consensus facts as a Template Provider declares them in
+    /// `NewTemplate` (`coinbase_tx_input_sequence`, `coinbase_tx_locktime`).
+    /// TDP has no GBT `rules` list, so the shape of the declared fields is
+    /// the negotiation: a final sequence is the legacy coinbase; any
+    /// non-final sequence is read as BIP54 consensuscleanup and MUST carry
+    /// the exact height-1 locktime. Anything else fails closed - a template
+    /// whose consensus fields cannot be named must never be mined.
+    pub fn from_template_provider(
+        height: u32,
+        locktime: u32,
+        sequence: u32,
+    ) -> Result<Self, TemplateError> {
+        if sequence == u32::MAX {
+            return Ok(Self::legacy(locktime));
+        }
+        validate_bip54_fields(height, locktime, sequence)?;
+        Ok(Self {
+            locktime,
+            sequence,
+            consensus_cleanup: true,
+        })
+    }
+
     pub fn consensus_cleanup(self) -> bool {
         self.consensus_cleanup
     }
@@ -259,6 +282,23 @@ pub trait TemplateSource: Send + Sync + 'static {
     async fn submit_block(&self, block: &[u8]) -> Result<(), TemplateError>;
 }
 
+/// Submission transport for an assembled block (SPEC §7.1): the RPC node's
+/// `submitblock`, or the Template Provider's `SubmitSolution` over the same
+/// TDP session that served the template. Distinct from [`TemplateSource`]
+/// because the TP submitter needs the assembled header fields and the
+/// template's transaction-set identity, not just the block bytes.
+///
+/// Implementations MUST return an error for every rejection they can detect
+/// (a TDP `stale-template-id`, an RPC failure): a found block is never
+/// silently dropped.
+#[async_trait]
+pub trait BlockSubmitter: Send + Sync + 'static {
+    async fn submit_assembled(
+        &self,
+        block: &crate::block::AssembledBlock,
+    ) -> Result<(), TemplateError>;
+}
+
 /// A deterministic source for tests and the regtest harness.
 pub struct MockTemplateSource {
     template: Template,
@@ -290,6 +330,16 @@ impl TemplateSource for MockTemplateSource {
             .map_err(|_| TemplateError::Unavailable("lock poisoned".into()))?
             .push(block.to_vec());
         Ok(())
+    }
+}
+
+#[async_trait]
+impl BlockSubmitter for MockTemplateSource {
+    async fn submit_assembled(
+        &self,
+        block: &crate::block::AssembledBlock,
+    ) -> Result<(), TemplateError> {
+        TemplateSource::submit_block(self, &block.block).await
     }
 }
 
@@ -418,6 +468,28 @@ mod tests {
         let raw = raw_tx(false);
         let tx: Transaction = bitcoin::consensus::deserialize(&raw).unwrap();
         assert_eq!(txid_of(&raw), Some(tx.compute_txid().to_byte_array()));
+    }
+
+    #[test]
+    fn template_provider_fields_negotiate_bip54_and_fail_closed() {
+        // Final sequence: legacy, locktime passes through.
+        let legacy = CoinbaseFields::from_template_provider(151, 0, u32::MAX).unwrap();
+        assert_eq!(legacy, CoinbaseFields::legacy(0));
+        assert!(!legacy.consensus_cleanup());
+        // Non-final sequence with the exact height-1 locktime: BIP54.
+        let bip54 = CoinbaseFields::from_template_provider(151, 150, 0xffff_fffe).unwrap();
+        assert!(bip54.consensus_cleanup());
+        assert_eq!((bip54.locktime, bip54.sequence), (150, 0xffff_fffe));
+        bip54.validate(151).unwrap();
+        // Any other non-final sequence than what rbitcoin emits is still
+        // consensus-valid BIP54; the locktime is the binding fact.
+        assert!(CoinbaseFields::from_template_provider(151, 150, 0).is_ok());
+        // Wrong locktime, height 0, or timestamp-range locktime: refused.
+        assert!(CoinbaseFields::from_template_provider(151, 149, 0xffff_fffe).is_err());
+        assert!(CoinbaseFields::from_template_provider(0, 0, 0xffff_fffe).is_err());
+        assert!(
+            CoinbaseFields::from_template_provider(500_000_002, 500_000_001, 0xffff_fffe).is_err()
+        );
     }
 
     fn template() -> Template {

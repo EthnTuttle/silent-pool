@@ -27,6 +27,7 @@ pub mod sv2_server;
 pub mod template;
 #[cfg(feature = "rpc")]
 pub mod template_rpc;
+pub mod template_tp;
 pub mod type32;
 pub mod witness;
 
