@@ -10,6 +10,11 @@ rust-version.workspace = true
 [features]
 postgres-integration = ["spc-store/postgres-integration"]
 default = []
+# SPEC §8.3 adversarial fixture: the served type-32 slice difficulty is
+# deliberately misstated so the sampling verifier's detection bound can be
+# proven (tests/cheat_slice_statistical.rs). Dev/test only - never a default,
+# and src/type32.rs refuses to compile it without debug assertions.
+cheat-slice-difficulty = []
 ark = ["spc-crypto/ark", "dep:bark-wallet", "dep:server_rpc", "dep:bdk_bitcoind_rpc", "rpc"]
 rpc = ["dep:bitcoincore-rpc"]
 

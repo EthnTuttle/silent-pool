@@ -6,6 +6,40 @@ use std::collections::BTreeMap;
 use spc_accounting::Slice;
 use spc_share_ext::{merkle_path, merkle_root, ShareLeaf, ShareProof, SliceSummary};
 
+// Fail closed: the cheat fixture is a dev/test artifact (SPEC §8.3) and must
+// never exist in a release binary. Dev and test profiles carry
+// debug_assertions; a release profile does not, so the combination refuses to
+// compile rather than trusting operator discipline.
+#[cfg(all(feature = "cheat-slice-difficulty", not(debug_assertions)))]
+compile_error!(
+    "cheat-slice-difficulty is a SPEC §8.3 test fixture and must not be compiled into a release build"
+);
+
+#[cfg(not(feature = "cheat-slice-difficulty"))]
+fn served_difficulty(_slice_id: u64, difficulty: u128) -> u128 {
+    difficulty
+}
+
+/// SPEC §8.3 cheating pool: under-report the served difficulty of every
+/// even-numbered slice to 1% of the true credit sum. Any sampled share from a
+/// misstated slice then violates `Σ d ≤ slice.difficulty`, so detection is
+/// governed purely by which slices the `4 × 8` sampler hits - caught over
+/// windows, not within one window (docs/share-accounting-ext-deltas.md).
+#[cfg(feature = "cheat-slice-difficulty")]
+fn served_difficulty(slice_id: u64, difficulty: u128) -> u128 {
+    static WARN: std::sync::Once = std::sync::Once::new();
+    WARN.call_once(|| {
+        tracing::error!(
+            "cheat-slice-difficulty fixture active: served slice difficulty is deliberately misstated (dev/test only, SPEC §8.3)"
+        );
+    });
+    if slice_id.is_multiple_of(2) {
+        difficulty / 100
+    } else {
+        difficulty
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct Type32Store {
     slices: Vec<SliceSummary>,
@@ -44,7 +78,7 @@ impl Type32Store {
             height: slice.height,
             prev_hash: slice.prev_hash,
             job_id: slice.ref_job_id,
-            difficulty: slice.difficulty,
+            difficulty: served_difficulty(slice.slice_id, slice.difficulty),
             fees: slice.ref_fees,
             root,
             n_shares: slice.shares.len() as u32,
