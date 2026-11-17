@@ -103,7 +103,10 @@ fn bounded_writer() -> (
 }
 async fn pending_write(rx: &mut watch::Receiver<Option<PendingWrite>>, kind: u8) {
     let state = timeout(
-        Duration::from_secs(2),
+        // Pure deadlock guard: generous because sandboxed CI runs the whole
+        // workspace test set in parallel and the partial write can take
+        // well over 2s to be observed there.
+        Duration::from_secs(30),
         rx.wait_for(|p| p.as_ref().is_some_and(|p| p.kind == kind)),
     )
     .await
