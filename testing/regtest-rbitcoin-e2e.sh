@@ -161,7 +161,7 @@ fi
 echo "==> scan (assert the miner's silent-payment output is on-chain)"
 "$ROOT/target/debug/spc-scan" find \
   --address "$MINER_ADDR" --scan-key "$MINER_KEY" \
-  --from 1 --to "$AFTER" \
+  --from 1 --to "$AFTER" --network regtest \
   --rpc "http://127.0.0.1:$RPC_PORT" --rpc-user "$RPC_USER" --rpc-pass "$RPC_PASS" \
   >"$TMP/scan.log" 2>&1 || { echo "FAIL: spc-scan" >&2; cat "$TMP/scan.log" >&2; exit 1; }
 cat "$TMP/scan.log"

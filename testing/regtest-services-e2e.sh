@@ -160,7 +160,7 @@ PY
 
 echo "==> scan"
 "$ROOT/target/debug/spc-scan" find --address "$MINER_ADDR" --scan-key "$MINER_KEY" \
-  --from 1 --to "$AFTER" --rpc "http://127.0.0.1:$RPC_PORT" --rpc-user "$RPC_USER" --rpc-pass "$RPC_PASS" \
+  --from 1 --to "$AFTER" --network regtest --rpc "http://127.0.0.1:$RPC_PORT" --rpc-user "$RPC_USER" --rpc-pass "$RPC_PASS" \
   | tee "$TMP/scan.log"
 
 echo "OK: full-stack regtest e2e passed"
