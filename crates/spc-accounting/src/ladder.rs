@@ -96,6 +96,19 @@ mod tests {
         assert_eq!(decompose(4_950_000_000, 1024).unwrap().outputs.len(), 990);
     }
 
+    #[test]
+    fn era_one_value_bound_sits_under_policy_and_representation_caps() {
+        // SPEC §4.1/§4.8: every output is >= 500k sats, so the era-1 owed pool
+        // (309 375 000 sats, §4.5) bounds outputs at 619, under the 1024-slot
+        // policy default and the 2048-output fee-headroom representation cap.
+        let era_one_t_owed: u64 = 309_375_000;
+        let bound = era_one_t_owed.div_ceil(LADDER_BASE_SATS);
+        assert_eq!(bound, 619);
+        assert!(decomposition_len(era_one_t_owed) <= bound);
+        let policy_default: u64 = 1024;
+        assert!(bound <= policy_default && policy_default <= MAX_LADDER_OUTPUTS as u64);
+    }
+
     proptest! {
         #[test]
         fn decomposition_properties(owed in 0u64..=100_000_000u64) {
