@@ -187,7 +187,7 @@ impl Fixture {
         let dir = tempfile::Builder::new()
             .prefix("native-gate-")
             .permissions(std::fs::Permissions::from_mode(0o700))
-            .tempdir_in("/tmp/opencode")
+            .tempdir_in(std::env::temp_dir())
             .unwrap();
         let socket = dir.path().join("native-audit.sock");
         let wallet = UnixListener::bind(&socket).unwrap();

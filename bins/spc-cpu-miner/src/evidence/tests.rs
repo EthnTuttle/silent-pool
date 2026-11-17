@@ -48,7 +48,7 @@ fn private_capture_refuses_symlinks_traversal_and_existing_names() {
     let dir = tempfile::Builder::new()
         .prefix("capture-path-")
         .permissions(std::fs::Permissions::from_mode(0o700))
-        .tempdir_in("/tmp/opencode")
+        .tempdir_in(std::env::temp_dir())
         .unwrap();
     let store = CaptureStore::test_store(dir.path(), 8);
     let info = store.info();
@@ -98,7 +98,7 @@ fn process_rotation_exhaustion_preserves_existing_session_evidence() {
     let dir = tempfile::Builder::new()
         .prefix("capture-rotation-")
         .permissions(std::fs::Permissions::from_mode(0o700))
-        .tempdir_in("/tmp/opencode")
+        .tempdir_in(std::env::temp_dir())
         .unwrap();
     let store = CaptureStore::test_store(dir.path(), 8);
     let path = store

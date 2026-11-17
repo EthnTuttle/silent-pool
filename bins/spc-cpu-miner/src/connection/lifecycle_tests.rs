@@ -235,7 +235,7 @@ impl Fixture {
         let dir = tempfile::Builder::new()
             .prefix("native-backpressure-")
             .permissions(std::fs::Permissions::from_mode(0o700))
-            .tempdir_in("/tmp/opencode")
+            .tempdir_in(std::env::temp_dir())
             .unwrap();
         let socket = dir.path().join("native-audit.sock");
         let listener = UnixListener::bind(&socket).unwrap();
@@ -704,7 +704,7 @@ fn capture_fixture(records: u64) -> (tempfile::TempDir, Arc<crate::evidence::Cap
     let dir = tempfile::Builder::new()
         .prefix("native-evidence-test-")
         .permissions(std::fs::Permissions::from_mode(0o700))
-        .tempdir_in("/tmp/opencode")
+        .tempdir_in(std::env::temp_dir())
         .unwrap();
     let store = crate::evidence::CaptureStore::test_store(dir.path(), records);
     (dir, store)
@@ -811,7 +811,7 @@ async fn durable_public_bytes_exist_before_activation_and_exact_replay_is_immuta
         use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
         let output = std::path::PathBuf::from(output);
         assert!(
-            output.starts_with("/tmp/opencode")
+            output.starts_with(std::env::temp_dir())
                 && output
                     .components()
                     .all(|c| !matches!(c, std::path::Component::ParentDir))

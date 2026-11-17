@@ -18,7 +18,7 @@ fn wallet() -> (tempfile::TempDir, WalletKeys, String) {
     let root = tempfile::Builder::new()
         .prefix("wallet-source-audit-")
         .permissions(std::fs::Permissions::from_mode(0o700))
-        .tempdir_in("/tmp/opencode")
+        .tempdir_in(std::env::temp_dir())
         .unwrap();
     let online = root.path().join("online");
     let public = crate::wallet::provision::provision(&online, &root.path().join("cold")).unwrap();

@@ -2310,7 +2310,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     fn dir() -> std::path::PathBuf {
-        let path = Path::new("/tmp/opencode").join(format!(
+        let path = std::env::temp_dir().join(format!(
             "pool-wallet-control-test-{}",
             hex::encode(rand::random::<[u8; 8]>())
         ));
