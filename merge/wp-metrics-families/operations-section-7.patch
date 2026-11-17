@@ -1,0 +1,77 @@
+diff --git a/docs/OPERATIONS.md b/docs/OPERATIONS.md
+index 23beabe..8eafbc7 100644
+--- a/docs/OPERATIONS.md
++++ b/docs/OPERATIONS.md
+@@ -374,7 +374,14 @@ are marked.
+ ### Exported today
+ 
+ Every family in this table is emitted by `bins/spc-pool/src/metrics.rs` in
+-this build.
++this build. The store- and config-sourced families are gathered by the `api`
++role directly; the role-sourced families arrive as identity-free snapshots
++each role publishes to Redis (`spc:metrics:front:<front_id>`,
++`spc:metrics:payout`, `spc:metrics:ark`; 15 s interval, 60 s TTL), so a
++stopped role's families expire into absence rather than freezing. The one
++labelled front family is `spc_a_send_repeat_total{front_id}` (MULTI-REGION
++§10); other front families aggregate across fronts (counters and sizes sum,
++ages and utilisation take the worst front).
+ 
+ | Metric | Type | Alarm |
+ |---|---|---|
+@@ -389,33 +396,34 @@ this build.
+ | `spc_config_budget_ceiling_wu` | gauge | pinned at ceiling |
+ | `spc_process_uptime_seconds` | gauge | restart detection |
+ | `spc_metrics_scrape_errors_total` | counter | any growth - a source query failed |
++| `spc_a_send_age_seconds` | gauge | > 1 h - a stuck height |
++| `spc_a_send_repeat_total{front_id}` | counter | > 0 - `A_send` reuse breaks unlinkability |
++| `spc_open_slice_shares` | gauge | trend |
++| `spc_slices_sealed_total{reason}` | counter | unexpected `reason` mix |
++| `spc_distribution_slots{class}` | gauge | classes `kept`/`ark`/`error` (SPEC §9); sustained all-`error` |
++| `spc_distribution_outputs_total` | gauge | approaching `max_payout_slots` |
++| `spc_budget_wu`, `spc_budget_utilisation` | gauge | pinned at ceiling |
++| `spc_ark_overdue_total` | gauge | **page** - scheduled past `due_height + ark_retry_blocks` |
++| `spc_ark_float_sats` | gauge | below `float_target_sats` - refill needed at next matured pool output (bark transport only; the dev command transport cannot report a balance and the family is absent) |
++| `spc_ark_orders_rejected_total{reason}` | counter | any `bad-signature` - **page** |
++| `spc_channel_reject_total{reason}` | counter | identity-parse rejects trending up |
++| `spc_jd_declaration_reject_total{code}` | counter | any single code trending |
++| `spc_ext32_requests_total{msg}` | counter | trend |
++| `spc_stream_lag_seconds{stream}` | gauge | rising per stream (absent until a stream has a consumer group) |
++| `spc_registration_lag_revs` | gauge | rising |
++| `spc_orphaned_settlement_total{reason}` | counter | any `missing_block_event` - reconstruct from the on-chain coinbase (SPEC §7.4) |
+ 
+ ### Planned (not exported in this build)
+ 
+-These are the SPEC §9 contract names sourced by roles that are not yet
+-instrumented in this build. They are **not** emitted by `/metrics`; do not
++These are the SPEC §9 contract names whose sourcing role lacks the underlying
++mechanism in this build. They are **not** emitted by `/metrics`; do not
+ assume them in a dashboard. Wire the alarm rules as each lands.
+ 
+-| Metric | Alarm |
+-|---|---|
+-| `spc_a_send_age_seconds` | > 1 h - a stuck height |
+-| `spc_a_send_repeat_total{front_id}` | > 0 - `A_send` reuse breaks unlinkability |
+-| `spc_open_slice_shares` | trend |
+-| `spc_slices_sealed_total{reason}` | unexpected `reason` mix |
+-| `spc_distribution_slots{kept,trimmed,dust}` | sustained all-`trimmed` |
+-| `spc_budget_wu`, `spc_budget_utilisation` | pinned at ceiling |
+-| `spc_ark_overdue_total` | **page** - scheduled past `due_height + ark_retry_blocks` |
+-| `spc_ark_float_sats` | below `float_target_sats` - refill needed at next matured pool output |
+-| `spc_ark_surplus_sats` | operator tooling |
+-| `spc_ark_orders_rejected_total{reason}` | any `bad-signature` - **page** |
+-| `spc_channel_reject_total{reason}` | identity-parse rejects trending up |
+-| `spc_jd_declaration_reject_total{code}` | any single code trending |
+-| `spc_ext32_requests_total{msg}` | trend |
+-| `spc_outbox_depth`, `spc_outbox_age_seconds` | rising - a full outbox fails closed |
+-| `spc_stream_lag_seconds{stream}` | rising per stream |
+-| `spc_tip_divergence_seconds` | > `tip_divergence_secs` (default 30) |
+-| `spc_registration_lag_revs` | rising |
+-| `spc_orphaned_settlement_total{reason}` | any `missing_block_event` - reconstruct from the on-chain coinbase (SPEC §7.4) |
++| Metric | Alarm | Blocked on |
++|---|---|---|
++| `spc_ark_surplus_sats` | operator tooling | the boarding loop reporting matured-not-boarded revenue |
++| `spc_outbox_depth`, `spc_outbox_age_seconds` | rising - a full outbox fails closed | the multi-region front outbox (MULTI-REGION §10) |
++| `spc_tip_divergence_seconds` | > `tip_divergence_secs` (default 30) | `payout` emitting `TipHeartbeat` (MULTI-REGION §10) |
+ 
+ `GET /healthz` is the liveness probe.
+ ## 8. What is deliberately not complete
