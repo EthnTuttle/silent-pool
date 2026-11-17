@@ -119,6 +119,11 @@
             probe = import ./nix/lab/ark-probe.nix { inherit pkgs; };
             inherit (arkPackages) captaind;
           };
+          # Opt-in loopback Grafana + Prometheus pair for a running lab. Never
+          # launched by spc-lab or the wrappers above; an operator starts it
+          # alongside a run (docs/LAB-RUNTIME.md). Pure tooling from the same
+          # locked nixpkgs; no lab package or scenario changes.
+          spc-lab-observability = import ./nix/lab/observability.nix { inherit pkgs; };
           # One compilation for the local infrastructure launch closure, rather
           # than four independent copies of the same dependency build tree.
           spc-lab-ark-tools = pkgs.rustPlatform.buildRustPackage (common // {
