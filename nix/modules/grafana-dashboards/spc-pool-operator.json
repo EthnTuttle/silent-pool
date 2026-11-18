@@ -1,0 +1,382 @@
+{
+  "uid": "spc-pool-operator",
+  "title": "SPc pool - operator",
+  "description": "Every family the pool exporter emits in this build (docs/OPERATIONS.md section 7, 'Exported today'; normative alarm/page levels in docs/SPEC.md section 9). Scrape job must be 'spc-pool'. A missing series means unknown, never empty: role-sourced families expire from Redis 60s after their role stops, and spc_ark_float_sats / spc_ark_surplus_sats are absent until their source reports (bark transport / boarding loop).",
+  "tags": ["spc-pool", "deploy"],
+  "timezone": "browser",
+  "editable": false,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Pool exporter up (page when down)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "up{job=\"spc-pool\"}", "legendFormat": "{{instance}}", "instant": true }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Process uptime (restart detection)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "spc_process_uptime_seconds", "legendFormat": "{{instance}}", "instant": true }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Exporter store-query errors (alarm on any growth)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "increase(spc_metrics_scrape_errors_total[15m])", "legendFormat": "errors (15m)" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Blocks by status (1h increase; alarm on orphaned/pending growth)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 6 },
+      "targets": [
+        { "refId": "A", "expr": "increase(spc_blocks_total[1h])", "legendFormat": "{{status}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Pending liability (sats; reconcile against /api/pool/liability)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 6 },
+      "targets": [
+        { "refId": "A", "expr": "spc_pending_liability_sats", "legendFormat": "pending liability" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Ark due (sats; alarm on growth without sent payouts)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 6 },
+      "targets": [
+        { "refId": "A", "expr": "spc_ark_due_sats", "legendFormat": "ark due" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Ark float (sats; alarm below float_target_sats; absent on the dev command transport)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 14 },
+      "targets": [
+        { "refId": "A", "expr": "spc_ark_float_sats", "legendFormat": "float" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Ark payouts by status (1h increase; alarm on failed_to_pending)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 14 },
+      "targets": [
+        { "refId": "A", "expr": "increase(spc_ark_payouts_total[1h])", "legendFormat": "{{status}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "Ark overdue (PAGE > 0: past due_height + ark_retry_blocks)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 14 },
+      "targets": [
+        { "refId": "A", "expr": "spc_ark_overdue_total", "legendFormat": "overdue", "instant": true }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Ark orders rejected by reason (1h increase; any bad-signature = PAGE)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 22 },
+      "targets": [
+        { "refId": "A", "expr": "increase(spc_ark_orders_rejected_total[1h])", "legendFormat": "{{reason}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Forfeited sats (6h increase; review beyond expected unregistered miners)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 22 },
+      "targets": [
+        { "refId": "A", "expr": "increase(spc_forfeited_sats_total[6h])", "legendFormat": "forfeited (6h)" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "A_send age (alarm > 1h: a stuck height; worst front)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 30 },
+      "targets": [
+        { "refId": "A", "expr": "spc_a_send_age_seconds", "legendFormat": "a_send age" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 3600 } ] }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "A_send repeats per front (alarm > 0: reuse breaks unlinkability)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 30 },
+      "targets": [
+        { "refId": "A", "expr": "spc_a_send_repeat_total", "legendFormat": "front {{front_id}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Open slice shares (trend)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 38 },
+      "targets": [
+        { "refId": "A", "expr": "spc_open_slice_shares", "legendFormat": "open shares" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Slices sealed by reason (1h increase; watch unexpected reason mix)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 38 },
+      "targets": [
+        { "refId": "A", "expr": "increase(spc_slices_sealed_total[1h])", "legendFormat": "{{reason}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Distribution slots by class (alarm on sustained all-error)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 38 },
+      "targets": [
+        { "refId": "A", "expr": "spc_distribution_slots", "legendFormat": "{{class}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "Distribution outputs (alarm approaching max_payout_slots)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 46 },
+      "targets": [
+        { "refId": "A", "expr": "spc_distribution_outputs_total", "legendFormat": "outputs" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "Weight budget (WU)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 46 },
+      "targets": [
+        { "refId": "A", "expr": "spc_budget_wu", "legendFormat": "budget" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "Budget utilisation (alarm pinned at ceiling)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 46 },
+      "targets": [
+        { "refId": "A", "expr": "spc_budget_utilisation", "legendFormat": "utilisation" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Stream lag by stream (alarm rising; absent until a stream has a consumer group)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 54 },
+      "targets": [
+        { "refId": "A", "expr": "spc_stream_lag_seconds", "legendFormat": "{{stream}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Registration lag (revisions; alarm rising)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 54 },
+      "targets": [
+        { "refId": "A", "expr": "spc_registration_lag_revs", "legendFormat": "lag (revs)" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Channel rejects by reason (1h increase; identity-parse rejects trending up)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 62 },
+      "targets": [
+        { "refId": "A", "expr": "increase(spc_channel_reject_total[1h])", "legendFormat": "{{reason}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "JD declaration rejects by code (1h increase; any single code trending)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 62 },
+      "targets": [
+        { "refId": "A", "expr": "increase(spc_jd_declaration_reject_total[1h])", "legendFormat": "{{code}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "ext32 requests by msg (1h increase; trend)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 62 },
+      "targets": [
+        { "refId": "A", "expr": "increase(spc_ext32_requests_total[1h])", "legendFormat": "{{msg}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 25,
+      "type": "timeseries",
+      "title": "Orphaned settlements by reason (alarm on any missing_block_event; SPEC section 7.4)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 70 },
+      "targets": [
+        { "refId": "A", "expr": "increase(spc_orphaned_settlement_total[1h])", "legendFormat": "{{reason}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 26,
+      "type": "timeseries",
+      "title": "Ark surplus (sats; operator tooling; absent until the boarding loop reports)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 70 },
+      "targets": [
+        { "refId": "A", "expr": "spc_ark_surplus_sats", "legendFormat": "surplus" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 27,
+      "type": "stat",
+      "title": "Config: window N",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 78 },
+      "targets": [
+        { "refId": "A", "expr": "spc_config_window_n", "legendFormat": "N", "instant": true }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 28,
+      "type": "stat",
+      "title": "Config: coinbase threshold (sats)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 78 },
+      "targets": [
+        { "refId": "A", "expr": "spc_config_coinbase_threshold_sats", "legendFormat": "C", "instant": true }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 29,
+      "type": "stat",
+      "title": "Config: budget floor (WU)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 78 },
+      "targets": [
+        { "refId": "A", "expr": "spc_config_budget_floor_wu", "legendFormat": "floor", "instant": true }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 30,
+      "type": "stat",
+      "title": "Config: budget ceiling (WU)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 78 },
+      "targets": [
+        { "refId": "A", "expr": "spc_config_budget_ceiling_wu", "legendFormat": "ceiling", "instant": true }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    }
+  ]
+}
