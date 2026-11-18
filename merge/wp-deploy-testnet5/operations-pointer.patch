@@ -1,0 +1,19 @@
+Merge note for docs/OPERATIONS.md (merge-session-owned file; packet
+wp-deploy-testnet5 does not edit it on-branch). Apply with
+`git apply merge/wp-deploy-testnet5/operations-pointer.patch` or splice the
+hunk by hand - it inserts one paragraph in §2 after the spc-stack module
+hardening paragraph ("configs: `config/spc-pool.example.toml`, ...").
+
+--- a/docs/OPERATIONS.md
++++ b/docs/OPERATIONS.md
+@@ (§2, after "Validated starting configs: `config/spc-pool.example.toml`, `config/spc-agent.example.toml`.")
+ 
++For a complete public Testnet5 host (pinned testnet5 node + self-hosted
++captaind fork + one `spc-pool` process with roles `front,payout,api,ark` +
++nginx-published read-only API, metrics loopback-only), use
++`nixosConfigurations.spc-testnet5-host` and the modules under
++`nix/modules/{rbitcoin-testnet5-node,captaind-testnet5,spc-testnet5-stack}.nix`;
++the fresh-VPS runbook is [`DEPLOY-TESTNET5.md`](DEPLOY-TESTNET5.md).
++Deployment tooling is non-normative and does not replace the SPEC §9
++staging approvals.
++
