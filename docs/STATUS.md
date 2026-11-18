@@ -4,6 +4,23 @@ Live build board. `docs/IMPLEMENTATION-PLAN.md` defines the packets and gates.
 A packet is Done only when its tests exist, `nix flake check` passes, both
 reviews are recorded for risky packets, and the commit is pushed.
 
+Deployment wave (2026-11-18 board update): public testnet5 hosting is one
+command away - `nixos-rebuild switch --flake .#spc-testnet5-host` composes
+the pinned testnet5 node (P2P public, RPC loopback, health/metrics on),
+self-hosted forked captaind, one spc-pool process (front,payout,api,ark),
+Postgres/Redis, nginx read-only API and firewall; runbook
+docs/DEPLOY-TESTNET5.md (provision -> secrets via the offline keygen ->
+switch -> sync -> ArkInfo binding -> float funding -> verify). Deploy-grade
+monitoring: services.spc-monitoring (loopback Prometheus/Alertmanager/
+Grafana, merged 30-panel operator + node-health dashboards, 23
+promtool-validated alert rules citing SPEC section 9), auto-fed by the stack
+module. Explorer: the pinned node serves esplora/electrum natively on
+testnet5 (bark wallets sync against it - proven) and the rbitcoin.space
+frontend (public MIT, smolcars/rbitcoin-space) ships as the opt-in
+rbitcoin-space-testnet5 package with data-network=testnet5. Deployment
+tooling is non-normative; SPEC section 9 staging approvals (owner lab
+approval, public work/audit policy) still gate going live.
+
 ## Focus wave (2026-11-17)
 
 Dispatched and merged per the MERGE-QUEUE focus-packet table. Base was master

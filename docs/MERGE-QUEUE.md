@@ -433,6 +433,18 @@ deploy plus the esplora chain source bark wallets need.
 
 | branch | base SHA | ready SHA | owned paths | merge notes | gate |
 |---|---|---|---|---|---|
-| `wp-deploy-testnet5` | `9cb15f6` | pending | `nix/modules/spc-testnet5-stack.nix` (+ node/captaind service modules), `nixosConfigurations.spc-testnet5-host`, `docs/DEPLOY-TESTNET5.md`, changelog fragment | flake.nix hunks reported; metrics loopback port is the contract for the monitoring packet | module eval / toplevel build evidence -> merge session |
-| `wp-deploy-monitoring` | `9cb15f6` | pending | `nix/modules/spc-monitoring.nix`, deploy dashboards, SPEC-9-cited alert rules, changelog fragment | couples to the stack packet via option types only; OPERATIONS 7 + DEPLOY doc hunks as merge notes | module eval + promtool + flake check -> merge session |
-| `wp-explorer-testnet5` | `9cb15f6` | pending | esplora-on-testnet5 node packaging, rbitcoin.space frontend research/packaging, analysis or package + changelog fragment | new source pins follow same-change rules; flake.nix hunks reported | esplora endpoints proven by curl + bark-against-esplora evidence -> merge session |
+| `wp-deploy-testnet5` | `9cb15f6` | `38ff16b` | `nix/modules/spc-testnet5-stack.nix` (+ node/captaind service modules), `nixosConfigurations.spc-testnet5-host`, `docs/DEPLOY-TESTNET5.md`, changelog fragment | flake.nix hunks reported; metrics loopback port is the contract for the monitoring packet | module eval / toplevel build evidence -> merge session |
+| `wp-deploy-monitoring` | `9cb15f6` | `7a3e8da` | `nix/modules/spc-monitoring.nix`, deploy dashboards, SPEC-9-cited alert rules, changelog fragment | couples to the stack packet via option types only; OPERATIONS 7 + DEPLOY doc hunks as merge notes | module eval + promtool + flake check -> merge session |
+| `wp-explorer-testnet5` | `9cb15f6` | `18951c8` | esplora-on-testnet5 node packaging, rbitcoin.space frontend research/packaging, analysis or package + changelog fragment | new source pins follow same-change rules; flake.nix hunks reported | esplora endpoints proven by curl + bark-against-esplora evidence -> merge session |
+
+Outcomes (merge session, 2026-11-18): `wp-explorer-testnet5` merged clean
+(`0f09bc2` incl. flake hunk + splice; `rbitcoin-space-testnet5` builds;
+frontend found public MIT at smolcars/rbitcoin-space @ 77892d71 - the pinned
+node serves esplora/electrum natively and a bark-testnet5 wallet synced
+against it). `wp-deploy-testnet5` merged clean (OPERATIONS section 2 pointer
++ changelog spliced; full toplevel build and a bounded five-service wiring
+smoke were green on-branch). `wp-deploy-monitoring` merged clean (flake
+nixosModules registration, OPERATIONS section 7 subsection and the
+DEPLOY-TESTNET5 monitoring section applied from its fragment; 23
+promtool-validated rules). `spc-testnet5-host` toplevel evals on the final
+merged tree; full `nix flake check` run by the merge session before push.
