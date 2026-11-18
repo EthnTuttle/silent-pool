@@ -58,6 +58,11 @@ Every upstream commit is pinned by SHA in `UPSTREAM_DEPS.md` (with a verificatio
   Verify send/receive/refresh/offboard against the unmodified server before
   claiming end-to-end readiness. Lab Bitcoin-node RPC profiles are separate
   from Ark-server compatibility and do not authorize server modifications.
+  Network-identity-only forks are the one sanctioned exception (decision
+  2026-11-17-bark-testnet5-fork.md): a fork may add a network upstream does
+  not ship yet (testnet5), must stay byte-identical to stock behavior on
+  existing networks, and still carries no SPc-specific logic; it is tracked
+  in UPSTREAM_DEPS.md with an upstream re-convergence plan.
 - **Lab Ark is self-hosted.** Build the lab's Ark server and tooling from
   pinned source repositories using Nix. The lab owns the server, storage,
   wallets, private configuration and process lifecycle; hosted-provider

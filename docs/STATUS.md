@@ -273,18 +273,31 @@ Both harnesses bind bitcoind on 18443, so they must be run sequentially.
    client, Cap'n Proto toolchain and an IPC-enabled Core node (SPEC §7.1 pin
    requirement stands). rpc and sv2-tp cover the node backends in use.
 2. Testnet soak and third-party `spc-scan` recovery (SPEC §12 rollout gate:
-   testnet4 `tsp` soak >= 24 h). Testnet5 chain identity is merged but its
-   public-network soak additionally waits on ecosystem support (stock bark
-   cannot represent Testnet5; agent runtime fail-closed).
+   testnet4 `tsp` soak >= 24 h). The testnet5 stack is now complete on the
+   adopted forks (below) - its public soak needs funding and the
+   public-network work/audit policy approval, not more code.
 3. rbitcoin upstream: the testnet4 branch is pushed to the fork and PLAN §7
    passes; the upstream PR is not opened.
 4. Multi-region (Phase 3 multi-front, Phase 8) per MULTI-REGION.md — includes
    the deferred `spc_outbox_*`, `spc_tip_divergence_seconds` and
    `spc_ark_surplus_sats` metric families.
-5. Bark/testnet5 upstream watch: no bark branch exists; the gate is
-   rust-bitcoin PR #7160 (BIP95 Network variant), then a release, then bark's
-   `bitcoin` major bump. Tracking section + re-check procedure in
-   UPSTREAM_DEPS.md ("bark testnet5 tracking (2026-11-17)").
+5. Upstream re-convergence watch: when rust-bitcoin PR #7160 merges and a
+   release ships and bark follows, drop the adopted forks and re-pin upstream
+   (UPSTREAM_DEPS.md "Adopted forks (2026-11-17)").
+
+Fork adoption (2026-11-18 board update): the whole stack now runs on
+project-owned network-identity-only forks - bitcoin 0.32.102 + Testnet5
+(github.com/EthnTuttle/rust-bitcoin `testnet5-0.32` @ cf4d11ca, PR #7160
+port) and bark (github.com/EthnTuttle/bark `testnet5` @ 8c38e07ee, stock
+c419159 + network identity). All testnet5 fail-closed gates from decision
+2026-11-15 are lifted with a chain-exact WalletKeys adapter (Testnet4
+included); `server_is_self` extends to testnet5; mock/unchecked-chain stay
+regtest/signet. Evidence: ark regtest e2e green on the forked captaind
+(boarded 1,000,000 sats, paid 500,000, receipt verified) and a live testnet5
+smoke (genesis-only rbitcoin testnet5 node + forked captaind fully started +
+`bark create --testnet5` wallet). Opt-in nix packages `captaind-testnet5` /
+`bark-testnet5`; the stock c419159 lab packages remain untouched. Decision
+2026-11-17-bark-testnet5-fork.md.
 
 Done since the previous board: the 2026-11-17 focus wave (testnet5 + BIP54,
 ladder audit, SV2 TP stages 1+2, role-sourced metric families, cheat-slice

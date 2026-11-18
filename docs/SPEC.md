@@ -9,6 +9,7 @@ updated: 2026-11-09
 status: current
 supersedes: none
 changelog:
+  - "2026-11-17: testnet5 stack adopted onto project-owned network-identity-only forks (user-directed): bitcoin 0.32.102 -> github.com/EthnTuttle/rust-bitcoin @ cf4d11ca778fd86698ec7cc00bd081c15b12a2de (Network::Testnet5 ported from open upstream PR #7160) via [patch.crates-io], and the bark pin -> github.com/EthnTuttle/bark @ 8c38e07ee70b046529a416b170f1ae5c77cc66a0 (stock c419159 + testnet5 network identity only; all bark crates move together, ark-lib crate identity preserved). stock_bitcoin_network() gains the Testnet5 backend; the agent WalletKeys adapter selects explicit Testnet4/Testnet5 backends chain-exactly (chain-exact store labels, legacy mapping only without an explicit chain), lifting both the agent Testnet5 refusals and the pool ark-role Testnet5 rejection from decision 2026-11-15 item 8. §11.3/§11.9/§11.10: ark.server_is_self extends to testnet5 (no third-party Ark server exists there; sender-equals-server test posture, never production); template source \"mock\", accounting.allow_unchecked_chain and [ark] transport = \"command\" stay regtest/signet-only and the Testnet5 genesis/BIP54 checks stay on. §9 topology may co-locate ark on testnet5. Vanilla-interop posture preserved: the fork is stock behavior plus a network; SPc logic stays in adapters; stock-pin lab evidence (nix/lab/ark.nix at c419159) remains buildable beside the opt-in captaind-testnet5/bark-testnet5 packages. Upstream re-convergence plan in UPSTREAM_DEPS.md \"Adopted forks (2026-11-17)\". See docs/decisions/2026-11-17-bark-testnet5-fork.md."
   - "2026-11-17: role-sourced §9 metric families land in code. The front, payout and ark roles publish identity-free JSON snapshots to `spc:metrics:front:<front_id>` / `spc:metrics:payout` / `spc:metrics:ark` (plain SET with 60 s TTL; an expired snapshot makes its families absent, never zero), the api role gathers them at scrape time and computes `spc_stream_lag_seconds{stream}` from the §5.2 streams' consumer groups. Newly exported: `spc_a_send_age_seconds`, `spc_a_send_repeat_total{front_id}` (with the §2.2 in-sequence repeat detection now implemented), `spc_open_slice_shares`, `spc_slices_sealed_total{reason}`, `spc_distribution_slots{kept,ark,error}`, `spc_distribution_outputs_total`, `spc_budget_wu`, `spc_budget_utilisation`, `spc_ark_overdue_total`, `spc_ark_float_sats` (bark transport only), `spc_ark_orders_rejected_total{reason}`, `spc_channel_reject_total{reason}`, `spc_jd_declaration_reject_total{code}`, `spc_ext32_requests_total{msg}`, `spc_stream_lag_seconds{stream}`, `spc_registration_lag_revs`, `spc_orphaned_settlement_total{reason}`. Still planned (no truthful source in this build): `spc_ark_surplus_sats` (boarding loop), `spc_outbox_depth`/`spc_outbox_age_seconds` (no front outbox yet) and `spc_tip_divergence_seconds` (payout emits no TipHeartbeat yet). No wire-format or §9 name change; OPERATIONS §7 tables move accordingly (merge note)."
   - "2026-11-17: SV2 Template Provider stages 1+2 ported onto the BIP54/chain-identity master (from branch sv2-tp, commits f4015ed/c90009e/64ca0d4/1ec1dd0). `source = \"sv2-tp\"` is a live TDP client (`template_tp.rs`): Noise_NX authority authentication, `CoinbaseOutputConstraints` sized from the §4.8 ceiling, `NewTemplate`/`SetNewPrevHash` caching, `RequestTransactionData` fetching and strict mapping (BIP34 height, network subsidy schedule). BIP54 negotiation over TDP reads `coinbase_tx_input_sequence`/`coinbase_tx_locktime`: a final sequence is legacy, a non-final sequence must carry the exact height-1 locktime (`CoinbaseFields::from_template_provider`, fail closed), and every served template passes `validate_template_chain` (a Testnet5 TP without active BIP54 facts is refused). Witness transactions are allowed (the coinbase carries the BIP141 commitment, as on the rpc source); an undecodable or ambiguous transaction still poisons the whole template because per-transaction exclusion is impossible over TDP. Found blocks are submitted with `SubmitSolution` via the `BlockSubmitter` seam (acceptance = the TP's next tip push on our block hash; a competing tip or timeout is an explicit rejection, never a silent drop); `source = \"rpc\"` keeps `submitblock` behind the same seam, genesis-bracketed by `BoundTemplateSource`. With `sv2-tp`, `[template] rpc_url` is CHAIN VIEW ONLY (confirmations/orphans/block reads via the genesis-bound `BoundChainView`, never templates); `sv2_tp_address` and `sv2_tp_authority_pubkey` are required, and a payout role without a usable chain view is refused at startup. §6.3, §7.1. See docs/decisions/2026-11-05-sv2-tp-chain-view.md."
   - "2026-11-17: `[template] source = \"ipc\"` (bitcoin-core Cap'n Proto Template Distribution over IPC) is DEFERRED, not stubbed: the pinned `bitcoin_core_sv2` client and the Cap'n Proto toolchain are not vendored in this workspace, and adding them touches merge-owned dependency/vendor surfaces plus a Core v30x/v31x IPC node for any honest test. Startup now fails closed on `source = \"ipc\"` with an explicit error naming the implemented sources; the §7.1 `bitcoin_core_sv2` pin requirement stands for whichever packet implements it."
@@ -1290,13 +1291,15 @@ Grinding `a_send` to collide with a known earlier payment (must be a fixed-point
 
 ## 9. Deployment
 
-**Testnet5 staging (draft 2026-11-15).** Identity support is not deployment
-authorization. Future integration requires owner lab approval, BIP54 template/
-coinbase support, separately approved public-network work/audit policy and
-supported stock Ark. v2 stays regtest-only. Old unbound SQL/Redis state is held
-for explicit migration, never automatically adopted by the staged source.
+**Testnet5 staging (2026-11-17).** Identity support is not deployment
+authorization. The Ark/wallet backend gap is closed by the adopted
+network-identity-only forks (UPSTREAM_DEPS.md "Adopted forks (2026-11-17)";
+decision 2026-11-17-bark-testnet5-fork.md). Future deployment still requires
+owner lab approval and the separately approved public-network work/audit
+policy. v2 stays regtest-only. Old unbound SQL/Redis state is held for
+explicit migration, never automatically adopted.
 
-**Topology.** One `spc-pool` binary; dev/testnet runs `--roles front,payout,api` in one process, and MAY add `ark` to it on regtest/signet only; production splits `front` (one per region; RAM-only state — no durable state of its own) from a single `payout` (sole Postgres writer), N `api` replicas, and a single `ark` on its own host. Each `front` listens for SV2 (Noise) and native SV1 (plain TCP, §3.1) on separate ports; both listeners feed the same share and distribution path. Any listener (SV2, SV1, JDP, `api`) MAY be published as a Tor onion service, in which case it binds loopback and the address is advertised via `[reach]` (§3.8); a multi-front deployment publishes one address per front or fronts them with OnionBalance, and the onion key is backed up with that front's other secrets. Each `front` claims its `front_id` at start with a Redis `SET NX` lease (heartbeat-refreshed, holding an instance UUID) and refuses to start if the lease is held — a duplicate `front_id` would silently collide `distribution_id`s and `slice_id`s (MULTI-REGION §10). The `spc-jds` module is part of `front` — JD is always on, and `a_send` is shared in-process (§2.2). Redis and Postgres are the only durable state of the SPc side, and **no spending key lives on it**: it holds only the xpub of `pool_payout_descriptor`. The pool has exactly one hot seed, the `ark` seed (bark wallet + pool output keychain), held only by the `ark` role on its own host with its own secret store and no access to the attribution data (§11.3). Its blast radius is the float plus whatever pool revenue the operator leaves under it; moving surplus elsewhere is operator policy and out of scope.
+**Topology.** One `spc-pool` binary; dev/testnet runs `--roles front,payout,api` in one process, and MAY add `ark` to it on regtest/signet/testnet5 only (testnet5 has no third-party Ark server; decision 2026-11-17-bark-testnet5-fork.md); production splits `front` (one per region; RAM-only state — no durable state of its own) from a single `payout` (sole Postgres writer), N `api` replicas, and a single `ark` on its own host. Each `front` listens for SV2 (Noise) and native SV1 (plain TCP, §3.1) on separate ports; both listeners feed the same share and distribution path. Any listener (SV2, SV1, JDP, `api`) MAY be published as a Tor onion service, in which case it binds loopback and the address is advertised via `[reach]` (§3.8); a multi-front deployment publishes one address per front or fronts them with OnionBalance, and the onion key is backed up with that front's other secrets. Each `front` claims its `front_id` at start with a Redis `SET NX` lease (heartbeat-refreshed, holding an instance UUID) and refuses to start if the lease is held — a duplicate `front_id` would silently collide `distribution_id`s and `slice_id`s (MULTI-REGION §10). The `spc-jds` module is part of `front` — JD is always on, and `a_send` is shared in-process (§2.2). Redis and Postgres are the only durable state of the SPc side, and **no spending key lives on it**: it holds only the xpub of `pool_payout_descriptor`. The pool has exactly one hot seed, the `ark` seed (bark wallet + pool output keychain), held only by the `ark` role on its own host with its own secret store and no access to the attribution data (§11.3). Its blast radius is the float plus whatever pool revenue the operator leaves under it; moving surplus elsewhere is operator policy and out of scope.
 
 **Migrations.** `sqlx migrate` at boot under `pg_advisory_lock`; every process may run them (Blitzpool pattern). Schema changes are additive until v1.0. Migration `0005_lab_work_units.sql` adds the v2 profile columns/checks with legacy v1 defaults; v1 rows remain readable and are never converted.
 
@@ -1675,12 +1678,16 @@ with a leading version byte.
 
 ### 11.5 Miner side (`spc-agent`)
 
-**Unsupported new-chain runtime (draft 2026-11-15).** The agent recognizes an
-explicit Testnet5 selection but refuses execution until job/source and wallet
-interfaces carry real chain identity. Pinned stock Bark has no Testnet5 backend;
-encoding compatibility MUST NOT select another testnet on its behalf. Current
-WalletKeys also refuses explicit Testnet4 rather than selecting its old
-Testnet3 backend. Existing wallet schemas/labels/derivations are not relabeled.
+**Explicit new-chain runtime (2026-11-17, supersedes the 2026-11-15 draft
+refusals).** On the adopted forks (decision 2026-11-17-bark-testnet5-fork.md)
+the agent's wallet contract carries chain identity: an explicit `[ark]
+network` chain selects its exact stock backend (Testnet4 -> Testnet4,
+Testnet5 -> Testnet5) and a chain-exact store label, so a store bound to one
+test chain never reopens on another. Encoding compatibility still MUST NOT
+select a chain: without an explicit chain the historical mapping stands
+(encoding `testnet` means the legacy Testnet3 backend) and existing wallet
+schemas/labels/derivations are not relabeled. A chain whose encoding
+disagrees with the SP selector fails closed.
 
 **Ladder recovery clarification (2026-11-09).** A coinbase output does not
 close the block's Ark mailbox: a kept miner can still be owed a remainder.
@@ -1834,7 +1841,7 @@ seed_path = "/run/secrets/ark/seed"       # ark's own secret store; MUST NOT be 
 pool_output_account = "m/86'/1'/1'"       # pool output keychain under the ark seed (coin type per network); its xpub is [pool] pool_payout_descriptor
 min_remaining_blocks = 3024               # pay only from VTXOs with ≥ 21 d left
 retry_blocks = 6
-server_is_self = false                    # true only on regtest/signet
+server_is_self = false                    # true only on regtest/signet/testnet5 (§11.3; decision 2026-11-17-bark-testnet5-fork.md)
 
 # spc-agent.toml additions
 [ark]
@@ -1851,7 +1858,7 @@ scan_xprv = "/run/secrets/spc/scan.xprv"  # m/352'/0'/0'/1' branch account xprv 
 ark_xprv = "/run/secrets/spc/ark.xprv"    # m/352'/0'/0'/2' branch account xprv (0600)
 datadir = "/var/lib/spc-agent/wallet"     # state.sqlite + bark/ (dirs 0700, files 0600)
 status_listen = "127.0.0.1:34256"         # loopback-only status JSON (default; enforced at bind)
-network = "regtest"                       # explicit chain; Testnet5 is recognized but runtime unsupported
+network = "regtest"                       # explicit chain; chain-exact wallet backend (testnet4/testnet5 supported on the adopted forks)
 ark_id = "…"                              # target Ark server id (8 hex chars, registration)
 ```
 

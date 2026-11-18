@@ -5,12 +5,14 @@ deployment; this guide restates it as procedures and records what the current
 build actually does. `docs/STATUS.md` tracks completion. Everything here assumes
 the repo root (`/path/to/silent-pool`) unless stated.
 
-Draft Testnet5 integration: SPEC §2.1/§5.1/§5.3 requires exact chain identity,
+Testnet5 integration: SPEC §2.1/§5.1/§5.3 requires exact chain identity,
 known endpoint genesis and matching SQL/Redis bindings before startup. This
-staged source holds old unbound data for reviewed migration; it is not an
-upgrade procedure for the lab. Use a dedicated fresh deployment tree/database
-only after owner lab approval and separate deployment authorization. Stock
-Testnet5 Ark and agent runtime remain unsupported; v2 stays regtest-only.
+source holds old unbound data for reviewed migration; it is not an upgrade
+procedure for the lab. Use a dedicated fresh deployment tree/database only
+after owner lab approval and separate deployment authorization. The Testnet5
+Ark/agent runtime runs on the adopted network-identity-only forks
+(UPSTREAM_DEPS.md "Adopted forks (2026-11-17)"; decision
+2026-11-17-bark-testnet5-fork.md); v2 stays regtest-only.
 RPC scanner find now requires `--network <canonical-chain-name>`; address HRP
 cannot select it. Offline file/proof recovery makes no chain ancestry claim.
 
