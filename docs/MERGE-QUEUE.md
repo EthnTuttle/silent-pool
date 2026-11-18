@@ -424,3 +424,15 @@ workspace tests green) and `github.com/EthnTuttle/bark` branch `testnet5` @
 `8c38e07ee` (stock c419159 + network-identity-only testnet5 + regenerated
 lock; 705 unit + 62 integration tests green). Built and validated by the fork
 packet in `/home/ethan/code/forks`, pushed by the orchestrator.
+
+## Deployment wave (2026-11-18)
+
+User-directed: public testnet5 hosting with minimal deploy headache, reusing
+the Nix packaging; deploy-grade monitoring; an rbitcoin.space-style explorer
+deploy plus the esplora chain source bark wallets need.
+
+| branch | base SHA | ready SHA | owned paths | merge notes | gate |
+|---|---|---|---|---|---|
+| `wp-deploy-testnet5` | `9cb15f6` | pending | `nix/modules/spc-testnet5-stack.nix` (+ node/captaind service modules), `nixosConfigurations.spc-testnet5-host`, `docs/DEPLOY-TESTNET5.md`, changelog fragment | flake.nix hunks reported; metrics loopback port is the contract for the monitoring packet | module eval / toplevel build evidence -> merge session |
+| `wp-deploy-monitoring` | `9cb15f6` | pending | `nix/modules/spc-monitoring.nix`, deploy dashboards, SPEC-9-cited alert rules, changelog fragment | couples to the stack packet via option types only; OPERATIONS 7 + DEPLOY doc hunks as merge notes | module eval + promtool + flake check -> merge session |
+| `wp-explorer-testnet5` | `9cb15f6` | pending | esplora-on-testnet5 node packaging, rbitcoin.space frontend research/packaging, analysis or package + changelog fragment | new source pins follow same-change rules; flake.nix hunks reported | esplora endpoints proven by curl + bark-against-esplora evidence -> merge session |
