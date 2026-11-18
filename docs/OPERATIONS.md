@@ -153,6 +153,15 @@ and nothing else to disk. `openFirewall` does not open the JDP port; open it
 separately if remote JDCs declare against this front. Validated starting
 configs: `config/spc-pool.example.toml`, `config/spc-agent.example.toml`.
 
+For a complete public Testnet5 host (pinned testnet5 node + self-hosted
+captaind fork + one `spc-pool` process with roles `front,payout,api,ark` +
+nginx-published read-only API, metrics loopback-only), use
+`nixosConfigurations.spc-testnet5-host` and the modules under
+`nix/modules/{rbitcoin-testnet5-node,captaind-testnet5,spc-testnet5-stack}.nix`;
+the fresh-VPS runbook is [`DEPLOY-TESTNET5.md`](DEPLOY-TESTNET5.md).
+Deployment tooling is non-normative and does not replace the SPEC §9
+staging approvals.
+
 ### Tor reach (optional)
 
 Tor is a transport option, not a deployment mode (SPEC §3.8), and it covers

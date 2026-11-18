@@ -9,6 +9,7 @@ updated: 2026-11-09
 status: current
 supersedes: none
 changelog:
+  - "2026-11-18: public Testnet5 deployment tooling (non-normative; no SPEC section changes): NixOS modules nix/modules/{rbitcoin-testnet5-node,captaind-testnet5,spc-testnet5-stack}.nix, flake nixosConfigurations.spc-testnet5-host, operator assets nix/deploy/testnet5/, runbook docs/DEPLOY-TESTNET5.md. Mechanism only - SPEC §9 staging approval (owner lab approval and the public work/audit policy) is still required before going live."
   - "2026-11-18: opt-in Testnet5 explorer tooling beside the dev node; no SPEC
   section changes. The pinned dev node (`rbitcoin-org/rbitcoin @ 8af95b8`)
   already embeds the Esplora/Electrum servers in `rbitcoin-node`; serving them
