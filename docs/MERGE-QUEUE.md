@@ -409,3 +409,18 @@ merge notes consumed (`5412f21`). Old `ladder` branch archived as tag
 `archive/ladder-pre-union` and deleted. Each merge pushed to the `fork`
 remote; `origin` refuses this machine's key (EthnTuttle, no write access to
 average-gary/silent-pool).
+
+## Follow-up packets (2026-11-17, second wave)
+
+| branch | base SHA | ready SHA | owned paths | merge notes | gate |
+|---|---|---|---|---|---|
+| `wp-bark-testnet5-tracking` | `3322a0d` | `8721143` | UPSTREAM_DEPS bark-testnet5 tracking section | doc-only; no pin changes | merged `52e4098` |
+| `wp-held-order` | `52e4098` | `f510b97` | `ark::tests::held_order_stays_unacked_until_due` (test module only) | test predated the fair-cursor decision; code upheld, decision 2026-11-10 binding | merged, fmt/clippy/test green both Redis modes |
+| `wp-testnet5-stack` | `b5b55e0` | pending | fork adoption: bark/rust-bitcoin re-pins + locks, spc-crypto/agent/pool testnet5 gate lifts, `captaind-testnet5` nix package, decision + changelog fragment, UPSTREAM_DEPS fork section | owns root Cargo.toml/flake.nix/config.rs/main.rs hunks for this packet (reported); SPEC 11.3/11.9 body edits per its decision record | fmt/clippy/test + ark regtest e2e on forked captaind + nix flake check -> merge session |
+
+Fork provenance (orchestrator, 2026-11-17): `github.com/EthnTuttle/rust-bitcoin`
+branch `testnet5-0.32` @ `cf4d11ca` (bitcoin-0.32.102 + PR #7160 port, full
+workspace tests green) and `github.com/EthnTuttle/bark` branch `testnet5` @
+`8c38e07ee` (stock c419159 + network-identity-only testnet5 + regenerated
+lock; 705 unit + 62 integration tests green). Built and validated by the fork
+packet in `/home/ethan/code/forks`, pushed by the orchestrator.
