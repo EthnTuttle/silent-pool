@@ -24,8 +24,6 @@ pub enum ChainError {
     Unknown,
     #[error("Bitcoin endpoint genesis does not match configured chain")]
     WrongGenesis,
-    #[error("Testnet5 is unsupported by pinned stock Bark/rust-bitcoin")]
-    UnsupportedArkNetwork,
 }
 
 impl ChainNetwork {
@@ -99,7 +97,9 @@ impl ChainNetwork {
         }
     }
 
-    /// Actual stock-backend selector. No Testnet5 alias is representable.
+    /// Actual stock-backend selector. Testnet5 requires the adopted
+    /// rust-bitcoin/bark forks (UPSTREAM_DEPS.md "Adopted forks
+    /// (2026-11-17)"; decision 2026-11-17-bark-testnet5-fork.md).
     pub fn stock_bitcoin_network(self) -> Result<bitcoin::Network, ChainError> {
         match self {
             Self::Mainnet => Ok(bitcoin::Network::Bitcoin),
@@ -107,7 +107,7 @@ impl ChainNetwork {
             Self::Testnet4 => Ok(bitcoin::Network::Testnet4),
             Self::Signet => Ok(bitcoin::Network::Signet),
             Self::Regtest => Ok(bitcoin::Network::Regtest),
-            Self::Testnet5 => Err(ChainError::UnsupportedArkNetwork),
+            Self::Testnet5 => Ok(bitcoin::Network::Testnet5),
         }
     }
 
@@ -179,8 +179,14 @@ mod tests {
         );
         assert!(b.validate_genesis(b.genesis()).is_ok());
         assert_eq!(
-            b.stock_bitcoin_network(),
-            Err(ChainError::UnsupportedArkNetwork)
+            b.stock_bitcoin_network().unwrap(),
+            bitcoin::Network::Testnet5
+        );
+        // The adopted fork's own genesis must match the pinned BIP95
+        // constant; identity never comes from the dependency alone.
+        assert_eq!(
+            bitcoin::blockdata::constants::genesis_block(bitcoin::Network::Testnet5).block_hash(),
+            b.genesis()
         );
         assert_eq!(
             a.stock_bitcoin_network().unwrap(),

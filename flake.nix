@@ -73,7 +73,11 @@
             # store/aggregate join seams) changed the spc-cpu-miner /
             # spc-lab / spc-agent dependency sets in Cargo.lock (previous
             # pin sha256-y/pymSKJfdDGBLdzUwMbVu5+zqGIKt03IZxVZ4L61hA=).
-            hash = "sha256-Cij0Q0TwtwxODWxinPiH2kXi9DznDF4yMqMAACyDjQI=";
+            # 2026-11-17: refreshed after the testnet5 fork re-pin moved
+            # bitcoin 0.32.102 to the EthnTuttle/rust-bitcoin git fork and
+            # the bark crates to EthnTuttle/bark 8c38e07ee in Cargo.lock
+            # (previous pin sha256-Cij0Q0TwtwxODWxinPiH2kXi9DznDF4yMqMAACyDjQI=).
+            hash = "sha256-vqXo2u0pi1oEkFtJqh9ygFS5m9xh1mWu5dVUkgu+ciI=";
           };
           doCheck = false;
         };
@@ -95,6 +99,10 @@
           SPC_TEST_MODE = "1";
         };
         arkPackages = import ./nix/lab/ark.nix { inherit pkgs rust; };
+        # Opt-in testnet5 fork builds (decision 2026-11-17-bark-testnet5-fork.md).
+        # Deliberately separate from arkPackages: the stock-pin interop
+        # evidence above must remain buildable unchanged.
+        arkTestnet5Packages = import ./nix/lab/ark-testnet5.nix { inherit pkgs rust; };
         # Crane for the staged dependency-reuse pilot: same locked nixpkgs,
         # same pinned Rust 1.93 toolchain (never rbitcoin's Rust cache).
         # The pilot package in `packages` is its only consumer.
@@ -152,6 +160,10 @@
             meta.mainProgram = "spc-lab";
           });
           inherit (arkPackages) captaind bark;
+          # Opt-in forked builds for testnet5 (nix/lab/ark-testnet5.nix);
+          # never a replacement for the stock-pin captaind/bark above.
+          captaind-testnet5 = arkTestnet5Packages.captaind;
+          bark-testnet5 = arkTestnet5Packages.bark;
           # Portable AP5 harness/verifier/qualification set (packet
           # AP5-portable-integration-r1). The qualified derivation is an
           # INDEPENDENT full compilation: labTools.overrideAttrs creates a

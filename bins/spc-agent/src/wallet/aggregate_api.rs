@@ -302,6 +302,7 @@ mod tests {
             child_seed: paths[2].clone(),
             sp_address: address.clone(),
             network,
+            chain: None,
         })
         .unwrap();
         (keys, address)

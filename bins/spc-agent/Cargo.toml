@@ -54,9 +54,9 @@ tracing-subscriber.workspace = true
 # child wallet; same rev as the workspace `[patch.crates-io] ark-lib`
 # mapping and the pool's `ark` feature. Default features match the pool's
 # declaration (sqlite persistence, bitcoind-rpc chain backend).
-bark-wallet = { git = "https://gitlab.com/ark-bitcoin/bark.git", rev = "c419159fa54085572f8ca72d2ba1716556a9d3eb", optional = true }
+bark-wallet = { git = "https://github.com/EthnTuttle/bark", rev = "8c38e07ee70b046529a416b170f1ae5c77cc66a0", optional = true }
 ark-lib = { version = "0.7.1", optional = true }
-server_rpc = { git = "https://gitlab.com/ark-bitcoin/bark.git", rev = "c419159fa54085572f8ca72d2ba1716556a9d3eb", package = "bark-server-rpc", default-features = false, optional = true }
+server_rpc = { git = "https://github.com/EthnTuttle/bark", rev = "8c38e07ee70b046529a416b170f1ae5c77cc66a0", package = "bark-server-rpc", default-features = false, optional = true }
 # Persistent agent wallet state (U_i -> u_i keystore, VTXO records,
 # registration counter). Same version the pinned bark tree locks.
 rusqlite = { version = "0.31", optional = true }

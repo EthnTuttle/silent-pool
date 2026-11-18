@@ -7,8 +7,9 @@ description = "Regtest e2e: the spc-pool ark role (stock bark adapter) boards po
 
 # Standalone workspace, like spc_ark_client: the root workspace's
 # [patch.crates-io] does not cross workspace boundaries, so the same
-# bark pin (UPSTREAM_DEPS.md; decision record 2026-11-02-bark-adapter.md,
-# clause 1) is restated at the bottom.
+# bark pin (UPSTREAM_DEPS.md; decision records 2026-11-02-bark-adapter.md
+# clause 1 and 2026-11-17-bark-testnet5-fork.md) and the same bitcoin
+# fork patch are restated at the bottom.
 [workspace]
 
 [dependencies]
@@ -21,10 +22,10 @@ spc-pool = { path = "../bins/spc-pool", features = ["ark", "rpc"] }
 # Same crate as spc-pool's, unified by the patch below.
 ark-lib = "0.7.1"
 # TestContext: spawns the stock captaind, bitcoind and postgres.
-ark-testing = { git = "https://gitlab.com/ark-bitcoin/bark.git", rev = "c419159fa54085572f8ca72d2ba1716556a9d3eb", package = "ark-testing" }
+ark-testing = { git = "https://github.com/EthnTuttle/bark", rev = "8c38e07ee70b046529a416b170f1ae5c77cc66a0", package = "ark-testing" }
 async-trait = "0.1"
 # The miner wallet is an in-process stock bark::Wallet.
-bark-wallet = { git = "https://gitlab.com/ark-bitcoin/bark.git", rev = "c419159fa54085572f8ca72d2ba1716556a9d3eb", package = "bark-wallet", features = ["sqlite"] }
+bark-wallet = { git = "https://github.com/EthnTuttle/bark", rev = "8c38e07ee70b046529a416b170f1ae5c77cc66a0", package = "bark-wallet", features = ["sqlite"] }
 bitcoin = { version = "0.32", features = ["rand-std"] }
 # Mints the pool's coinbase and reads the cookie for the RPC chain.
 bitcoincore-rpc = "0.19"
@@ -33,4 +34,5 @@ rand = "0.8"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [patch.crates-io]
-ark-lib = { git = "https://gitlab.com/ark-bitcoin/bark.git", rev = "c419159fa54085572f8ca72d2ba1716556a9d3eb", package = "ark-lib" }
+ark-lib = { git = "https://github.com/EthnTuttle/bark", rev = "8c38e07ee70b046529a416b170f1ae5c77cc66a0", package = "ark-lib" }
+bitcoin = { git = "https://github.com/EthnTuttle/rust-bitcoin", rev = "cf4d11ca778fd86698ec7cc00bd081c15b12a2de" }

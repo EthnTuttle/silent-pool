@@ -535,7 +535,7 @@ impl LiveBark {
         }
         let mut server = server_rpc::ServerConnection::builder()
             .address(&self.endpoint)
-            .network(super::keys::bitcoin_network(keys.network))
+            .network(keys.backend_network())
             .connect()
             .await?;
         let info = server.ark_info().await;
@@ -551,7 +551,7 @@ impl LiveBark {
             self.revalidate_receipts(keys, store, ledger).await?;
             let destination = address
                 .parse::<bitcoin::Address<_>>()?
-                .require_network(super::keys::bitcoin_network(keys.network))?
+                .require_network(keys.backend_network())?
                 .script_pubkey();
             let fee_rate = server.offboard_feerate().await?;
             let tip = self.wallet.chain().tip().await?;
@@ -958,7 +958,7 @@ impl LiveBark {
         if let MaintenanceAction::Offboard { address } = &command.action {
             address
                 .parse::<bitcoin::Address<_>>()?
-                .require_network(super::keys::bitcoin_network(keys.network))?;
+                .require_network(keys.backend_network())?;
         }
         store.init_operations()?;
         let exists: bool = store.lock().query_row(
@@ -1052,7 +1052,7 @@ impl LiveBark {
             .generate_user_nonces(&signers)?;
             let mut server = server_rpc::ServerConnection::builder()
                 .address(&self.endpoint)
-                .network(super::keys::bitcoin_network(keys.network))
+                .network(keys.backend_network())
                 .connect()
                 .await?;
             let info = server.ark_info().await;
@@ -1111,7 +1111,7 @@ impl LiveBark {
         }
         let mut server = server_rpc::ServerConnection::builder()
             .address(&self.endpoint)
-            .network(super::keys::bitcoin_network(keys.network))
+            .network(keys.backend_network())
             .connect()
             .await?;
         let info = server.ark_info().await;
@@ -1146,7 +1146,7 @@ impl LiveBark {
             MaintenanceAction::Offboard { address } => {
                 let address = address
                     .parse::<bitcoin::Address<_>>()?
-                    .require_network(super::keys::bitcoin_network(keys.network))?;
+                    .require_network(keys.backend_network())?;
                 format!(
                     "offboard_broadcast:{}",
                     self.wallet.offboard_vtxos(ids, address).await?

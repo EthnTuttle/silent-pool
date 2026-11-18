@@ -91,6 +91,11 @@ pub enum KeyError {
     BranchesNotDistinct,
     #[error("sp_address is not valid for the configured network: {0}")]
     Address(String),
+    #[error("explicit chain '{chain}' does not match the SP encoding selector '{encoding}'")]
+    ChainEncodingMismatch {
+        chain: &'static str,
+        encoding: &'static str,
+    },
     #[error("key derivation failed: {0}")]
     Derivation(String),
 }
@@ -107,6 +112,13 @@ pub struct KeySources {
     /// The pool's `sp_address` (public `B_scan`/`B_spend`).
     pub sp_address: String,
     pub network: Network,
+    /// Explicit consensus chain (`[ark] network`), when configured.
+    /// `network` above is only the SP/BIP32 encoding selector and cannot
+    /// distinguish the test chains; an explicit chain selects the stock
+    /// backend exactly (Testnet4 -> Testnet4, Testnet5 -> Testnet5),
+    /// never a legacy alias. `None` preserves the historical mapping
+    /// (encoding `testnet` means the legacy Testnet3 backend).
+    pub chain: Option<spc_crypto::ChainNetwork>,
 }
 
 /// The loaded, validated wallet keys. Holds secrets; `Debug` is
@@ -122,6 +134,12 @@ pub struct WalletKeys {
     /// `hash_SPc/Id(ser_P(B_scan) || ser_P(B_spend))`.
     pub sp_id: [u8; 32],
     pub network: Network,
+    /// The stock backend chain the bark wallet runs on: the explicit
+    /// chain's exact `bitcoin::Network` when `[ark] network` named one,
+    /// otherwise the historical encoding mapping (Testnet -> Testnet3).
+    backend: bitcoin::Network,
+    /// The store-identity network label (chain-exact for Testnet4/5).
+    store_label: &'static str,
     /// The BIP 85 child seed (owns `M` and the normal wallet keys).
     child_seed: Zeroizing<[u8; 64]>,
     /// Stock bark `WalletSeed` fingerprint of the child seed: the
@@ -159,14 +177,58 @@ pub(crate) fn bitcoin_network(network: Network) -> bitcoin::Network {
     }
 }
 
+/// The stock backend the wallet actually runs on. An explicit chain is
+/// exact (Testnet4/Testnet5 select their own backends on the adopted
+/// forks, decision 2026-11-17-bark-testnet5-fork.md); without one the
+/// historical encoding mapping stands (Testnet means legacy Testnet3).
+fn backend_network(
+    chain: Option<spc_crypto::ChainNetwork>,
+    network: Network,
+) -> Result<bitcoin::Network, KeyError> {
+    match chain {
+        Some(chain) => {
+            if chain.sp_encoding() != network {
+                return Err(KeyError::ChainEncodingMismatch {
+                    chain: chain.name(),
+                    encoding: network_name(network),
+                });
+            }
+            chain
+                .stock_bitcoin_network()
+                .map_err(|e| KeyError::Derivation(e.to_string()))
+        }
+        None => Ok(bitcoin_network(network)),
+    }
+}
+
+/// The store's network label. Explicit Testnet4/Testnet5 are chain-exact
+/// so a store bound to one test chain never reopens on another; every
+/// other selection keeps its historical label (explicit `testnet3`
+/// stays "testnet" - that is what the legacy label always meant).
+fn store_network_label(chain: Option<spc_crypto::ChainNetwork>, network: Network) -> &'static str {
+    match chain {
+        Some(spc_crypto::ChainNetwork::Testnet4) => "testnet4",
+        Some(spc_crypto::ChainNetwork::Testnet5) => "testnet5",
+        _ => network_name(network),
+    }
+}
+
 impl WalletKeys {
     pub(crate) fn bark_seed(&self) -> bark::WalletSeed {
-        bark::WalletSeed::new_from_seed(bitcoin_network(self.network), &self.child_seed)
+        bark::WalletSeed::new_from_seed(self.backend, &self.child_seed)
+    }
+
+    /// The stock backend chain for every bark-facing consumer (wallet
+    /// open, address `require_network`, config builders). Chain-exact
+    /// when the config named one; legacy encoding mapping otherwise.
+    pub(crate) fn backend_network(&self) -> bitcoin::Network {
+        self.backend
     }
 
     /// Load and validate the provisioned material. Fails closed on any
     /// ambiguity; regenerates nothing.
     pub fn load(sources: &KeySources) -> Result<Self, KeyError> {
+        let backend = backend_network(sources.chain, sources.network)?;
         let address: SpAddress = spc_crypto::parse_sp_address(&sources.sp_address, sources.network)
             .map_err(|e| KeyError::Address(e.to_string()))?;
 
@@ -207,7 +269,7 @@ impl WalletKeys {
         let child_seed = load_child_seed(&sources.child_seed)?;
         let network = sources.network;
         let wallet_fingerprint =
-            bark_wallet_seed_fingerprint(&child_seed, network).map_err(KeyError::Derivation)?;
+            bark_wallet_seed_fingerprint(&child_seed, backend).map_err(KeyError::Derivation)?;
         // Cross-check the stock bark derivation against the in-tree one.
         let in_tree_root = spc_crypto::hd::bark_root_xpriv(&child_seed, network)
             .map_err(|e| KeyError::Derivation(e.to_string()))?;
@@ -228,6 +290,8 @@ impl WalletKeys {
             b_spend_public: address.b_spend,
             sp_id: spc_crypto::sp_id(&address.b_scan, &address.b_spend),
             network,
+            backend,
+            store_label: store_network_label(sources.chain, network),
             child_seed,
             wallet_fingerprint,
             mailbox,
@@ -240,7 +304,7 @@ impl WalletKeys {
         StoreIdentity {
             wallet_fingerprint: self.wallet_fingerprint,
             sp_id: self.sp_id,
-            network: network_name(self.network).to_string(),
+            network: self.store_label.to_string(),
         }
     }
 
@@ -389,14 +453,14 @@ fn load_child_seed(path: &Path) -> Result<Zeroizing<[u8; 64]>, KeyError> {
 }
 
 /// The stock bark `WalletSeed` fingerprint of the child seed
-/// (`WalletSeed::new_from_seed`, bark c419159). AP-3a persists this
+/// (`WalletSeed::new_from_seed`, adopted bark fork). AP-3a persists this
 /// fingerprint (and derives keys itself); opening the full bark
 /// `Wallet` needs a live chain source and lands in AP-3b.
 fn bark_wallet_seed_fingerprint(
     child_seed: &[u8; 64],
-    network: Network,
+    backend: bitcoin::Network,
 ) -> Result<Fingerprint, String> {
-    let seed = bark::WalletSeed::new_from_seed(bitcoin_network(network), child_seed);
+    let seed = bark::WalletSeed::new_from_seed(backend, child_seed);
     Ok(seed.fingerprint())
 }
 
@@ -430,6 +494,7 @@ mod tests {
             child_seed: seed_path,
             sp_address: encode_sp_address(network, &scan_pub, &spend_pub).unwrap(),
             network,
+            chain: None,
         }
     }
 
@@ -758,5 +823,50 @@ mod tests {
             assert_eq!(network_name(network), name);
         }
         assert!(parse_network_name("dogenet").is_none());
+    }
+
+    /// Explicit Testnet4/Testnet5 select their exact stock backends and
+    /// chain-exact store labels; explicit Testnet3 keeps the legacy
+    /// backend and label; no explicit chain preserves the historical
+    /// Testnet -> Testnet3 mapping. A chain whose encoding disagrees
+    /// with the selector fails closed.
+    #[test]
+    fn explicit_chain_selects_the_exact_stock_backend() {
+        use spc_crypto::ChainNetwork;
+        let dir = tempfile::tempdir().unwrap();
+        let mut sources = write_keys(dir.path(), &master(), Network::Testnet);
+
+        for (chain, backend, label) in [
+            (
+                ChainNetwork::Testnet4,
+                bitcoin::Network::Testnet4,
+                "testnet4",
+            ),
+            (
+                ChainNetwork::Testnet5,
+                bitcoin::Network::Testnet5,
+                "testnet5",
+            ),
+            (ChainNetwork::Testnet3, bitcoin::Network::Testnet, "testnet"),
+        ] {
+            sources.chain = Some(chain);
+            let keys = WalletKeys::load(&sources).unwrap();
+            assert_eq!(keys.backend_network(), backend, "{chain:?}");
+            assert_eq!(keys.store_identity().network, label, "{chain:?}");
+        }
+
+        // No explicit chain: the historical legacy mapping.
+        sources.chain = None;
+        let keys = WalletKeys::load(&sources).unwrap();
+        assert_eq!(keys.backend_network(), bitcoin::Network::Testnet);
+        assert_eq!(keys.store_identity().network, "testnet");
+
+        // Chain/encoding disagreement fails closed before any file read.
+        sources.chain = Some(ChainNetwork::Regtest);
+        let err = WalletKeys::load(&sources).unwrap_err();
+        assert!(
+            matches!(err, KeyError::ChainEncodingMismatch { .. }),
+            "{err}"
+        );
     }
 }

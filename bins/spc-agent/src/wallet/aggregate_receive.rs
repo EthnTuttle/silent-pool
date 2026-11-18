@@ -154,7 +154,7 @@ impl LiveBark {
         let mut funding_anchors = std::collections::BTreeMap::new();
         let mut server = server_rpc::ServerConnection::builder()
             .address(&self.endpoint)
-            .network(super::keys::bitcoin_network(keys.network))
+            .network(keys.backend_network())
             .connect()
             .await?;
         let info = server.ark_info().await;

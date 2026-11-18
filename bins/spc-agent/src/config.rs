@@ -481,16 +481,13 @@ impl AgentConfig {
             parse_sp_address(&self.upstream.sp_address, chain.sp_encoding())
                 .map_err(|_| ConfigError::InvalidAddress)?;
             if self.ark.as_ref().is_some_and(|a| a.enabled) {
+                // The explicit chain must have a stock wallet backend
+                // (all recognized chains do on the adopted forks; the
+                // WalletKeys adapter selects it chain-exactly, decision
+                // 2026-11-17-bark-testnet5-fork.md).
                 chain
                     .stock_bitcoin_network()
                     .map_err(|e| ConfigError::UnsupportedChain(e.to_string()))?;
-                // WalletKeys still stores the old encoding selector. Do not
-                // collapse explicit Testnet4 into its legacy Testnet3 backend.
-                if chain == spc_crypto::ChainNetwork::Testnet4 {
-                    return Err(ConfigError::UnsupportedChain(
-                        "Testnet4 needs the explicit-chain WalletKeys adapter".into(),
-                    ));
-                }
             }
         }
         let network = self.network();
@@ -585,17 +582,20 @@ impl AgentConfig {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn explicit_testnet5_is_not_a_stock_wallet_alias() {
+    fn explicit_testnet5_and_testnet4_select_their_own_chains() {
+        // Since the fork adoption (decision 2026-11-17-bark-testnet5-fork.md)
+        // explicit Testnet4/Testnet5 validate with ark enabled: the
+        // WalletKeys adapter selects their exact stock backends instead
+        // of collapsing them into the legacy Testnet3 encoding alias.
         let mut cfg = sample();
         cfg.ark.as_mut().unwrap().network = Some("testnet5".into());
         assert_eq!(
             cfg.chain_network().unwrap(),
             Some(spc_crypto::ChainNetwork::Testnet5)
         );
-        assert!(matches!(
-            cfg.validate(),
-            Err(ConfigError::UnsupportedChain(_))
-        ));
+        assert_eq!(cfg.validate(), Ok(()));
+        cfg.ark.as_mut().unwrap().network = Some("testnet4".into());
+        assert_eq!(cfg.validate(), Ok(()));
         cfg.ark.as_mut().unwrap().enabled = false;
         assert!(cfg.validate().is_ok());
         cfg.ark.as_mut().unwrap().network = Some("testnet".into());
@@ -603,6 +603,7 @@ mod tests {
             cfg.chain_network().unwrap(),
             Some(spc_crypto::ChainNetwork::Testnet3)
         );
+        // Canonical names only: whitespace is not a chain.
         cfg.ark.as_mut().unwrap().network = Some("testnet5 ".into());
         assert!(cfg.validate().is_err());
     }

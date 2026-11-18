@@ -45,13 +45,13 @@ ark-lib = "0.7.1"
 # tree; same rev as the workspace `[patch.crates-io] ark-lib` mapping.
 # Default features give sqlite persistence and bitcoind-rpc chain;
 # onchain-bdk is the BDK on-chain wallet board change goes to.
-bark-wallet = { git = "https://gitlab.com/ark-bitcoin/bark.git", rev = "c419159fa54085572f8ca72d2ba1716556a9d3eb", features = ["onchain-bdk"], optional = true }
+bark-wallet = { git = "https://github.com/EthnTuttle/bark", rev = "8c38e07ee70b046529a416b170f1ae5c77cc66a0", features = ["onchain-bdk"], optional = true }
 # The server RPC client at the same pin. The thin arkoor send drives the
 # cosign and mailbox RPCs itself (stock bark's send path is pub(crate)
 # and returns no receipt); `bark-wallet` already unifies the transport
 # and TLS features this crate needs, so defaults stay off here. The
 # package is `bark-server-rpc`, its library crate `server_rpc`.
-server_rpc = { git = "https://gitlab.com/ark-bitcoin/bark.git", rev = "c419159fa54085572f8ca72d2ba1716556a9d3eb", package = "bark-server-rpc", default-features = false, optional = true }
+server_rpc = { git = "https://github.com/EthnTuttle/bark", rev = "8c38e07ee70b046529a416b170f1ae5c77cc66a0", package = "bark-server-rpc", default-features = false, optional = true }
 async-trait = "0.1"
 bitcoincore-rpc = { version = "0.19", optional = true }
 bdk_bitcoind_rpc = { version = "0.22.1", optional = true }
