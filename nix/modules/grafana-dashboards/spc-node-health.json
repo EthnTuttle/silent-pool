@@ -1,0 +1,189 @@
+{
+  "uid": "spc-node-health",
+  "title": "SPc host and node health",
+  "description": "Host basics from node_exporter (job 'node') and the testnet5 rbitcoin node's native Prometheus families (job 'rbitcoin'; needs --health-listen plus --metrics on the node, services.spc-monitoring.rbitcoinTarget here). captaind exposes no Prometheus endpoint (OTLP push only), so it has no panels.",
+  "tags": ["spc-pool", "deploy", "node-health"],
+  "timezone": "browser",
+  "editable": false,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Scrape targets up",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "up", "legendFormat": "{{job}} {{instance}}", "instant": true }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "CPU busy (%)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * (1 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m])))",
+          "legendFormat": "busy"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 }, "overrides": [] }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Load average (1m)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "node_load1", "legendFormat": "load1" },
+        { "refId": "B", "expr": "count(node_cpu_seconds_total{mode=\"idle\"})", "legendFormat": "cores" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Memory available vs total",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 6 },
+      "targets": [
+        { "refId": "A", "expr": "node_memory_MemAvailable_bytes", "legendFormat": "available" },
+        { "refId": "B", "expr": "node_memory_MemTotal_bytes", "legendFormat": "total" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Filesystem free (alarm < 10%; Postgres/Redis/TSDB stop on a full disk)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 6 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "node_filesystem_avail_bytes{fstype!~\"tmpfs|ramfs|overlay\"} / node_filesystem_size_bytes",
+          "legendFormat": "{{mountpoint}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 0.1 } ] }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Disk I/O (bytes/s)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 6 },
+      "targets": [
+        { "refId": "A", "expr": "rate(node_disk_read_bytes_total[5m])", "legendFormat": "{{device}} read" },
+        { "refId": "B", "expr": "rate(node_disk_written_bytes_total[5m])", "legendFormat": "{{device}} write" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "Bps", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Network (bytes/s)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 14 },
+      "targets": [
+        { "refId": "A", "expr": "rate(node_network_receive_bytes_total{device!=\"lo\"}[5m])", "legendFormat": "{{device}} rx" },
+        { "refId": "B", "expr": "rate(node_network_transmit_bytes_total{device!=\"lo\"}[5m])", "legendFormat": "{{device}} tx" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "Bps", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "rbitcoin: blocks vs headers (gap = still syncing)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 14 },
+      "targets": [
+        { "refId": "A", "expr": "rbitcoin_blocks", "legendFormat": "blocks" },
+        { "refId": "B", "expr": "rbitcoin_headers", "legendFormat": "headers" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "rbitcoin: initial block download",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 14 },
+      "targets": [
+        { "refId": "A", "expr": "rbitcoin_initial_block_download", "legendFormat": "IBD", "instant": true }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "SYNCED", "color": "green" }, "1": { "text": "IBD", "color": "yellow" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "rbitcoin: peers and connections (0 peers = isolated node)",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 22 },
+      "targets": [
+        { "refId": "A", "expr": "rbitcoin_peers", "legendFormat": "peers" },
+        { "refId": "B", "expr": "rbitcoin_connections", "legendFormat": "connections" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "rbitcoin: mempool",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 22 },
+      "targets": [
+        { "refId": "A", "expr": "rbitcoin_mempool_transactions", "legendFormat": "transactions" },
+        { "refId": "B", "expr": "rbitcoin_mempool_orphan_transactions", "legendFormat": "orphans" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "rbitcoin: process memory",
+      "datasource": { "type": "prometheus", "uid": "spc-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 22 },
+      "targets": [
+        { "refId": "A", "expr": "process_resident_memory_bytes{job=\"rbitcoin\"}", "legendFormat": "RSS" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes", "min": 0 }, "overrides": [] }
+    }
+  ]
+}
