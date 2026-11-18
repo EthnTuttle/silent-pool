@@ -20,7 +20,7 @@ Pins guarantee reproducibility and a known-good starting point; nothing here gat
 | `stratum-mining/stratum` (`stratum-apps`) | `0.8.0` (crates.io), `network` + `core` features | SV2 Noise accept/connect helpers used by `spc-pool`/`spc-agent`. It pins `secp256k1` 0.28 for its authority key type; the workspace aliases that as `secp256k1_legacy` and keeps 0.29 for `bitcoin` values. Only wire bytes cross the boundary. See `docs/decisions/2026-11-02-slice-stream-and-regtest-baseline.md`. |
 | `EthnTuttle/rbitcoin` | `net/testnet4` @ `7736c8e779d9271b6a0c538881f9758527bc3165` (harnesses validated against the local upstream-master build `e8cf9c9d6`, which includes PR #1385) | **rbitcoin regtest node (2026-11-04), reference point, NOT a build gate.** The Rust full node `testing/regtest-rbitcoin-e2e.sh` and `testing/regtest-rbitcoin-reorg-e2e.sh` run against: regtest PoW overlay (`--regtest-pow-bits`), cookie-authed Core-compatible JSON-RPC (`getblocktemplate`, `submitblock`, `invalidateblock`, `generatetoaddress`, `getblock`/`getblockhash`/`getblockstats`/`getblockcount`) and the SV2 Template Provider. No Cargo dependency: the harness consumes the binary's RPC, so the pin records only which upstream line the harness was validated against; drift is absorbed in-tree per decision `2026-10-14-upstream-own-suite.md`. |
 | `EthnTuttle/rbitcoin` | `c1505776117b1d4d42489f309af33978bbe124cc` (`silent-pool-lab-profile-facts`) | **Published lab build input (2026-11-12).** Exact 2106-file / 30,897,163-byte tested AP1b + consensus-facts r2 source, full manifest `f1592c935e29b0b1fdf6429ad1b84e9ae925e9a9fcccd66b04f3d090680ff20f`, Git tree `8583c44dcaf65bd0d3a4dc95cc88676c53ac58ad`, NAR `sha256-t6LQYTA738Uzstg5AsakWCJS4yGanDBTn4FSpUmhiIU=`. Fetch as Git from `https://github.com/EthnTuttle/rbitcoin.git`, with this immutable revision, `ref = "refs/heads/silent-pool-lab-profile-facts"`, `shallow = true`, `submodules = false`. Archive exports change two bundled Bitcoin files through `export-subst` and do not reproduce that NAR. This is an additional reproducibility binding, not a replacement of reference pin `7736c8e779d9271b6a0c538881f9758527bc3165` or a default/live-node selection change. Parent is the actual implementation baseline `e8cf9c9d61f7c63ae59cc11ab1179cace50ca142`; bundled Bitcoin corpus files match `bitcoin/bitcoin@f0de87f040621468b956f01f526a43a010310501`. Cargo.lock is byte-unchanged. |
-| `ark-bitcoin/bark` | `c419159fa54085572f8ca72d2ba1716556a9d3eb` | **Ark rail (2026-11-02).** The `c419159` the prototypes pin; full SHA from `spc_ark_client/Cargo.lock`. Covers `ark-lib` (address/mailbox/policy formats and the blinding formula of SPEC §11.8), `bark-server-rpc` (public gRPC surface) and `bark-wallet` (send/board/refresh semantics). The pool (`spc-pool`, feature `ark`) uses stock `bark-wallet` + `ark-lib` - no patch, no fork; the agent (`spc-agent`) uses `ark-lib` + `bark-server-rpc` via an in-tree thin wallet (SPEC §10 O13 resolved). Excluded from the pin's guarantee: server configuration defaults (`vtxo_lifetime`, fee schedule, `max_arkoor_amount`), discovered per server via `ArkInfo` at startup, never assumed. `bark-server` (`captaind`) is a dev-dependency for regtest runs only. The workspace adopts the prototype's `[patch.crates-io] ark-lib` -> git-rev mapping so `spc-crypto`'s `ark-lib = "0.7.1"` and the pinned git crate stay one package (crate identity is load-bearing: `Address`, `Vtxo` and `Keypair` types cross between `spc-crypto`, the adapter and the RPC bindings). See `docs/decisions/2026-11-02-bark-adapter.md`. |
+| `ark-bitcoin/bark` | `c419159fa54085572f8ca72d2ba1716556a9d3eb` (base); **built from the adopted fork `EthnTuttle/bark` @ `8c38e07ee70b046529a416b170f1ae5c77cc66a0` since 2026-11-17** | **Ark rail (2026-11-02; fork adoption 2026-11-17).** `c419159` is the stock base the prototypes pin and the fork's parent; the workspace and `spc_ark_e2e` lockfiles resolve the fork SHA (see "Adopted forks (2026-11-17)" below - network-identity-only testnet5 support, zero behavior change on existing networks). Covers `ark-lib` (address/mailbox/policy formats and the blinding formula of SPEC §11.8), `bark-server-rpc` (public gRPC surface) and `bark-wallet` (send/board/refresh semantics). The pool (`spc-pool`, feature `ark`) uses stock `bark-wallet` + `ark-lib`; the agent (`spc-agent`) uses `ark-lib` + `bark-server-rpc` via an in-tree thin wallet (SPEC §10 O13 resolved). Excluded from the pin's guarantee: server configuration defaults (`vtxo_lifetime`, fee schedule, `max_arkoor_amount`), discovered per server via `ArkInfo` at startup, never assumed. `bark-server` (`captaind`) is a dev-dependency for regtest runs only. The workspace keeps the `[patch.crates-io] ark-lib` -> git-rev mapping so `spc-crypto`'s `ark-lib = "0.7.1"` and the pinned git crate stay one package (crate identity is load-bearing: `Address`, `Vtxo` and `Keypair` types cross between `spc-crypto`, the adapter and the RPC bindings). The prototype workspaces (`spc_ark/`, `spc_ark_mailbox/`, `spc_ark_client/`) and the lab's stock-interop Nix build (`nix/lab/ark.nix`) stay at stock `c419159`. See `docs/decisions/2026-11-02-bark-adapter.md` and `docs/decisions/2026-11-17-bark-testnet5-fork.md`. |
 
 ## Independent future Testnet5 development node (2026-11-16)
 
@@ -45,16 +45,66 @@ the private node-only config is a fixture, not an installed service.
 Qualification is source/offline-fixture only until a separately scheduled
 build and live-node validation pass. The package is Nix-store-linked glibc,
 not the upstream portable static release. Stock Bark c419159 lacks Testnet5
-support. This input does not replace the c150577 lab pin or authorize a
+support (addressed for this project by "Adopted forks (2026-11-17)" below).
+This input does not replace the c150577 lab pin or authorize a
 deployment. Adopt this entry, the package files, root flake wiring and its
 new lock node atomically. Future repins update the source record and lock
 together. Validation recipe: `nix/dev/testnet5/README.md`.
 
+## Adopted forks (2026-11-17)
+
+User-directed adoption so silent-pool runs end to end on public BIP95
+Testnet5; see `docs/decisions/2026-11-17-bark-testnet5-fork.md`. Both forks
+are project-owned, network-identity-only, and validated before adoption.
+
+**`github.com/EthnTuttle/rust-bitcoin`, branch `testnet5-0.32` @
+`cf4d11ca778fd86698ec7cc00bd081c15b12a2de`.** Base: released `bitcoin`
+0.32.102 (the version the workspace lock already resolved). Adds
+`Network::Testnet5` ported from open upstream PR #7160 (genesis
+`00000000000008c1637e7d3252dc1c333d4546fd6fff6a474b200d674a91d497`, wire
+magic `0x46495645` "FIVE", HRP `tb`, core-arg/FromStr/serde name exactly
+`testnet5`). The full rust-bitcoin workspace test suite passes on the fork.
+`Network` on the 0.32 line is an exhaustive enum, so consumers that match it
+exhaustively need `Testnet5` arms (in-tree: `crates/spc-lab-txd`
+`network_string`). Wired as workspace and `spc_ark_e2e`
+`[patch.crates-io] bitcoin = { git, rev }` - rev-pinned, immutable.
+
+**`github.com/EthnTuttle/bark`, branch `testnet5` @
+`8c38e07ee70b046529a416b170f1ae5c77cc66a0`.** Base: stock
+`c419159fa54085572f8ca72d2ba1716556a9d3eb` (the existing Ark-rail pin).
+Three commits on top: `[patch.crates-io] bitcoin` -> the rust-bitcoin fork;
+network-identity-only testnet5 support in bark/captaind/barkd/bark-json/
+lightning; regenerated lock. 705 unit + 48 regtest round/arkoor/board + 14
+mailbox/registration integration tests green on the fork; zero SPc-specific
+logic and zero behavior change on existing networks. bark CLI gains
+`--testnet5` with no default endpoints (like regtest); captaind parses and
+validates `network = "testnet5"`. All bark git dependencies (root
+`ark-lib` patch; `bark-wallet`/`server_rpc` in `bins/spc-pool` and
+`bins/spc-agent`; `ark-testing`/`bark-wallet`/`ark-lib` in `spc_ark_e2e`)
+moved to this SHA together, preserving `ark-lib` crate identity. The
+prototype workspaces and `nix/lab/ark.nix` (`arkPackages`: the lab's
+stock-server interop evidence) stay at stock `c419159`; the forked build is
+the separate opt-in `captaind-testnet5`/`bark-testnet5` packages
+(`nix/lab/ark-testnet5.nix`).
+
+**Re-convergence plan.** These forks are a bridge, not a divergence: when
+rust-bitcoin merges #7160 (or a successor) and releases a `bitcoin` with
+`Network::Testnet5`, and bark follows with a release consuming it, drop the
+`bitcoin` patch and re-pin bark upstream in one change (pins, both
+lockfiles, this file, and a decision record together, per the Rules
+section). Until then, absorb upstream drift in-tree per decision
+2026-10-14-upstream-own-suite.md; never rebase the fork branches silently -
+any fork head change is a re-pin.
+
 ## bark testnet5 tracking (2026-11-17)
 
 Status check for the blocker "Stock bark c419159 still cannot represent
-Testnet5" (decision 2026-11-15-testnet5-chain-identity.md item 8). The bark
-pin `c419159` and all lockfiles are unchanged by this entry.
+Testnet5" (decision 2026-11-15-testnet5-chain-identity.md item 8).
+**RESOLVED for this project on 2026-11-17 by the adopted forks above**
+(decision 2026-11-17-bark-testnet5-fork.md); the paragraphs below record
+the upstream state that forced the fork and remain the watch list for
+re-convergence. Upstream itself is unchanged: no bark testnet5 refs, and
+rust-bitcoin #7160 is still open.
 
 **Canonical home and mirrors (verified 2026-11-17).**
 Canonical: `https://gitlab.com/ark-bitcoin/bark` - second.tech links it as
@@ -101,15 +151,16 @@ therefore only gain Testnet5 after (a) #7160 or a successor merges, (b) a
 rust-bitcoin release ships it, and (c) bark bumps its `bitcoin` major -
 none of which has started upstream.
 
-**Adoption path when a bark branch/MR appears.** Record its ref + head SHA
-here, then re-pin per the Rules/Verification sections: the new bark SHA,
+**Adoption path when an upstream bark branch/MR appears.** Record its ref +
+head SHA here, then re-pin per the Rules/Verification sections and the
+re-convergence plan in "Adopted forks (2026-11-17)": the new bark SHA,
 `UPSTREAM_DEPS.md`, and every affected lockfile (workspace `Cargo.lock`,
-`spc_ark_client/Cargo.lock` if touched) move in one change citing a
-decision document. Crate identity of `ark-lib` across `spc-crypto`, the
-adapter and RPC bindings (row `c419159`) must be preserved by the same
-change. Do not bump ahead of upstream: the agent-side refusal in decision
-2026-11-15 item 8 stays until the wallet and job/source contracts carry
-chain identity.
+`spc_ark_e2e/Cargo.lock`, `spc_ark_client/Cargo.lock` if touched) move in
+one change citing a decision document. Crate identity of `ark-lib` across
+`spc-crypto`, the adapter and RPC bindings (row `c419159`) must be
+preserved by the same change. The 2026-11-15 item 8 agent-side refusal was
+lifted by decision 2026-11-17-bark-testnet5-fork.md together with the
+chain-exact WalletKeys adapter.
 
 **Re-check procedure (run and date-stamp a new paragraph here):**
 

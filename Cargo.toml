@@ -57,8 +57,16 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 zeroize = { version = "1", features = ["derive"] }
 
 # The bark pin (UPSTREAM_DEPS.md): crates.io `ark-lib` 0.7.1 and the git
-# crate at c419159 are the same package, so `Address`, `Vtxo` and `Keypair`
-# types cross between spc-crypto, the pool's ark adapter and bark's own
-# RPC bindings (decision 2026-11-02-bark-adapter.md, clause 1).
+# crate at the pinned rev are the same package, so `Address`, `Vtxo` and
+# `Keypair` types cross between spc-crypto, the pool's ark adapter and
+# bark's own RPC bindings (decision 2026-11-02-bark-adapter.md, clause 1).
+# The rev is the adopted testnet5 fork (stock c419159 + network-identity-only
+# testnet5 support; decision 2026-11-17-bark-testnet5-fork.md). All bark
+# crates move together so crate identity is preserved.
+#
+# `bitcoin` is patched to the adopted rust-bitcoin fork: 0.32.102 plus
+# `Network::Testnet5` ported from upstream PR #7160 (UPSTREAM_DEPS.md
+# "Adopted forks (2026-11-17)"). Pinned by rev for immutability.
 [patch.crates-io]
-ark-lib = { git = "https://gitlab.com/ark-bitcoin/bark.git", rev = "c419159fa54085572f8ca72d2ba1716556a9d3eb" }
+ark-lib = { git = "https://github.com/EthnTuttle/bark", rev = "8c38e07ee70b046529a416b170f1ae5c77cc66a0" }
+bitcoin = { git = "https://github.com/EthnTuttle/rust-bitcoin", rev = "cf4d11ca778fd86698ec7cc00bd081c15b12a2de" }

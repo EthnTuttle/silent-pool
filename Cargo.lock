@@ -150,7 +150,7 @@ dependencies = [
 [[package]]
 name = "ark-lib"
 version = "0.7.1"
-source = "git+https://gitlab.com/ark-bitcoin/bark.git?rev=c419159fa54085572f8ca72d2ba1716556a9d3eb#c419159fa54085572f8ca72d2ba1716556a9d3eb"
+source = "git+https://github.com/EthnTuttle/bark?rev=8c38e07ee70b046529a416b170f1ae5c77cc66a0#8c38e07ee70b046529a416b170f1ae5c77cc66a0"
 dependencies = [
  "async-trait",
  "bark-bitcoin-ext",
@@ -166,7 +166,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
- ]
+]
 
 [[package]]
 name = "arraydeque"
@@ -309,7 +309,7 @@ dependencies = [
 [[package]]
 name = "bark-bitcoin-ext"
 version = "0.7.1"
-source = "git+https://gitlab.com/ark-bitcoin/bark.git?rev=c419159fa54085572f8ca72d2ba1716556a9d3eb#c419159fa54085572f8ca72d2ba1716556a9d3eb"
+source = "git+https://github.com/EthnTuttle/bark?rev=8c38e07ee70b046529a416b170f1ae5c77cc66a0#8c38e07ee70b046529a416b170f1ae5c77cc66a0"
 dependencies = [
  "async-trait",
  "bdk_bitcoind_rpc",
@@ -327,7 +327,7 @@ dependencies = [
 [[package]]
 name = "bark-common"
 version = "0.7.1"
-source = "git+https://gitlab.com/ark-bitcoin/bark.git?rev=c419159fa54085572f8ca72d2ba1716556a9d3eb#c419159fa54085572f8ca72d2ba1716556a9d3eb"
+source = "git+https://github.com/EthnTuttle/bark?rev=8c38e07ee70b046529a416b170f1ae5c77cc66a0#8c38e07ee70b046529a416b170f1ae5c77cc66a0"
 dependencies = [
  "anyhow",
  "serde",
@@ -337,7 +337,7 @@ dependencies = [
 [[package]]
 name = "bark-runtime"
 version = "0.7.1"
-source = "git+https://gitlab.com/ark-bitcoin/bark.git?rev=c419159fa54085572f8ca72d2ba1716556a9d3eb#c419159fa54085572f8ca72d2ba1716556a9d3eb"
+source = "git+https://github.com/EthnTuttle/bark?rev=8c38e07ee70b046529a416b170f1ae5c77cc66a0#8c38e07ee70b046529a416b170f1ae5c77cc66a0"
 dependencies = [
  "futures",
  "gloo-timers",
@@ -350,7 +350,7 @@ dependencies = [
 [[package]]
 name = "bark-server-rpc"
 version = "0.7.1"
-source = "git+https://gitlab.com/ark-bitcoin/bark.git?rev=c419159fa54085572f8ca72d2ba1716556a9d3eb#c419159fa54085572f8ca72d2ba1716556a9d3eb"
+source = "git+https://github.com/EthnTuttle/bark?rev=8c38e07ee70b046529a416b170f1ae5c77cc66a0#8c38e07ee70b046529a416b170f1ae5c77cc66a0"
 dependencies = [
  "ark-lib",
  "bitcoin",
@@ -368,7 +368,7 @@ dependencies = [
 [[package]]
 name = "bark-wallet"
 version = "0.7.1"
-source = "git+https://gitlab.com/ark-bitcoin/bark.git?rev=c419159fa54085572f8ca72d2ba1716556a9d3eb#c419159fa54085572f8ca72d2ba1716556a9d3eb"
+source = "git+https://github.com/EthnTuttle/bark?rev=8c38e07ee70b046529a416b170f1ae5c77cc66a0#8c38e07ee70b046529a416b170f1ae5c77cc66a0"
 dependencies = [
  "anyhow",
  "ark-lib",
@@ -412,10 +412,9 @@ dependencies = [
 [[package]]
 name = "base58ck"
 version = "0.1.101"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "365c0acd5b2e8dd0111a46c4faea83fb3cfb6e39a49a7c73a06e090db7b2eff0"
+source = "git+https://github.com/EthnTuttle/rust-bitcoin?rev=cf4d11ca778fd86698ec7cc00bd081c15b12a2de#cf4d11ca778fd86698ec7cc00bd081c15b12a2de"
 dependencies = [
- "bitcoin_hashes 0.14.101",
+ "bitcoin_hashes 0.14.101 (git+https://github.com/EthnTuttle/rust-bitcoin?rev=cf4d11ca778fd86698ec7cc00bd081c15b12a2de)",
 ]
 
 [[package]]
@@ -546,7 +545,7 @@ dependencies = [
 [[package]]
 name = "bip321"
 version = "0.4.0"
-source = "git+https://gitlab.com/ark-bitcoin/bark.git?rev=c419159fa54085572f8ca72d2ba1716556a9d3eb#c419159fa54085572f8ca72d2ba1716556a9d3eb"
+source = "git+https://github.com/EthnTuttle/bark?rev=8c38e07ee70b046529a416b170f1ae5c77cc66a0#8c38e07ee70b046529a416b170f1ae5c77cc66a0"
 dependencies = [
  "bark-bitcoin-ext",
  "bitcoin",
@@ -562,7 +561,7 @@ version = "2.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "90dbd31c98227229239363921e60fcf5e558e43ec69094d46fc4996f08d1d5bc"
 dependencies = [
- "bitcoin_hashes 0.14.101",
+ "bitcoin_hashes 0.14.101 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.8.8",
  "rand_core 0.6.4",
  "serde",
@@ -591,15 +590,14 @@ dependencies = [
 [[package]]
 name = "bitcoin"
 version = "0.32.102"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb0ce8bd5baaa0d303a19915a6d93afed161f528654e42da2a7a97d05c59499a"
+source = "git+https://github.com/EthnTuttle/rust-bitcoin?rev=cf4d11ca778fd86698ec7cc00bd081c15b12a2de#cf4d11ca778fd86698ec7cc00bd081c15b12a2de"
 dependencies = [
  "base58ck",
  "base64 0.21.7",
  "bech32",
  "bitcoin-io",
  "bitcoin-units",
- "bitcoin_hashes 0.14.101",
+ "bitcoin_hashes 0.14.101 (git+https://github.com/EthnTuttle/rust-bitcoin?rev=cf4d11ca778fd86698ec7cc00bd081c15b12a2de)",
  "hex-conservative 0.2.3",
  "hex_lit",
  "secp256k1 0.29.1",
@@ -626,8 +624,7 @@ checksum = "e8bea3a9f0cfece4564e37cb49a38cc245ca5184719e50d7d0dda3268722c4e2"
 [[package]]
 name = "bitcoin-io"
 version = "0.1.101"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb5de036369d1ac59d3c1819ebc4d850f89466f5401c571a285b6ed564a4cb78"
+source = "git+https://github.com/EthnTuttle/rust-bitcoin?rev=cf4d11ca778fd86698ec7cc00bd081c15b12a2de#cf4d11ca778fd86698ec7cc00bd081c15b12a2de"
 dependencies = [
  "bitcoin-consensus-encoding",
 ]
@@ -635,8 +632,7 @@ dependencies = [
 [[package]]
 name = "bitcoin-units"
 version = "0.1.101"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9cb95693f371d089a4b5b6fc41c6f3ea6e01ee8c15388335dfac8ea685173b51"
+source = "git+https://github.com/EthnTuttle/rust-bitcoin?rev=cf4d11ca778fd86698ec7cc00bd081c15b12a2de#cf4d11ca778fd86698ec7cc00bd081c15b12a2de"
 dependencies = [
  "bitcoin-consensus-encoding",
  "serde",
@@ -656,6 +652,14 @@ name = "bitcoin_hashes"
 version = "0.14.101"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bca4c7abb40c8817d77403c880988cfd484f23ab2365726afb2f798363e2c4a2"
+dependencies = [
+ "hex-conservative 0.2.3",
+]
+
+[[package]]
+name = "bitcoin_hashes"
+version = "0.14.101"
+source = "git+https://github.com/EthnTuttle/rust-bitcoin?rev=cf4d11ca778fd86698ec7cc00bd081c15b12a2de#cf4d11ca778fd86698ec7cc00bd081c15b12a2de"
 dependencies = [
  "bitcoin-io",
  "hex-conservative 0.2.3",
@@ -3699,7 +3703,7 @@ version = "0.29.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9465315bc9d4566e1724f0fffcbcc446268cb522e60f9a27bcded6b19c108113"
 dependencies = [
- "bitcoin_hashes 0.14.101",
+ "bitcoin_hashes 0.14.101 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.8.8",
  "secp256k1-sys 0.10.1",
  "serde",
@@ -4046,7 +4050,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "zeroize",
- ]
+]
 
 [[package]]
 name = "spc-cpu-miner"
@@ -4072,7 +4076,7 @@ dependencies = [
  "toml 0.8.23",
  "tracing",
  "tracing-subscriber",
- ]
+]
 
 [[package]]
 name = "spc-crypto"
@@ -4132,7 +4136,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "toml 0.8.23",
- ]
+]
 
 [[package]]
 name = "spc-lab-cli"
@@ -4260,7 +4264,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "uuid",
- ]
+]
 
 [[package]]
 name = "spc-testutil"

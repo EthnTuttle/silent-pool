@@ -1340,6 +1340,7 @@ fn network_string(network: Network) -> String {
         Network::Regtest => "regtest".to_string(),
         Network::Testnet => "testnet".to_string(),
         Network::Testnet4 => "testnet4".to_string(),
+        Network::Testnet5 => "testnet5".to_string(),
         Network::Signet => "signet".to_string(),
         Network::Bitcoin => "bitcoin".to_string(),
     }
