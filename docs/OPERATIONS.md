@@ -437,6 +437,29 @@ assume them in a dashboard. Wire the alarm rules as each lands.
 | `spc_tip_divergence_seconds` | > `tip_divergence_secs` (default 30) | `payout` emitting `TipHeartbeat` (MULTI-REGION §10) |
 
 `GET /healthz` is the liveness probe.
+
+### Deploy monitoring (NixOS)
+
+`nix/modules/spc-monitoring.nix` ships the deploy-grade wrapper for the
+tables above: loopback-only Prometheus + Alertmanager + Grafana, the
+provisioned operator and node-health dashboards
+(`nix/modules/grafana-dashboards/`), and alert rules encoding this section's
+alarm/page levels with their SPEC §9 citations
+(`nix/modules/prometheus-rules.nix`). The pool `/metrics` endpoint is fed in
+through `services.spc-monitoring.scrapeTargets` (job name `spc-pool`); the
+testnet5 rbitcoin node's native Prometheus endpoint (`--health-listen` +
+`--metrics`) through `rbitcoinTarget`. captaind exposes no Prometheus
+endpoint (OTLP push only) and is not scraped. Two alarm thresholds mirror
+pool config values that are not exported as metrics - set
+`alerts.floatTargetSats` (= `[ark] float_target_sats`) and
+`alerts.maxPayoutSlots` (= `[accounting] max_payout_slots`) to match the
+deployed `spc-pool.toml`. Grafana is loopback with anonymous access off and
+its admin password/secret key from secret files (§4 posture); reach it over
+an SSH tunnel or an operator-supplied TLS reverse proxy. Alertmanager
+defaults to a null receiver; `alertmanager.webhookUrl` or an operator
+override of `services.prometheus.alertmanager.configuration` delivers pages.
+The lab wrapper (`nix/lab/observability.nix`) is unchanged and remains the
+regtest-lab path.
 ## 8. What is deliberately not complete
 
 From `docs/STATUS.md` "Remaining"; these are the gaps an operator must know

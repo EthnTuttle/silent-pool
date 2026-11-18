@@ -575,6 +575,10 @@
           # front,payout,api,ark + nginx read-only API.
           rbitcoin-testnet5-node = import ./nix/modules/rbitcoin-testnet5-node.nix { inherit self; };
           captaind-testnet5 = import ./nix/modules/captaind-testnet5.nix { inherit self; };
+          # Deploy-grade monitoring (packet wp-deploy-monitoring): loopback
+          # Prometheus/Alertmanager/Grafana, SPEC section 9 alert rules; no
+          # self argument - endpoints arrive via scrapeTargets.
+          spc-monitoring = import ./nix/modules/spc-monitoring.nix;
           spc-testnet5-stack = import ./nix/modules/spc-testnet5-stack.nix { inherit self; };
           default = self.nixosModules.spc-stack;
         };

@@ -233,6 +233,38 @@ Point a miner (spc-agent, or any SV1 miner for a first smoke) at
 `spc_open_slice_shares`. Alarms and family semantics: OPERATIONS §7 -
 scrape `/metrics` to discover what this build actually emits.
 
+## 7a. Monitoring
+
+Import `nixosModules.spc-monitoring` (flake) or
+`nix/modules/spc-monitoring.nix` directly and feed it the stack's documented
+loopback pool API port:
+
+    services.spc-monitoring = {
+      enable = true;
+      scrapeTargets = [ { jobName = "spc-pool"; targets = [ "127.0.0.1:<api-port>" ]; } ];
+      rbitcoinTarget = "127.0.0.1:9332";   # start the node with --health-listen --metrics
+      grafana.adminPasswordFile = "/run/secrets/grafana-admin-password";
+      grafana.secretKeyFile = "/run/secrets/grafana-secret-key";
+      alerts.floatTargetSats = <[ark] float_target_sats>;
+      alerts.maxPayoutSlots = <[accounting] max_payout_slots>;
+    };
+
+(The `spc-testnet5-stack` module auto-feeds `scrapeTargets` and
+`rbitcoinTarget` when `spc-monitoring` is imported alongside it.) Everything
+binds 127.0.0.1 and no firewall port opens: Grafana (default :3000, admin
+login only, password from the secret file) is reached with
+`ssh -N -L 3000:127.0.0.1:3000 operator@host` or an operator-supplied TLS +
+auth reverse proxy (`grafana.domain` fixes rendered links); Prometheus
+(:9090) and Alertmanager (:9093) stay tunnel-only - they are unauthenticated
+by design. Dashboards: "SPc pool - operator" (every exported family of
+OPERATIONS §7) and "SPc host and node health" (node_exporter + the node's
+`rbitcoin_*` families). Alert rules encode SPEC §9's alarm/page thresholds;
+Alertmanager starts with a null receiver, so set `alertmanager.webhookUrl`
+(or override `services.prometheus.alertmanager.configuration`) before
+relying on pages. captaind has no Prometheus endpoint (OTLP push only) and
+is not monitored here. Prometheus retention defaults to 15d/2GB for a small
+VPS.
+
 ## 8. Backup / restore / upgrades
 
 OPERATIONS §5 is the procedure (sqlx migrations at boot under advisory
