@@ -570,7 +570,27 @@
           spc-pool = import ./nix/modules/spc-pool.nix { inherit self; };
           spc-agent = import ./nix/modules/spc-agent.nix { inherit self; };
           spc-stack = import ./nix/modules/spc-stack.nix { inherit self; };
+          # Public Testnet5 stack (packet wp-deploy-testnet5): pinned
+          # testnet5 node + self-hosted captaind fork + spc-pool
+          # front,payout,api,ark + nginx read-only API.
+          rbitcoin-testnet5-node = import ./nix/modules/rbitcoin-testnet5-node.nix { inherit self; };
+          captaind-testnet5 = import ./nix/modules/captaind-testnet5.nix { inherit self; };
+          spc-testnet5-stack = import ./nix/modules/spc-testnet5-stack.nix { inherit self; };
           default = self.nixosModules.spc-stack;
+        };
+
+        # A complete example host for the public Testnet5 deployment
+        # (docs/DEPLOY-TESTNET5.md):
+        #   nixos-rebuild switch --flake .#spc-testnet5-host
+        # Operator parameters (hostname/domain, secrets paths, disk) live in
+        # nix/deploy/testnet5/host-example.nix; secrets are runtime files,
+        # never in the store.
+        nixosConfigurations.spc-testnet5-host = nixpkgs.lib.nixosSystem {
+          system = "x86_64-linux";
+          modules = [
+            self.nixosModules.spc-testnet5-stack
+            ./nix/deploy/testnet5/host-example.nix
+          ];
         };
 
         overlays.default = final: prev: {
