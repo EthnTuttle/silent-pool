@@ -1,0 +1,125 @@
+# spc-pool configuration for the PUBLIC Testnet5 host
+# (docs/DEPLOY-TESTNET5.md; SPEC §6.3, §11.10).
+#
+# Install as /etc/spc/pool.toml, mode 0640 root:spc-pool. This file holds
+# secrets (the Noise authority secret, the node RPC credentials) - it must
+# NEVER enter the Nix store or the repo.
+#
+# Every <PLACEHOLDER> below is produced in the runbook's "Secrets" step
+# with nix/deploy/testnet5/spc-testnet5-keygen.py.
+#
+# LISTENER CONTRACT (nix/modules/spc-testnet5-stack.nix depends on these
+# exact addresses - nginx proxies 127.0.0.1:8080, the firewall opens
+# 34254/3333, and the monitoring packet scrapes 127.0.0.1:8080/metrics):
+#   [pool] listen = 0.0.0.0:34254   [sv1] listen = 0.0.0.0:3333
+#   [api]  listen = 127.0.0.1:8080  [jd]  listen = 127.0.0.1:34264
+
+[pool]
+network = "testnet5"
+roles = ["front", "payout", "api", "ark"]
+listen = "0.0.0.0:34254"            # SV2 (Noise), public
+# keygen: `spc-testnet5-keygen.py authority`
+authority_public_key = "<AUTHORITY_PUBLIC_KEY_BASE58CHECK>"
+authority_secret_key = "<AUTHORITY_SECRET_KEY_BASE58CHECK>"
+# Watch-only account xpub descriptor derived FROM THE ARK SEED
+# (`spc-testnet5-keygen.py descriptor --seed-file /etc/spc/ark/seed.hex`).
+# The ark role refuses to start if this does not match the seed's
+# m/86'/1'/1' account (it would board outputs the SPc side cannot see).
+pool_payout_descriptor = "tr(<ACCOUNT_TPUB>/0/*)"
+fee_bps = 100
+front_id = 0
+
+[reach]
+# Published verbatim as `endpoints` at GET /api/pool. List the real public
+# endpoints of this host:
+advertise = ["sv2://<POOL.EXAMPLE.ORG>:34254"]
+
+[template]
+source = "rpc"
+rpc_url = "http://127.0.0.1:18352"
+# The two halves of /etc/spc/secrets/rbitcoin-rpc.cookie ("user:pass").
+rpc_user = "<RPC_COOKIE_USER>"
+rpc_pass = "<RPC_COOKIE_PASS>"
+extranonce_bytes = 16
+refresh_interval_ms = 1000
+
+[sv1]
+enabled = true
+listen = "0.0.0.0:3333"             # native SV1, public
+extranonce1_bytes = 4
+extranonce2_bytes = 4
+vardiff = true
+
+[accounting]
+window_n = 8
+# Testnet5 is a real public chain with real (if low) difficulty; this is a
+# per-share pool difficulty, credited as
+# min(share_difficulty, max(1, round(network_difficulty))) (SPEC §3.4).
+share_difficulty = 1
+slice_fee_delta_sats = 0
+max_slice_shares = 65000
+dust_limit_sats = 330
+coinbase_threshold_sats = 330
+max_payout_slots = 1024
+retain_windows = 16
+scrub_after_blocks = 100
+confirmation_depth = 6
+# NO allow_unchecked_chain here: it is regtest/signet-only and testnet5
+# startup fails closed without a verified chain view (SPEC §11.9).
+
+[budget]
+floor_wu = 200000
+ceiling_wu = 1000000
+up_threshold = 0.85
+down_threshold = 0.50
+step_factor = 1.15
+up_debounce = 3
+down_debounce = 20
+cooldown_secs = 300
+
+[jd]
+listen = "127.0.0.1:34264"          # open the firewall separately for remote JDCs
+distribution_interval_secs = 60
+distribution_rebalance_bps = 100
+grace_same_height_only = true
+
+[extensions]
+share_accounting = true
+window_hot_blocks = 6
+
+[storage]
+# Local Unix sockets, peer auth - no database password exists on this host.
+postgres = "postgres://spc-pool@%2Frun%2Fpostgresql/spc-pool"
+redis = "redis://127.0.0.1:6379"
+
+[api]
+listen = "127.0.0.1:8080"           # nginx publishes it read-only; /metrics stays loopback
+
+[ark]
+enabled = true
+transport = "bark"
+# The co-located captaind-testnet5 public gRPC (loopback). server_is_self
+# is spec-legal on testnet5 ONLY (no third-party Ark server exists; the
+# trust posture is sender-equals-server - SPEC §11.3, decision
+# 2026-11-17-bark-testnet5-fork.md). Never copy this to another network.
+server = "http://127.0.0.1:3535"
+server_is_self = true
+# From `bark ark-info` against the local captaind (runbook step 6):
+server_pubkey = "<ARK_INFO_SERVER_PUBKEY_66HEX>"
+mailbox_pubkey = "<ARK_INFO_MAILBOX_PUBKEY_66HEX>"
+# First 4 bytes of SHA256(server_pubkey bytes), 8 hex chars
+# (`spc-testnet5-keygen.py ark-id --server-pubkey <hex>`); cross-checked
+# at startup.
+ark_id = "<ARK_ID_8HEX>"
+float_target_sats = 1000000
+max_order_sats = 330
+# keygen: `spc-testnet5-keygen.py order-key`
+order_pubkey = "<ORDER_XONLY_PUBKEY_64HEX>"
+order_key_path = "/etc/spc/secrets/ark-order-key.hex"
+# 64-byte hex seed, 0600, in a 0700 dir owned by spc-pool; MUST NOT live
+# under /run/secrets/spc (the SPc-side secret store; the ark role refuses).
+seed_path = "/etc/spc/ark/seed.hex"
+datadir = "/var/lib/spc-pool/ark"
+pool_output_account = "m/86'/1'/1'"
+min_remaining_blocks = 3024
+retry_blocks = 6
