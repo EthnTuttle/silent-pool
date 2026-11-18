@@ -65,6 +65,7 @@ pub fn provision(wallet_dir: &Path, cold_dir: &Path) -> anyhow::Result<Provision
             child_seed: wallet_dir.join("child.seed"),
             sp_address: record.sp_address.clone(),
             network: spc_crypto::Network::Regtest,
+            chain: Some(spc_crypto::ChainNetwork::Regtest),
         })?;
         ensure!(
             keys.wallet_fingerprint.to_string() == record.child_fingerprint,

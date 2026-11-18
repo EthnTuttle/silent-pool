@@ -221,6 +221,7 @@ impl Fixture {
             child_seed: wallet.join("child.seed"),
             sp_address: provision.sp_address.clone(),
             network: spc_crypto::Network::Regtest,
+            chain: Some(spc_crypto::ChainNetwork::Regtest),
         })
         .unwrap();
         let root = wallet.join("state");

@@ -83,6 +83,9 @@ pub struct WalletSettings {
     /// The Ark server id the registration targets (hex, 4 bytes).
     pub ark_id: [u8; 4],
     pub network: Network,
+    /// Explicit consensus chain from `[ark] network`, when configured
+    /// (chain-exact backend selection in `WalletKeys`).
+    pub chain: Option<spc_crypto::ChainNetwork>,
     pub sp_address: String,
 }
 
@@ -93,12 +96,9 @@ impl WalletSettings {
     pub fn from_config(config: &AgentConfig) -> anyhow::Result<Self> {
         // Recheck at the public config adapter, before keys or state are opened.
         // Callers constructing AgentConfig directly must not alias new chains.
-        if let Some(chain) = config.chain_network()? {
+        let chain = config.chain_network()?;
+        if let Some(chain) = chain {
             chain.stock_bitcoin_network()?;
-            anyhow::ensure!(
-                chain != spc_crypto::ChainNetwork::Testnet4,
-                "Testnet4 needs the explicit-chain WalletKeys adapter"
-            );
         }
         let ark = config
             .ark
@@ -142,6 +142,7 @@ impl WalletSettings {
             epoch_fallback,
             ark_id,
             network: config.ark_network(),
+            chain,
             sp_address: config.upstream.sp_address.clone(),
         })
     }
@@ -200,6 +201,7 @@ impl WalletRole {
             child_seed: settings.child_seed.clone(),
             sp_address: settings.sp_address.clone(),
             network: settings.network,
+            chain: settings.chain,
         };
         let keys = WalletKeys::load(&sources)?;
         use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
@@ -259,7 +261,7 @@ impl WalletRole {
         // here opens a full bark `Wallet` or talks to a chain/server.
         let bark = BarkStore::open(
             &settings.datadir,
-            keys::bitcoin_network(keys.network),
+            keys.backend_network(),
             keys.wallet_fingerprint,
         )
         .await?;

@@ -28,6 +28,7 @@ fn wallet() -> (tempfile::TempDir, WalletKeys, String) {
         child_seed: online.join("child.seed"),
         sp_address: public.sp_address.clone(),
         network: spc_crypto::Network::Regtest,
+        chain: Some(spc_crypto::ChainNetwork::Regtest),
     })
     .unwrap();
     (root, keys, public.sp_address)

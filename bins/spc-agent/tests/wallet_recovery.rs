@@ -250,6 +250,7 @@ fn fixture_settings(fixture: &Fixture, dir: &Path, datadir: &Path) -> WalletSett
         epoch_fallback: spc_agent::wallet::EpochFallback::Hold,
         ark_id: [0xa1, 0xb2, 0xc3, 0xd4],
         network: Network::Regtest,
+        chain: Some(spc_crypto::ChainNetwork::Regtest),
         sp_address: fixture.sp_address.clone(),
     }
 }

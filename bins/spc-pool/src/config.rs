@@ -921,13 +921,6 @@ impl Config {
     pub fn validate(&self) -> Result<(), ConfigError> {
         let network = self.network()?;
         let roles = self.roles()?;
-        if self.chain_network()? == spc_crypto::ChainNetwork::Testnet5
-            && (roles.contains(&Role::Ark) || self.ark.as_ref().is_some_and(|a| a.enabled))
-        {
-            return Err(ConfigError::ArkTransport(
-                "Testnet5 is unsupported by pinned stock Bark/rust-bitcoin".into(),
-            ));
-        }
         if roles.contains(&Role::Front) {
             let secret = self.pool.authority_secret()?;
             let configured_public = self.pool.authority_public()?;
@@ -1140,8 +1133,15 @@ impl Config {
                 if ark.server_is_self && self.pool.network == "mainnet" {
                     return Err(ConfigError::ArkSelfMainnet);
                 }
-                // server_is_self is only permitted on regtest/signet (SPEC §11.3, §11.9)
-                if ark.server_is_self && !matches!(self.pool.network.as_str(), "regtest" | "signet")
+                // server_is_self is permitted only on the test networks
+                // with no third-party server requirement: regtest/signet,
+                // and testnet5 where no third-party Ark server exists
+                // (SPEC §11.3, §11.9; decision 2026-11-17-bark-testnet5-fork.md).
+                if ark.server_is_self
+                    && !matches!(
+                        self.pool.network.as_str(),
+                        "regtest" | "signet" | "testnet5"
+                    )
                 {
                     return Err(ConfigError::ArkSelfMainnet);
                 }
@@ -1234,7 +1234,7 @@ pub fn validate_pool_descriptor(d: &str) -> Result<(), ConfigError> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn explicit_testnet5_identity_preserves_old_codes_and_refuses_ark_and_v2() {
+    fn explicit_testnet5_identity_preserves_old_codes_and_permits_ark() {
         let mut cfg = sample();
         cfg.pool.network = "testnet5".into();
         assert_eq!(
@@ -1243,11 +1243,14 @@ mod tests {
         );
         assert_eq!(cfg.chain_network().unwrap().code(), 4);
         assert_eq!(cfg.network().unwrap(), spc_crypto::Network::Testnet);
+        // v2 stays regtest-only; testnet5 does not relax it.
         cfg.accounting.work_unit_version = 2;
         assert!(cfg.accounting.share_policy(cfg.network().unwrap()).is_err());
         cfg.accounting.work_unit_version = 1;
+        // Since the fork adoption (decision 2026-11-17-bark-testnet5-fork.md)
+        // the ark role validates on testnet5 like any other test chain.
         cfg.pool.roles = vec!["ark".into()];
-        assert!(matches!(cfg.validate(), Err(ConfigError::ArkTransport(_))));
+        cfg.validate().unwrap();
         cfg.pool.network = "testnet4".into();
         assert_eq!(cfg.chain_network().unwrap().code(), 1);
         cfg.pool.network = "testnet".into();
@@ -1255,6 +1258,40 @@ mod tests {
             cfg.chain_network().unwrap(),
             spc_crypto::ChainNetwork::Testnet4
         );
+    }
+
+    /// Testnet5 has no third-party Ark servers, so `server_is_self`
+    /// extends to it; the chain-check escape hatches do NOT - testnet5
+    /// is a real public chain (decision 2026-11-17-bark-testnet5-fork.md).
+    #[test]
+    fn testnet5_permits_self_hosted_ark_but_keeps_chain_checks() {
+        let mut cfg = ark_enabled();
+        cfg.pool.network = "testnet5".into();
+        cfg.ark.as_mut().unwrap().server_is_self = true;
+        cfg.validate().unwrap();
+
+        // testnet4 still refuses server_is_self.
+        let mut cfg = ark_enabled();
+        cfg.pool.network = "testnet4".into();
+        cfg.ark.as_mut().unwrap().server_is_self = true;
+        assert_eq!(cfg.validate(), Err(ConfigError::ArkSelfMainnet));
+
+        // transport = "command" stays dev-only (regtest/signet).
+        let mut cfg = ark_enabled();
+        cfg.pool.network = "testnet5".into();
+        cfg.ark.as_mut().unwrap().transport = "command".into();
+        cfg.ark.as_mut().unwrap().send_command = Some("true".into());
+        assert!(matches!(cfg.validate(), Err(ConfigError::ArkTransport(_))));
+
+        // allow_unchecked_chain and template "mock" stay regtest/signet-only.
+        let mut cfg = sample();
+        cfg.pool.network = "testnet5".into();
+        cfg.accounting.allow_unchecked_chain = true;
+        assert!(matches!(cfg.validate(), Err(ConfigError::Listen(_))));
+        let mut cfg = sample();
+        cfg.pool.network = "testnet5".into();
+        cfg.template.source = "mock".into();
+        assert!(matches!(cfg.validate(), Err(ConfigError::Listen(_))));
     }
 
     use super::*;

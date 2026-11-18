@@ -57,6 +57,7 @@ pub fn provision_files(
         child_seed: dir.join("child.seed"),
         sp_address: spc_crypto::address::encode_sp_address(network, &scan_pub, &spend_pub).unwrap(),
         network,
+        chain: None,
     };
     write_secret(&sources.scan_xprv, &keys.scan_branch.to_string());
     write_secret(&sources.ark_xprv, &keys.ark_branch.to_string());
@@ -81,6 +82,7 @@ pub fn test_settings(
         epoch_fallback: EpochFallback::Hold,
         ark_id: [0xa1, 0xb2, 0xc3, 0xd4],
         network: sources.network,
+        chain: sources.chain,
         sp_address: sources.sp_address.clone(),
     }
 }

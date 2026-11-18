@@ -40,7 +40,7 @@ impl LiveBark {
             .server_address
             .clone()
             .context("ark.server_address required")?;
-        let network = super::keys::bitcoin_network(keys.network);
+        let network = keys.backend_network();
         // Validate actual metadata before stock refresh_server can persist first-use keys.
         let server = server_rpc::ServerConnection::builder()
             .address(&endpoint)
