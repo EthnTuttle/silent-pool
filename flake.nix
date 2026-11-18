@@ -117,6 +117,11 @@
             inherit pkgs;
             nodeSource = testnet5-node-src;
           };
+          # Opt-in Testnet5 explorer (pinned rbitcoin.space build) beside the
+          # dev node above; nix/dev/testnet5-explorer.nix.
+          rbitcoin-space-testnet5 = import ./nix/dev/testnet5-explorer.nix {
+            inherit pkgs;
+          };
         } // rec {
           rbitcoin-node-ark-lab = import ./nix/lab/ark-node.nix { inherit pkgs; };
           spc-lab-self-hosted-ark = import ./nix/lab/ark-runtime.nix {
