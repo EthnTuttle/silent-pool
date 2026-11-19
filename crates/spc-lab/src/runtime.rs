@@ -1801,7 +1801,24 @@ fn build_lab_config(
                 "--config".to_string(),
                 "{run_dir}/private/miner-{entity}.toml".to_string(),
             ],
-            capabilities: vec!["spc.miner.sv2.cpu".to_string()],
+            // A scenario whose wallet agents declare no native-audit profile
+            // cannot satisfy the audited CPU path (the wallet service has no
+            // collector binding to offer), so its native miners run explicitly
+            // unaudited and every connection payload records that mode. Any
+            // declared profile keeps the audited enforcement for the whole
+            // run.
+            capabilities: if scenario
+                .wallet_agents
+                .iter()
+                .all(|agent| agent.native_audit.is_none())
+            {
+                vec![
+                    "spc.miner.sv2.cpu".to_string(),
+                    "spc.miner.native.unaudited".to_string(),
+                ]
+            } else {
+                vec!["spc.miner.sv2.cpu".to_string()]
+            },
             fixture: false,
             effective_profile: None,
             rpc_auth: None,
