@@ -2410,6 +2410,13 @@ struct PostgresHook {
 
 impl StartupHook for PostgresHook {
     fn after_fronts(&self, engine: &RunEngine) -> Result<(), String> {
+        // Ark-role pool processes start only after the fronts: their payout
+        // role must initialize the empty-DB Redis chain binding first
+        // (ark_service::launch_pool_roles doc comment).
+        if self.ark.is_some() {
+            crate::ark_service::launch_pool_roles(engine, &self.binaries)
+                .map_err(|e| format!("local Ark pool roles: {e:#}"))?;
+        }
         if let Some(binary) = &self.wallet_agent {
             crate::wallet_bridge::launch(engine, binary).map_err(|e| e.to_string())?;
         }

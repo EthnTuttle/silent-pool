@@ -460,7 +460,33 @@ pub fn start(engine: &RunEngine, binaries: &RuntimeBinaries, tools: &ArkBinaries
             "observed_at":crate::command::now_ms(), "bound":bound, "ark_info":info
         }))?,
     )?;
-    provision_pool_roles(engine, binaries, &format!("http://{endpoint}"), &bound)?;
+    provision_pool_roles(engine, &format!("http://{endpoint}"), &bound)?;
+    Ok(())
+}
+
+/// Launch the provisioned ark-role pool processes. Must run AFTER the fronts
+/// are up: the payout role initializes the Redis chain-identity binding on an
+/// EMPTY database (SPEC section 5.2 / decision 2026-11-15), and the ark role's
+/// startup creates its order-stream consumer group, so starting it first
+/// makes the namespace nonempty and the front fails closed.
+pub fn launch_pool_roles(engine: &RunEngine, binaries: &RuntimeBinaries) -> Result<()> {
+    for pool in &engine.scenario().pools {
+        let root = engine
+            .run_dir
+            .join("private")
+            .join(format!("pool-ark-{}", pool.id));
+        let role_path = root.join("pool.toml");
+        launch(
+            engine,
+            "pool-ark",
+            pool.id.as_str(),
+            &binaries.pool,
+            vec!["--config".into(), role_path.display().to_string()],
+            Readiness::File {
+                path: root.join("wallet/provision.json"),
+            },
+        )?;
+    }
     Ok(())
 }
 
@@ -528,12 +554,7 @@ fn random_hex(n: usize) -> String {
     hex::encode(bytes)
 }
 
-fn provision_pool_roles(
-    engine: &RunEngine,
-    binaries: &RuntimeBinaries,
-    endpoint: &str,
-    info: &Value,
-) -> Result<()> {
+fn provision_pool_roles(engine: &RunEngine, endpoint: &str, info: &Value) -> Result<()> {
     for pool in &engine.scenario().pools {
         let root = engine
             .run_dir
@@ -633,16 +654,7 @@ fn provision_pool_roles(
                 "config_sha256":hash_file(&role_path)?,"funded_e2e":false
             }))?,
         )?;
-        launch(
-            engine,
-            "pool-ark",
-            pool.id.as_str(),
-            &binaries.pool,
-            vec!["--config".into(), role_path.display().to_string()],
-            Readiness::File {
-                path: root.join("wallet/provision.json"),
-            },
-        )?;
+        // Launch happens in launch_pool_roles, from the after_fronts hook.
     }
     Ok(())
 }
