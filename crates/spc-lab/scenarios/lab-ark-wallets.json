@@ -12,12 +12,12 @@
   "pools": [
     {"id": "pool-a", "network_id": "net-regtest", "node_ids": ["node-a"], "implementation": "spc-pool", "ark_backend_id": "local-ark",
       "work_profile": {"work_unit_version": 2, "reference_target": "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-        "share_work_multiplier": 2, "max_work_multiplier": 4294967296, "max_window_target_units": "18446744073709551616",
+        "share_work_multiplier": 16, "max_work_multiplier": 4294967296, "max_window_target_units": "18446744073709551616",
         "window_rule": "network_block_work", "window_n": 8, "max_slice_shares": 4},
       "storage": {"redis_instance_id": "redis-pool-a", "postgres_database_id": "pg-pool-a"}},
     {"id": "pool-b", "network_id": "net-regtest", "node_ids": ["node-a"], "implementation": "spc-pool", "ark_backend_id": "local-ark",
       "work_profile": {"work_unit_version": 2, "reference_target": "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-        "share_work_multiplier": 2, "max_work_multiplier": 4294967296, "max_window_target_units": "18446744073709551616",
+        "share_work_multiplier": 16, "max_work_multiplier": 4294967296, "max_window_target_units": "18446744073709551616",
         "window_rule": "network_block_work", "window_n": 8, "max_slice_shares": 4},
       "storage": {"redis_instance_id": "redis-pool-b", "postgres_database_id": "pg-pool-b"}}
   ],
