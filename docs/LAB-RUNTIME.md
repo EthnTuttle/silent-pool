@@ -18,7 +18,7 @@ The scenario selects the actual roster:
 | Scenario/profile | Actual scope |
 |---|---|
 | `lab-live-v2-two-pools.json` | Older host-miner profile: one node, two pools, two CPU miners; no Ark or traffic population. |
-| `lab-ark-wallets.json` | Wrapper default: one node, two pools, four wallet agents/miners at 2 H/s each; no `traffic`, phases or acceptance assertions. |
+| `lab-ark-wallets.json` | Wrapper default: one node, two pools, four wallet agents/miners at 2 H/s each, about one block every 40 s (section 4); no `traffic`, phases or acceptance assertions. |
 | `portable prepare-shared` output | Full shared profile: two nodes, two pools, four SP wallets/CPU miners, eight background/four payment wallets, 40 H/s and 0.2 ordinary tx/s, with native funding and audited source/lifecycle configuration. |
 
 Use the prepared profile for the full campaign. Adding `--txd` alone does not
@@ -55,7 +55,11 @@ export WORK
 Keep this canonical workspace path short: the prepared shared profile checks
 that its collector Unix-socket paths are shorter than 108 bytes. If your HOME
 path is unusually long, select a shorter canonical, user-owned workspace before
-preparing inputs. Use a new workspace for each experiment.
+preparing inputs. The wrapper profile has the same limit on its Ark PostgreSQL
+socket, `<run>/private/ark-server-local-ark/socket/.s.PGSQL.<port>`: keep the
+run directory path at or under 56 bytes, or startup fails with
+`ark-postgres/local-ark exited during readiness`. Use a new workspace for each
+experiment.
 
 For a local source checkout, clone `https://github.com/EthnTuttle/silent-pool.git`
 and check out `$APP_REV` detached. No developer worktree, private capture or
@@ -127,9 +131,69 @@ export RUN_DIR="$WORK/runtime"
 
 Here `SOURCE_HASH` records the fetched application source's NAR hash as launch
 provenance; it is not an AP5 qualification grant. Full campaigns use their
-bundle's source binding instead. The wrapper supplies all binary paths, not
-the run directory, provenance, listener or lifetime. The latter are explicit
-CLI arguments. Type `stop` in this same process to stop this manual runtime.
+bundle's source binding instead. The wrapper supplies all binary paths and a
+default block cadence (below), not the run directory, provenance, listener or
+lifetime. The latter are explicit CLI arguments. Type `stop` in this same
+process to stop this manual runtime.
+
+#### Block cadence and session horizon
+
+The wrapper starts the node with `--pow-bits 0x2000cccc`: a block needs 1 in
+320 hashes, which at the scenario's 8 H/s is one block about every 40 seconds
+on average. Intervals are random; a gap of two or three minutes is normal.
+Three validation runs measured a 44 s mean over 105 blocks.
+The scenario issues shares at 1 in 32 hashes: about one share every four
+seconds across the four miners, ten per block. A pool's payout window is 8
+blocks of network work; with half the hash rate each, a pool fills it after
+about eleven minutes.
+
+Regtest halves the 50 BTC subsidy every 150 blocks and the lab node has no
+flag to change that, so one run has a fixed useful life:
+
+| Block subsidy falls below | At height | At 40 s per block |
+|---|---|---|
+| 5 000 000 sats (top ladder rung) | 1500 | about 16.7 h |
+| 3 000 000 sats | 1650 | about 18.3 h |
+| 1 000 000 sats | 1950 | about 21.7 h |
+| 500 000 sats (lowest ladder rung) | 2100 | about 23.3 h |
+| 330 sats (dust limit) | 3600 | about 40 h |
+
+These are whole-subsidy thresholds. A miner is paid its share of a block, so
+its own payout crosses each rung earlier: one halving (150 blocks, about 1.7
+h) for every factor of two. Start a fresh run instead of extending an old one.
+Chain-height waits scale with the cadence too: coinbase maturity (100 blocks)
+is about 67 minutes and three board confirmations about 2 minutes.
+
+Evidence records embed the full coinbase, which holds about 990 ladder
+outputs while the subsidy is 50 BTC. The run directory grew by about 1.7 GB
+per hour over the first 20 minutes of a validation run; expect less after each
+halving. This was not measured beyond the first subsidy era.
+
+The node does not retarget. Stopping workers slows blocks in proportion, and
+a block more than 20 minutes after its parent may use regtest's minimum
+difficulty (`docs/REGTEST-LAB.md` section 3.2).
+
+To choose another cadence, pass your own `--pow-bits` to the wrapper; it
+replaces the default. The value is the block target in consensus compact
+form, and the expected interval is `2^256 / ((target + 1) * total H/s)`:
+
+| `--pow-bits` | Hashes per block | At 8 H/s |
+|---|---|---|
+| `0x200fffff` | 16 | about 2 s nominal, 3.5 s observed; subsidy below 5M sats after 1.5 h |
+| `0x20010000` | 256 | about 32 s |
+| `0x2000cccc` (wrapper default) | 320 | about 40 s |
+| `0x20008888` | 480 | about 60 s |
+
+The compact mantissa (the low three bytes) must stay below `0x800000`. The
+node rejects `0x1f888800` as negative; the same target is written
+`0x20008888`. When the block target is easier than the scenario's share target
+(the `0x200fffff` row), the pool steps the share target down to it, so
+roughly every share is a block. The cadence is a startup consensus setting,
+not a live control:
+a different value needs a fresh run directory. `spc-lab runtime` invoked
+directly, and the full campaign above, keep the CLI default `0x200fffff`. So
+does a wrapper built from a revision older than this default, including the
+`APP_REV` pinned in section 2: pass `--pow-bits 0x2000cccc` yourself there.
 
 For finite headless `runtime`, omit `--listen` and `--interactive`, and pass
 `--duration-secs 120`. There is no `runtime --headless` or `--run-root` flag.
@@ -300,6 +364,9 @@ Their external-L2 and narrower workload limits apply to those recorded runs.
 
 - A wrapper's one-node, no-traffic preset is not the two-node native-funded
   profile, even if all its declared processes start and pages load.
+- A wrapper run is bounded by regtest's 150-block halving: at the default
+  cadence the block subsidy is below the top ladder rung after about 16.7
+  hours (section 4). Later payouts in that run are not representative.
 - Periodic-retarget response, production TDP/JD/SV1/general-SV2 interoperability,
   mainnet and a green full upstream node suite are not established by this guide.
 - Wallet balances/capabilities require their actual providers and source ages.

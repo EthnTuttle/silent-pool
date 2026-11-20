@@ -2,6 +2,16 @@
 pkgs.writeShellApplication {
   name = "spc-lab-self-hosted-ark";
   text = ''
+    # Default block cadence for the 8 H/s wrapper scenario: a 1-in-320 target,
+    # about 40 s per block (docs/LAB-RUNTIME.md section 4). `spc-lab runtime`
+    # rejects a repeated --pow-bits, so the default is dropped when the caller
+    # passes their own.
+    pow_bits=(--pow-bits 0x2000cccc)
+    for arg in "$@"; do
+      case "$arg" in
+        --pow-bits | --pow-bits=*) pow_bits=() ;;
+      esac
+    done
     exec ${lab}/bin/spc-lab runtime \
       --scenario ${src}/crates/spc-lab/scenarios/lab-ark-wallets.json \
       --node ${node}/bin/rbitcoin-node \
@@ -17,6 +27,7 @@ pkgs.writeShellApplication {
       --postgres-bin-dir ${pkgs.postgresql_17}/bin \
       --redis-server ${pkgs.redis}/bin/redis-server \
       --redis-cli ${pkgs.redis}/bin/redis-cli \
+      "''${pow_bits[@]}" \
       "$@"
   '';
 }
