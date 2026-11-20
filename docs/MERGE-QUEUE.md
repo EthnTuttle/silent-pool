@@ -448,3 +448,22 @@ nixosModules registration, OPERATIONS section 7 subsection and the
 DEPLOY-TESTNET5 monitoring section applied from its fragment; 23
 promtool-validated rules). `spc-testnet5-host` toplevel evals on the final
 merged tree; full `nix flake check` run by the merge session before push.
+
+## Lab run fixes and follow-ups (2026-11-19/20)
+
+First self-hosted lab run since the chain-identity gate and the ladder landed.
+Orchestrator fixes on master (spc-lab tests green; full flake check not re-run
+on them): ark-role pool processes start after the fronts (`5931e9a` range),
+profile-less scenarios run native miners explicitly unaudited, and the lab
+pool template renders `max_payout_slots = 1024` (`3237f46`).
+
+A 4.5 h run then stalled at height 4651: regtest halves every 150 blocks, the
+lab mined a block every ~3.5 s, and the first block of the 2-sat subsidy era
+failed settlement (`window contains an id the distribution did not publish`),
+which holds template building. Evidence:
+`/home/ethan/.spc-lab/20261119T112514Z-play5/runtime` (machine-local).
+
+| branch | base SHA | ready SHA | owned paths | merge notes | gate |
+|---|---|---|---|---|---|
+| `wp-payout-liveness` | `3237f46` | pending | front/payout agreement on which identities a tiny reward publishes; retry (not error) for a block entry whose slice row has not arrived yet; tests; decision record if the spec is silent | SPEC body hunks via changelog fragment | fmt/clippy/test -> merge session |
+| `wp-lab-cadence` | `3237f46` | pending | slower default block cadence for the self-hosted wrapper, LAB-RUNTIME session-horizon text, changelog fragment | flake.nix / bins/spc-lab hunks reported | 20 min live run evidence + spc-lab tests -> merge session |
