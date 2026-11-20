@@ -759,6 +759,174 @@ fn zero_balances_are_dropped() {
     assert!(r.forfeited.is_empty());
 }
 
+/// Decision 2026-11-20-zero-rounded-shares: published iff `owed > 0`.
+#[test]
+fn publication_rule_is_nonzero_owed() {
+    assert!(!is_published(0, 0));
+    assert!(is_published(1, 0));
+    assert!(is_published(0, 1));
+    assert!(is_published(u64::MAX, u64::MAX));
+
+    let raw = RawPayouts {
+        raw: BTreeMap::from([([1; 32], 0), ([2; 32], 1), ([3; 32], 0)]),
+        pool_sats: 1,
+        r_net: 2,
+        f_net: 0,
+    };
+    let pending = BTreeMap::from([([3; 32], 5), ([4; 32], 0), ([5; 32], 9)]);
+    let published = published_ids(&raw, &pending);
+    assert_eq!(published, BTreeSet::from([[2; 32], [3; 32], [5; 32]]));
+
+    // Both routings carry exactly the published set, on exactly one rail.
+    let pool = route_tiers(&raw, &pending, &BTreeMap::new(), &cfg(1_000, 10), 2).unwrap();
+    let jd = route_jd_tiers(&raw, &pending, &BTreeMap::new(), &cfg(1_000, 10), 2).unwrap();
+    for routing in [&pool, &jd] {
+        assert_eq!(
+            routing.owed.keys().copied().collect::<BTreeSet<_>>(),
+            published
+        );
+        let on_rails: Vec<SpId> = routing
+            .kept
+            .iter()
+            .chain(&routing.pending)
+            .chain(&routing.ark_due)
+            .chain(&routing.forfeited)
+            .map(|(id, _)| *id)
+            .collect();
+        assert_eq!(on_rails.len(), published.len());
+        assert_eq!(on_rails.into_iter().collect::<BTreeSet<_>>(), published);
+    }
+    let entries: BTreeSet<SpId> = build_weights(&jd, raw.pool_sats)
+        .entries
+        .iter()
+        .map(|e| e.sp_id)
+        .collect();
+    assert_eq!(entries, published);
+}
+
+/// Conservation at 0-4 sat rewards with four identities, v1 and v2 raw,
+/// with and without prior pending: every sat of `T` is the pool's gross
+/// fee/rounding, an Ark due, a forfeit or a pending movement, and an
+/// identity is carried exactly when it is owed something.
+#[test]
+fn tiny_rewards_conserve_every_sat() {
+    const FP: [u8; 32] = [7; 32];
+    let ids: [SpId; 4] = [[1; 32], [2; 32], [3; 32], [4; 32]];
+    // Window work 36 / 20 / 8 / 2 of 66 over two slices.
+    let per_slice: [[u128; 4]; 2] = [[20, 12, 6, 0], [16, 8, 2, 2]];
+    let window = |version: WorkUnitVersion| {
+        let slices: Vec<SliceAgg> = per_slice
+            .iter()
+            .enumerate()
+            .map(|(i, work)| SliceAgg {
+                slice_id: 2 - i as u64,
+                height: 800_000,
+                prev_hash: [1; 32],
+                front_id: 0,
+                difficulty: work.iter().sum(),
+                diff_fee_sum: 0,
+                per_id: ids
+                    .iter()
+                    .zip(work)
+                    .filter(|(_, d)| **d > 0)
+                    .map(|(id, d)| (*id, (*d, 0)))
+                    .collect(),
+                root: [0; 32],
+                work_unit_version: version,
+                work_unit_fingerprint: (version == WorkUnitVersion::V2).then_some(FP),
+            })
+            .collect();
+        Window {
+            t: slices.len(),
+            d_win: 66,
+            slices,
+            high_water: BTreeMap::new(),
+        }
+    };
+    // 1 deliverable, 2 unregistered, 3 committed but not derived, 4 unregistered.
+    let ark = BTreeMap::from([
+        (
+            ids[0],
+            ArkCapability {
+                registered: true,
+                registration_committed: true,
+                dest_known: true,
+            },
+        ),
+        (
+            ids[2],
+            ArkCapability {
+                registered: false,
+                registration_committed: true,
+                dest_known: false,
+            },
+        ),
+    ]);
+    let priors = [
+        BTreeMap::new(),
+        BTreeMap::from([(ids[3], 5u64)]),
+        BTreeMap::from([(ids[0], 2u64), (ids[1], 1), (ids[3], 3)]),
+    ];
+    for version in [WorkUnitVersion::V1, WorkUnitVersion::V2] {
+        let window = window(version);
+        for reward in 0u64..=4 {
+            let raw = match version {
+                WorkUnitVersion::V1 => raw_payouts(&window, reward, 0, 100).unwrap(),
+                WorkUnitVersion::V2 => raw_payouts_v2(&window, reward, 0, 100).unwrap(),
+            };
+            // Every credited identity is in `raw`, zero-rounded or not.
+            assert_eq!(raw.raw.len(), 4);
+            let raw_sum: u64 = raw.raw.values().sum();
+            assert_eq!(raw_sum + raw.pool_sats, reward);
+            for prior in &priors {
+                let published = published_ids(&raw, prior);
+                let owed = |id: &SpId| raw.raw[id] + prior.get(id).copied().unwrap_or(0);
+                assert_eq!(
+                    published,
+                    ids.iter().filter(|id| owed(id) > 0).copied().collect()
+                );
+
+                let pool = route_tiers(&raw, prior, &ark, &cfg(1_000, 10), reward).unwrap();
+                assert_net_pool(&pool, &raw, prior);
+                assert_eq!(pool.pay_p, reward);
+                assert!(pool.kept.is_empty());
+                assert_eq!(
+                    pool.owed.keys().copied().collect::<BTreeSet<_>>(),
+                    published
+                );
+                assert_eq!(
+                    pool.pending_deltas.keys().copied().collect::<BTreeSet<_>>(),
+                    published
+                );
+                let rails: Vec<SpId> = pool
+                    .pending
+                    .iter()
+                    .chain(&pool.ark_due)
+                    .chain(&pool.forfeited)
+                    .map(|(id, _)| *id)
+                    .collect();
+                assert_eq!(rails.len(), published.len());
+                assert_eq!(rails.into_iter().collect::<BTreeSet<_>>(), published);
+                // Only fresh raw of an unregistered id is forfeited.
+                for (id, sats) in &pool.forfeited {
+                    assert!(!ark.contains_key(id));
+                    assert_eq!(*sats, raw.raw[id]);
+                    assert!(*sats > 0);
+                }
+                for (_, sats) in pool.ark_due.iter().chain(&pool.pending) {
+                    assert!(*sats > 0);
+                }
+
+                let jd = route_jd_tiers(&raw, prior, &ark, &cfg(1_000, 10), reward).unwrap();
+                assert!(jd.kept.is_empty());
+                assert_eq!(jd.pay_p, reward);
+                assert_eq!(jd.owed.keys().copied().collect::<BTreeSet<_>>(), published);
+                assert_eq!(apply(&jd, prior), apply(&pool, prior));
+            }
+        }
+    }
+}
+
 #[test]
 fn raising_the_threshold_does_not_change_owed() {
     let raw = RawPayouts {

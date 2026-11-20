@@ -60,6 +60,17 @@ const SCRUB_INTERVAL: Duration = Duration::from_secs(600);
 /// XADD; the front ignores events for a block hash it already applied.
 const REPUBLISH_INTERVAL: Duration = Duration::from_secs(30);
 
+/// How many consecutive attempts a found block may wait for a frozen-window
+/// slice row that `payout` has not persisted yet. The streams are read
+/// `spc:slices` then `spc:blocks`, each blocking up to a second, so a slice
+/// sealed and a block found on the next job can be delivered block first;
+/// the slice row then lands on the next loop pass. The first attempt and a
+/// pending pass in the same loop pass can both precede it, and later
+/// attempts are `PENDING_RETRY_INTERVAL` apart, so four attempts cover at
+/// least two full intervals. Past the bound every attempt is an error (the
+/// entry still stays unacked): the slice was lost, not late.
+const SLICE_WAIT_MAX_ATTEMPTS: u32 = 4;
+
 /// Upper bound on the slice walk used to reconstruct one window. Slices are
 /// pruned after `retain_windows`; hitting this bound means the walk is
 /// ambiguous, so settlement holds (fail closed).
@@ -83,6 +94,8 @@ pub enum PayoutError {
     Overflow,
     #[error("ledger event: {0}")]
     LedgerEvent(String),
+    #[error("frozen window slice {slice_id} still not persisted after {attempts} attempts")]
+    SliceOverdue { slice_id: u64, attempts: u32 },
 }
 
 /// A chain view failure never books anything; settlement waits and retries.
@@ -458,7 +471,7 @@ pub enum ReconstructError {
     MissingFrozenV2Target,
     #[error("snapshot has two entries for one id")]
     DuplicateEntry(SpId),
-    #[error("window contains an id the distribution did not publish")]
+    #[error("window owes an id the distribution did not publish")]
     WindowMismatch,
     #[error("snapshot entry {0:?} has no payout key")]
     MissingPayoutKey(SpId),
@@ -660,18 +673,20 @@ fn reconstruct_once(input: &ReconstructInput<'_>) -> Result<Reconstructed, Recon
             return Err(ReconstructError::DuplicateEntry(e.sp_id));
         }
     }
-    // The window was frozen into the distribution: every identity it credits
+    // The window was frozen into the distribution: every identity it owes
     // must have been published, or the reconstruction is not this block's.
-    for id in raw.raw.keys() {
-        if !entry_by_id.contains_key(id) {
-            return Err(ReconstructError::WindowMismatch);
-        }
-    }
-    if mode == TemplateMode::Pool
-        && input
-            .pending
-            .iter()
-            .any(|(id, p)| *p > 0 && !entry_by_id.contains_key(id))
+    // "Owes" is the front's own publication rule (`published_ids`, decision
+    // 2026-11-20-zero-rounded-shares): a share that floors to zero sats with
+    // nothing pending has no entry, so its absence is not a mismatch. JD
+    // settlement keeps its scope: the window's credits, not prior pending.
+    let no_prior = BTreeMap::new();
+    let prior = match mode {
+        TemplateMode::Pool => input.pending,
+        TemplateMode::Jd => &no_prior,
+    };
+    if spc_accounting::published_ids(&raw, prior)
+        .iter()
+        .any(|id| !entry_by_id.contains_key(id))
     {
         return Err(ReconstructError::WindowMismatch);
     }
@@ -1215,14 +1230,51 @@ pub struct PayoutService {
     /// Orphan settlements by reason
     /// (`spc_orphaned_settlement_total{reason}`, SPEC §9).
     orphaned: crate::role_metrics::CounterMap,
+    /// Found blocks waiting for a frozen-window slice row, with the number
+    /// of attempts that found it missing (`SLICE_WAIT_MAX_ATTEMPTS`).
+    slice_waits: Arc<std::sync::Mutex<BTreeMap<[u8; 32], u32>>>,
 }
 
 /// How one group entry ends up after handling.
 enum Disposition {
     /// Handled (or settle-orphaned): ack it.
     Done,
-    /// Waiting on the chain: leave unacked; the pending pass retries it.
+    /// Waiting on the chain or on a slice row: leave unacked; the pending
+    /// pass retries it.
     Retry,
+}
+
+/// The job's frozen window rows in the job's own order, or the first frozen
+/// slice id that is not among the stored rows.
+fn frozen_slices(slice_ids: &[u64], stored: &[SliceRow]) -> Result<Vec<SliceRow>, u64> {
+    slice_ids
+        .iter()
+        .map(|id| {
+            stored
+                .iter()
+                .find(|row| row.slice_id == *id)
+                .cloned()
+                .ok_or(*id)
+        })
+        .collect()
+}
+
+/// Count one more attempt that found a frozen slice of `block` missing.
+/// `Ok(attempt)` while the wait is within `SLICE_WAIT_MAX_ATTEMPTS`.
+fn note_slice_wait(
+    waits: &mut BTreeMap<[u8; 32], u32>,
+    block: [u8; 32],
+    slice_id: u64,
+) -> Result<u32, PayoutError> {
+    let attempts = waits.entry(block).or_insert(0);
+    *attempts = attempts.saturating_add(1);
+    if *attempts > SLICE_WAIT_MAX_ATTEMPTS {
+        return Err(PayoutError::SliceOverdue {
+            slice_id,
+            attempts: *attempts,
+        });
+    }
+    Ok(*attempts)
 }
 struct AbortTask(tokio::task::JoinHandle<()>);
 type RecomputedLedger = (Vec<LedgerRow>, Vec<([u8; 32], i64)>, Option<i64>);
@@ -1340,6 +1392,7 @@ impl PayoutService {
             aggregate_server: None,
             ark_retry_blocks: 6,
             orphaned: crate::role_metrics::CounterMap::default(),
+            slice_waits: Arc::default(),
         }
     }
 
@@ -1635,6 +1688,57 @@ impl PayoutService {
 
     async fn on_block(&self, payload: &[u8]) -> Result<Disposition, PayoutError> {
         let e = BlockEvent::decode(payload)?;
+        let block_hash = e.block_hash;
+        let result = self.on_block_event(e).await;
+        if matches!(result, Ok(Disposition::Done)) {
+            self.clear_slice_wait(&block_hash);
+        }
+        result
+    }
+
+    fn clear_slice_wait(&self, block_hash: &[u8; 32]) {
+        if let Ok(mut waits) = self.slice_waits.lock() {
+            waits.remove(block_hash);
+        }
+    }
+
+    /// A frozen slice of this block's window has no row yet. Within the
+    /// bound that is the slice/block stream ordering race: hold the block
+    /// (`Ok(None)`, unacked) and say what it waits for. Past the bound the
+    /// slice is treated as lost and every attempt is an error.
+    fn await_frozen_slice(
+        &self,
+        e: &BlockEvent,
+        slice_id: u64,
+    ) -> Result<Option<RecomputedLedger>, PayoutError> {
+        let attempt = {
+            let mut waits = self
+                .slice_waits
+                .lock()
+                .map_err(|_| PayoutError::Snapshot("slice wait state poisoned"))?;
+            note_slice_wait(&mut waits, e.block_hash, slice_id)?
+        };
+        if attempt == 1 {
+            tracing::debug!(
+                block = %display_hash(&e.block_hash),
+                height = e.height,
+                slice_id,
+                "found block waits for a frozen window slice not persisted yet; retrying"
+            );
+        } else {
+            tracing::warn!(
+                block = %display_hash(&e.block_hash),
+                height = e.height,
+                slice_id,
+                attempt,
+                max_attempts = SLICE_WAIT_MAX_ATTEMPTS,
+                "found block still waits for a frozen window slice not persisted yet; retrying"
+            );
+        }
+        Ok(None)
+    }
+
+    async fn on_block_event(&self, e: BlockEvent) -> Result<Disposition, PayoutError> {
         if let Some(old) = self.store.economic_event_digest(&e.block_hash).await? {
             if old != e.snapshot_id()? {
                 return Err(PayoutError::Snapshot("conflicting found payload"));
@@ -2124,14 +2228,11 @@ impl PayoutService {
                     let frozen = job
                         .prior()
                         .map_err(|_| PayoutError::Snapshot("frozen economic P"))?;
-                    let mut selected = Vec::new();
-                    for id in &job.slice_ids {
-                        let row = slices
-                            .iter()
-                            .find(|s| s.slice_id == *id)
-                            .ok_or(PayoutError::Snapshot("frozen visible slice missing"))?;
-                        selected.push(row.clone());
-                    }
+                    let selected = match frozen_slices(&job.slice_ids, &slices) {
+                        Ok(selected) => selected,
+                        Err(slice_id) => return self.await_frozen_slice(e, slice_id),
+                    };
+                    self.clear_slice_wait(&e.block_hash);
                     if selected.windows(2).any(|w| w[0].slice_id <= w[1].slice_id) {
                         return Err(PayoutError::Snapshot("frozen slice ordering"));
                     }
@@ -5331,6 +5432,145 @@ mod tests {
         assert!(deltas.is_empty());
     }
 
+    /// Service level: a block whose frozen window names a slice row not
+    /// persisted yet is held without an error for `SLICE_WAIT_MAX_ATTEMPTS`
+    /// attempts, errors on every attempt after that while the row stays
+    /// missing, and settles as soon as the row exists.
+    #[tokio::test]
+    async fn missing_frozen_slice_is_a_bounded_retry_then_an_error() {
+        let Some((store, streams)) = ark_test_env().await else {
+            return;
+        };
+        let (alice, bob): ([u8; 32], [u8; 32]) = (rand::random(), rand::random());
+        for sp_id in [alice, bob] {
+            store
+                .upsert_identity(&SpIdentityRow {
+                    sp_id,
+                    b_scan: vec![2; 33],
+                    b_spend: vec![3; 33],
+                    network: 3,
+                })
+                .await
+                .unwrap();
+        }
+        let older = 0x7000_0000_0000_0000u64 | (u64::from(rand::random::<u32>()) << 8);
+        let newer = older + 1;
+        let height = i32::MAX as u32 - 16;
+        let row = |slice_id: u64, sp_id: [u8; 32]| SliceRow {
+            slice_id,
+            height,
+            prev_hash: [1; 32],
+            ref_job_id: 1,
+            ref_fees: 0,
+            n_shares: 1,
+            difficulty: "100".into(),
+            root: [2; 32],
+            shares: vec![3],
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            credits: vec![SliceCreditRow {
+                sp_id,
+                diff_sum: "100".into(),
+                diff_fee_sum: "0".into(),
+            }],
+        };
+        store.insert_slice(&row(older, bob)).await.unwrap();
+
+        let mut entries = vec![
+            entry(alice, Rail::Forfeit, None, 100),
+            entry(bob, Rail::Forfeit, None, 100),
+        ];
+        entries.sort_by_key(|e| e.sp_id);
+        let fingerprint: [u8; 32] = rand::random();
+        store
+            .insert_snapshot(&SnapshotRow {
+                fingerprint,
+                height,
+                a_send_x: [4; 32],
+                distribution_id: None,
+                entries: serde_json::to_value(&entries).unwrap(),
+                high_water: serde_json::json!({ "0": newer.to_string() }),
+                work_unit_version: WorkUnitVersion::V1,
+                work_unit_fingerprint: None,
+                window_rule: WindowRule::ShareWorkLegacy,
+                window_target: Some("200".into()),
+            })
+            .await
+            .unwrap();
+        let svc = PayoutService::new(
+            store.clone(),
+            streams,
+            RETRY_DEPTH,
+            30,
+            Arc::new(ReconstructChain {
+                coinbase: vec![output(pool_script(), 200)],
+                economics: BlockEconomics {
+                    subsidy: 200,
+                    fees: 0,
+                },
+            }),
+            None,
+            0,
+        )
+        .with_accounting(base_cfg(2));
+        let event = BlockEvent {
+            economic: Some(spc_accounting::economic::FrozenJob {
+                version: 1,
+                revision: 0,
+                parent_hash: [1; 32],
+                job_id: 1,
+                generation: 1,
+                balances: entries
+                    .iter()
+                    .map(|e| spc_accounting::economic::Balance {
+                        sp_id: e.sp_id,
+                        booked: 0,
+                        reserved: 0,
+                        available: 0,
+                    })
+                    .collect(),
+                slice_ids: vec![newer, older],
+            }),
+            block_hash: rand::random(),
+            height,
+            front_id: 0,
+            fingerprint,
+            a_send_x: [4; 32],
+            high_water: BTreeMap::from([(0u8, newer.to_string())]),
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            window_rule: WindowRule::ShareWorkLegacy,
+            window_target: 200,
+            entries: entries.clone(),
+        };
+
+        for _ in 0..SLICE_WAIT_MAX_ATTEMPTS {
+            assert!(svc.recompute(&event, fingerprint).await.unwrap().is_none());
+        }
+        for extra in 1..=2 {
+            match svc.recompute(&event, fingerprint).await {
+                Err(PayoutError::SliceOverdue { slice_id, attempts }) => {
+                    assert_eq!(slice_id, newer);
+                    assert_eq!(attempts, SLICE_WAIT_MAX_ATTEMPTS + extra);
+                }
+                other => panic!("expected an overdue slice, got {:?}", other.map(|_| ())),
+            }
+        }
+
+        store.insert_slice(&row(newer, alice)).await.unwrap();
+        let (ledger, deltas, _) = svc
+            .recompute(&event, fingerprint)
+            .await
+            .unwrap()
+            .expect("the block settles once its slice row exists");
+        assert_eq!(ledger.len(), 2);
+        assert!(ledger
+            .iter()
+            .all(|row| row.rail == LedgerRail::Forfeit && row.forfeited_sats == 100));
+        assert!(deltas.is_empty());
+        assert!(svc.slice_waits.lock().unwrap().is_empty());
+    }
+
     /// A persisted window target that is not a u128 is a corrupt row:
     /// settlement fails closed (an error the consumer group retries and
     /// alarms on), never a silent fall-back to the estimate.
@@ -5490,6 +5730,419 @@ mod tests {
         // Conservation: paid + retained pending == owed.
         let after = 100i64 + row.pending_delta;
         assert_eq!(i64::try_from(row.paid_sats).unwrap() + after, 500_100);
+    }
+
+    fn hex_id(text: &str) -> SpId {
+        hex::decode(text).unwrap().try_into().unwrap()
+    }
+
+    const LAB_FP: [u8; 32] = [0x7f; 32];
+
+    /// `(slice_id, height, credits)` of one v2 fixture slice.
+    type V2Row<'a> = (u64, u32, &'a [(SpId, u128)]);
+
+    /// v2 slice rows, newest first.
+    fn v2_rows(rows: &[V2Row<'_>]) -> Vec<SliceRow> {
+        rows.iter()
+            .map(|(slice_id, height, credits)| {
+                let credits: Vec<_> = credits.iter().map(|(id, d)| (*id, *d, 0)).collect();
+                let difficulty = credits.iter().map(|c| c.1).sum();
+                let mut row = slice_row(*slice_id, *height, difficulty, 1, &credits);
+                row.work_unit_version = WorkUnitVersion::V2;
+                row.work_unit_fingerprint = Some(LAB_FP);
+                row
+            })
+            .collect()
+    }
+
+    /// Entries and coinbase as the front's pool-template pipeline publishes
+    /// them for a sub-rung window: the same window selection, raw payouts,
+    /// routing and distribution builder `Front::refresh` runs, then the
+    /// `BlockEvent` wire mapping. Every id in `registered` has a committed
+    /// registration and a derived destination.
+    fn front_publication(
+        slices: &[SliceRow],
+        target: u128,
+        subsidy: u64,
+        prior: &BTreeMap<SpId, u64>,
+        registered: &BTreeSet<SpId>,
+    ) -> (Vec<Entry>, Vec<CoinbaseOutput>) {
+        let aggs: Vec<SliceAgg> = slices.iter().map(|row| slice_agg(row).unwrap()).collect();
+        let window =
+            select_window_v2(&aggs, u64::MAX, target, BTreeMap::new(), Some(LAB_FP)).unwrap();
+        let raw = if window.slices.is_empty() {
+            RawPayouts {
+                raw: BTreeMap::new(),
+                pool_sats: subsidy,
+                r_net: subsidy,
+                f_net: 0,
+            }
+        } else {
+            raw_payouts_v2(&window, subsidy, 0, 100).unwrap()
+        };
+        let cfg = AccountingConfig::default();
+        let tier = TierConfig {
+            fee_bps: cfg.fee_bps,
+            dust_limit_sats: cfg.dust_limit_sats,
+            coinbase_threshold_sats: 330,
+            max_payout_slots: cfg.max_payout_slots,
+            budget_wu: cfg.budget_wu,
+            overhead_wu: cfg.overhead_wu,
+        };
+        let caps: BTreeMap<SpId, ArkCapability> = registered
+            .iter()
+            .map(|id| {
+                let cap = ArkCapability {
+                    registered: true,
+                    registration_committed: true,
+                    dest_known: true,
+                };
+                (*id, cap)
+            })
+            .collect();
+        let routing = spc_accounting::route_tiers_with_keys(
+            &raw,
+            prior,
+            &caps,
+            &tier,
+            subsidy,
+            Some(&BTreeSet::new()),
+        )
+        .unwrap();
+        let dests: BTreeMap<SpId, Vec<u8>> =
+            registered.iter().map(|id| (*id, vec![0xd5; 34])).collect();
+        let send = spc_crypto::SendKey::generate(4650).unwrap();
+        let dist = spc_accounting::build_distribution(
+            4650,
+            &send,
+            &routing,
+            &BTreeMap::new(),
+            &pool_script(),
+            &dests,
+        )
+        .unwrap();
+        let entries = dist
+            .entries
+            .iter()
+            .map(|e| Entry {
+                sp_id: e.sp_id,
+                owed_sats: e.owed_sats,
+                rail: match e.rail {
+                    spc_accounting::Rail::Coinbase => Rail::Coinbase,
+                    spc_accounting::Rail::Ark => Rail::Ark,
+                    spc_accounting::Rail::Pending => Rail::Pending,
+                    spc_accounting::Rail::Forfeit => Rail::Forfeit,
+                },
+                p_x: e.p_x.clone(),
+                dest_id: e.dest_id.clone().unwrap_or_default(),
+                sats: e.sats,
+            })
+            .collect();
+        let coinbase = dist
+            .outputs
+            .iter()
+            .map(|(script, value)| output(script.clone(), *value))
+            .collect();
+        (entries, coinbase)
+    }
+
+    fn tiny_input<'a>(
+        hw: &'a BTreeMap<u8, String>,
+        entries: &'a [Entry],
+        slices: &'a [SliceRow],
+        prior: &'a BTreeMap<SpId, u64>,
+        coinbase: &'a [CoinbaseOutput],
+        subsidy: u64,
+        delivered: &'a BTreeSet<SpId>,
+    ) -> ReconstructInput<'a> {
+        ReconstructInput {
+            height: 4650,
+            high_water: hw,
+            entries,
+            slices,
+            work_unit_version: WorkUnitVersion::V2,
+            work_unit_fingerprint: Some(LAB_FP),
+            window_rule: WindowRule::NetworkBlockWork,
+            window_target: Some(65),
+            window_truncated: false,
+            pending: prior,
+            coinbase,
+            economics: BlockEconomics { subsidy, fees: 0 },
+            delivered,
+            cfg: AccountingConfig::default(),
+            coinbase_threshold_sats: 330,
+        }
+    }
+
+    /// Lab run 20261119T112514Z-play5, pool B. The window frozen for height
+    /// 4650 (`distribution_frozen`, job f38ddc0e): Q = 65, 11 slices,
+    /// D_win = 66, `da24..` 38 units and `fdda..` 28 units.
+    fn lab_pool_b_window() -> (SpId, SpId, Vec<SliceRow>) {
+        let da = hex_id("da2443ea8785c0ccef50ae7fa58ba740a559da4e06099fd15ea7c04725e89ece");
+        let fd = hex_id("fdda338d91913138897cff328ce6070d6ff063d8bf6b031c5448534441cadce8");
+        let rows = v2_rows(&[
+            (144116983179756359, 4649, &[(da, 4), (fd, 4)]),
+            (144116983179754108, 4648, &[(da, 4), (fd, 2)]),
+            (144116983179751382, 4647, &[(fd, 2)]),
+            (144116983179747863, 4647, &[(da, 2), (fd, 6)]),
+            (144116983179745362, 4646, &[(da, 2), (fd, 2)]),
+            (144116983179739612, 4645, &[(da, 6), (fd, 2)]),
+            (144116983179735361, 4644, &[(da, 4), (fd, 2)]),
+            (144116983179726859, 4643, &[(da, 4), (fd, 4)]),
+            (144116983179719359, 4641, &[(da, 6)]),
+            (144116983179712111, 4640, &[(da, 2), (fd, 2)]),
+            (144116983179705609, 4638, &[(da, 4), (fd, 2)]),
+        ]);
+        (da, fd, rows)
+    }
+
+    /// The observed halt (decision 2026-11-20-zero-rounded-shares). At 4 sats
+    /// both identities earn a sat and both are published; at 2 sats
+    /// `fdda..` floors to `floor(2 * 28 / 66) = 0`, the front publishes only
+    /// `da24..`, and settlement must still book the block.
+    #[test]
+    fn lab_two_sat_block_settles_with_a_zero_rounded_identity() {
+        let (da, fd, slices) = lab_pool_b_window();
+        let hw = high_water(2, "144116983179756359");
+        let prior = BTreeMap::new();
+        let registered = BTreeSet::from([da, fd]);
+
+        // Era of 4 sats: the same window publishes and settles both ids.
+        let (entries, coinbase) = front_publication(&slices, 65, 4, &prior, &registered);
+        assert_eq!(
+            entries
+                .iter()
+                .map(|e| (e.sp_id, e.rail, e.sats))
+                .collect::<Vec<_>>(),
+            vec![(da, Rail::Ark, 2), (fd, Rail::Ark, 1)]
+        );
+        let four = reconstruct_settlement(&tiny_input(
+            &hw,
+            &entries,
+            &slices,
+            &prior,
+            &coinbase,
+            4,
+            &registered,
+        ))
+        .unwrap();
+        assert_eq!(four.raw, BTreeMap::from([(da, 2), (fd, 1)]));
+        assert_eq!(four.ledger.len(), 2);
+
+        // Height 4650, 2 sats: exactly what front-b1 froze and published.
+        let (entries, coinbase) = front_publication(&slices, 65, 2, &prior, &registered);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            (
+                entries[0].sp_id,
+                entries[0].rail,
+                entries[0].owed_sats,
+                entries[0].sats
+            ),
+            (da, Rail::Ark, 1, 1)
+        );
+        assert_eq!(coinbase, vec![output(pool_script(), 2)]);
+        let two = reconstruct_settlement(&tiny_input(
+            &hw,
+            &entries,
+            &slices,
+            &prior,
+            &coinbase,
+            2,
+            &registered,
+        ))
+        .unwrap();
+        assert_eq!(two.window.len(), 11);
+        assert_eq!(two.raw, BTreeMap::from([(da, 1), (fd, 0)]));
+        assert_eq!(
+            two.ledger,
+            vec![LedgerRow {
+                sp_id: da,
+                rail: LedgerRail::Ark,
+                paid_sats: 0,
+                ark_due_sats: 1,
+                forfeited_sats: 0,
+                pending_delta: 0,
+            }]
+        );
+        assert!(two.pending_deltas.is_empty());
+    }
+
+    /// The fix must not hide a real divergence: an identity the window owes
+    /// sats (fresh raw, or frozen prior pending in pool-template mode) and
+    /// the distribution does not carry still fails closed.
+    #[test]
+    fn a_window_owing_an_unpublished_identity_still_fails_closed() {
+        let (da, fd, slices) = lab_pool_b_window();
+        let hw = high_water(2, "144116983179756359");
+        let none = BTreeMap::new();
+        let registered = BTreeSet::from([da, fd]);
+        let mismatch = |entries: &[Entry],
+                        prior: &BTreeMap<SpId, u64>,
+                        coinbase: &[CoinbaseOutput],
+                        subsidy: u64| {
+            matches!(
+                reconstruct_settlement(&tiny_input(
+                    &hw,
+                    entries,
+                    &slices,
+                    prior,
+                    coinbase,
+                    subsidy,
+                    &registered,
+                )),
+                Err(ReconstructError::WindowMismatch)
+            )
+        };
+
+        // 4 sats: `fdda..` earns 1 sat. Dropping its entry is a mismatch.
+        let (entries, coinbase) = front_publication(&slices, 65, 4, &none, &registered);
+        let without_fd: Vec<Entry> = entries.iter().filter(|e| e.sp_id != fd).cloned().collect();
+        assert!(mismatch(&without_fd, &none, &coinbase, 4));
+
+        // 2 sats: `da24..` earns 1 sat. An empty distribution is a mismatch
+        // even though `fdda..` may legitimately be absent.
+        let (entries, coinbase) = front_publication(&slices, 65, 2, &none, &registered);
+        assert!(mismatch(&[], &none, &coinbase, 2));
+
+        // 2 sats, `fdda..` rounds to zero but its frozen prior pending is
+        // 7 sats: it is owed, so it must be published.
+        let prior = BTreeMap::from([(fd, 7)]);
+        assert!(mismatch(&entries, &prior, &coinbase, 2));
+        let (with_prior, coinbase) = front_publication(&slices, 65, 2, &prior, &registered);
+        assert_eq!(with_prior.len(), 2);
+        let settled = reconstruct_settlement(&tiny_input(
+            &hw,
+            &with_prior,
+            &slices,
+            &prior,
+            &coinbase,
+            2,
+            &registered,
+        ))
+        .unwrap();
+        let row = settled.ledger.iter().find(|r| r.sp_id == fd).unwrap();
+        assert_eq!((row.ark_due_sats, row.pending_delta), (7, -7));
+
+        // An id outside the window with frozen prior pending and no entry.
+        let stranger = BTreeMap::from([(id(9), 1)]);
+        assert!(mismatch(&entries, &stranger, &coinbase, 2));
+    }
+
+    /// Conservation at tiny rewards (SPEC §4.6): for 0-4 sats over three
+    /// identities with mixed registration, front publication and settlement
+    /// agree, every published id has exactly one ledger row, unpublished ids
+    /// are exactly the zero-owed ones, and
+    /// `T = gross K + sum(ark) + sum(forfeit) + sum(pending delta)` with the
+    /// whole of `T` in the pool output.
+    #[test]
+    fn tiny_rewards_conserve_every_sat_through_publication_and_settlement() {
+        let (a, b, c) = (id(0xa1), id(0xb2), id(0xc3));
+        // D_win = 66 >= Q = 65: a 36, b 20, c 10.
+        let slices = v2_rows(&[
+            (30, 4649, &[(a, 16), (b, 8), (c, 2)]),
+            (20, 4648, &[(a, 12), (b, 8), (c, 4)]),
+            (10, 4647, &[(a, 8), (b, 4), (c, 4)]),
+        ]);
+        let hw = high_water(2, "30");
+        // a and c registered with a derived destination; b never registered.
+        let registered = BTreeSet::from([a, c]);
+        for prior in [BTreeMap::new(), BTreeMap::from([(c, 3u64)])] {
+            for reward in 0u64..=4 {
+                let (entries, coinbase) =
+                    front_publication(&slices, 65, reward, &prior, &registered);
+                assert_eq!(coinbase, vec![output(pool_script(), reward)]);
+                let settled = reconstruct_settlement(&tiny_input(
+                    &hw,
+                    &entries,
+                    &slices,
+                    &prior,
+                    &coinbase,
+                    reward,
+                    &registered,
+                ))
+                .unwrap_or_else(|e| panic!("reward {reward}: {e}"));
+                assert_eq!(settled.t_actual, reward);
+                assert_eq!(settled.raw.len(), 3);
+
+                let owed = |id: &SpId| settled.raw[id] + prior.get(id).copied().unwrap_or(0);
+                let published: BTreeSet<SpId> = entries.iter().map(|e| e.sp_id).collect();
+                let expected: BTreeSet<SpId> =
+                    [a, b, c].into_iter().filter(|id| owed(id) > 0).collect();
+                assert_eq!(published, expected, "reward {reward}");
+                let rows: BTreeSet<SpId> = settled.ledger.iter().map(|r| r.sp_id).collect();
+                assert_eq!(rows.len(), settled.ledger.len());
+                assert_eq!(rows, expected, "reward {reward}");
+
+                let (mut ark, mut forfeit, mut delta) = (0i128, 0i128, 0i128);
+                for row in &settled.ledger {
+                    let before = i128::from(prior.get(&row.sp_id).copied().unwrap_or(0));
+                    let after = before + i128::from(row.pending_delta);
+                    assert!(after >= 0);
+                    // Per row: paid + ark + forfeit + E = raw + P.
+                    assert_eq!(
+                        i128::from(row.paid_sats + row.ark_due_sats + row.forfeited_sats) + after,
+                        i128::from(owed(&row.sp_id)),
+                        "reward {reward}"
+                    );
+                    assert_eq!(row.paid_sats, 0);
+                    ark += i128::from(row.ark_due_sats);
+                    forfeit += i128::from(row.forfeited_sats);
+                    delta += i128::from(row.pending_delta);
+                }
+                let raw_sum: u64 = settled.raw.values().sum();
+                assert!(raw_sum <= reward);
+                let gross_k = i128::from(reward - raw_sum);
+                // The pool output holds all of T; nothing is created or lost.
+                assert_eq!(
+                    i128::from(coinbase[0].value),
+                    gross_k + ark + forfeit + delta
+                );
+                // Unregistered b forfeits exactly its fresh raw; nobody else.
+                assert_eq!(forfeit, i128::from(settled.raw[&b]));
+                assert_eq!(ark, i128::from(owed(&a) + owed(&c)));
+            }
+        }
+    }
+
+    #[test]
+    fn frozen_slices_names_the_first_slice_without_a_row() {
+        let stored = vec![
+            slice_row(9, 3, 1, 1, &[]),
+            slice_row(7, 2, 1, 1, &[]),
+            slice_row(5, 1, 1, 1, &[]),
+        ];
+        let selected = frozen_slices(&[9, 5], &stored).unwrap();
+        assert_eq!(
+            selected.iter().map(|s| s.slice_id).collect::<Vec<_>>(),
+            vec![9, 5]
+        );
+        assert_eq!(frozen_slices(&[9, 8, 6], &stored), Err(8));
+        assert_eq!(frozen_slices(&[], &stored), Ok(Vec::new()));
+    }
+
+    /// A missing frozen slice is a quiet retry for `SLICE_WAIT_MAX_ATTEMPTS`
+    /// attempts per block, then an error on every further attempt until the
+    /// wait is cleared.
+    #[test]
+    fn slice_wait_is_bounded_per_block() {
+        let mut waits = BTreeMap::new();
+        for attempt in 1..=SLICE_WAIT_MAX_ATTEMPTS {
+            assert_eq!(note_slice_wait(&mut waits, id(1), 42).unwrap(), attempt);
+        }
+        for extra in 1..=3 {
+            match note_slice_wait(&mut waits, id(1), 42) {
+                Err(PayoutError::SliceOverdue { slice_id, attempts }) => {
+                    assert_eq!(slice_id, 42);
+                    assert_eq!(attempts, SLICE_WAIT_MAX_ATTEMPTS + extra);
+                }
+                other => panic!("expected an overdue slice, got {other:?}"),
+            }
+        }
+        // Another block has its own budget, and a cleared wait starts over.
+        assert_eq!(note_slice_wait(&mut waits, id(2), 43).unwrap(), 1);
+        waits.remove(&id(1));
+        assert_eq!(note_slice_wait(&mut waits, id(1), 42).unwrap(), 1);
     }
 
     fn test_front() -> crate::front::Front {
