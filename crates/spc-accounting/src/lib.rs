@@ -577,6 +577,35 @@ pub struct Routing {
     pub pool_fee: u64,
 }
 
+/// The publication rule (decision 2026-11-20-zero-rounded-shares): an
+/// identity is carried by a distribution - an entry, a rail, a ledger row -
+/// exactly when its full entitlement `owed = raw + prior pending` is nonzero.
+///
+/// A share small enough that `raw` floors to zero (SPEC §4.4) with nothing
+/// pending is owed nothing: its floor remainder is already in the pool
+/// output, and no rail carries a 0-sat row.
+pub fn is_published(raw_sats: u64, prior_pending: u64) -> bool {
+    raw_sats != 0 || prior_pending != 0
+}
+
+/// Every identity the distribution for `raw` and `pending` publishes, per
+/// [`is_published`]. The front's routing iterates exactly this set and
+/// settlement requires an entry for exactly this set, so the two sides
+/// cannot disagree about a zero-rounded share.
+pub fn published_ids(raw: &RawPayouts, pending: &BTreeMap<SpId, u64>) -> BTreeSet<SpId> {
+    raw.raw
+        .keys()
+        .chain(pending.keys())
+        .filter(|id| {
+            is_published(
+                raw.raw.get(*id).copied().unwrap_or(0),
+                pending.get(*id).copied().unwrap_or(0),
+            )
+        })
+        .copied()
+        .collect()
+}
+
 /// Pool-template routing (SPEC §4.4, §11.1). No trimming or partial payment.
 /// `ark_due` includes kept-row remainder components, not a second logical rail.
 pub fn route_tiers(
@@ -601,7 +630,7 @@ pub fn route_tiers_with_keys(
 ) -> Result<Routing, Error> {
     cfg.validate()?;
     ladder::validate_ladder(cfg.coinbase_threshold_sats, cfg.dust_limit_sats)?;
-    let ids: BTreeSet<_> = raw.raw.keys().chain(pending.keys()).copied().collect();
+    let ids = published_ids(raw, pending);
     let mut result = Routing {
         owed: BTreeMap::new(),
         kept: vec![],
@@ -619,9 +648,6 @@ pub fn route_tiers_with_keys(
         let old = pending.get(&id).copied().unwrap_or(0);
         let raw_part = raw.raw.get(&id).copied().unwrap_or(0);
         let owed = raw_part.checked_add(old).ok_or(Error::Overflow)?;
-        if owed == 0 {
-            continue;
-        }
         result.owed.insert(id, owed);
         let deliverable = ark
             .get(&id)
@@ -686,8 +712,9 @@ pub fn route_tiers_with_keys(
 ///
 /// `owed(id) = raw(id) + pending(id)` is computed for every id present in
 /// **either** map (SPEC §4.6), so an id that only carries a prior pending
-/// balance is still routed. Ids whose owed is zero are dropped (there is
-/// nothing to route and no rail should carry a 0-sat entry).
+/// balance is still routed. Ids whose owed is zero are not published
+/// ([`published_ids`]): there is nothing to route and no rail carries a
+/// 0-sat entry.
 ///
 /// # Coinbase cap (SPEC §4.6(a))
 ///
@@ -726,16 +753,13 @@ pub fn route_jd_tiers(
 ) -> Result<Routing, Error> {
     cfg.validate()?;
 
-    let mut ids: BTreeSet<SpId> = raw.raw.keys().copied().collect();
-    ids.extend(pending.keys().copied());
-    let mut owed: Vec<(SpId, u64)> = ids
+    let mut owed: Vec<(SpId, u64)> = published_ids(raw, pending)
         .into_iter()
         .map(|id| {
             let r = raw.raw.get(&id).copied().unwrap_or(0);
             let p = pending.get(&id).copied().unwrap_or(0);
             (id, r.saturating_add(p))
         })
-        .filter(|(_, amount)| *amount > 0)
         .collect();
     // Largest first; ties break on sp_id so the result is deterministic.
     owed.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
