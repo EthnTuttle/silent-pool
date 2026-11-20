@@ -458,7 +458,7 @@ pub enum ReconstructError {
     MissingFrozenV2Target,
     #[error("snapshot has two entries for one id")]
     DuplicateEntry(SpId),
-    #[error("window contains an id the distribution did not publish")]
+    #[error("window owes an id the distribution did not publish")]
     WindowMismatch,
     #[error("snapshot entry {0:?} has no payout key")]
     MissingPayoutKey(SpId),
@@ -660,18 +660,20 @@ fn reconstruct_once(input: &ReconstructInput<'_>) -> Result<Reconstructed, Recon
             return Err(ReconstructError::DuplicateEntry(e.sp_id));
         }
     }
-    // The window was frozen into the distribution: every identity it credits
+    // The window was frozen into the distribution: every identity it owes
     // must have been published, or the reconstruction is not this block's.
-    for id in raw.raw.keys() {
-        if !entry_by_id.contains_key(id) {
-            return Err(ReconstructError::WindowMismatch);
-        }
-    }
-    if mode == TemplateMode::Pool
-        && input
-            .pending
-            .iter()
-            .any(|(id, p)| *p > 0 && !entry_by_id.contains_key(id))
+    // "Owes" is the front's own publication rule (`published_ids`, decision
+    // 2026-11-20-zero-rounded-shares): a share that floors to zero sats with
+    // nothing pending has no entry, so its absence is not a mismatch. JD
+    // settlement keeps its scope: the window's credits, not prior pending.
+    let no_prior = BTreeMap::new();
+    let prior = match mode {
+        TemplateMode::Pool => input.pending,
+        TemplateMode::Jd => &no_prior,
+    };
+    if spc_accounting::published_ids(&raw, prior)
+        .iter()
+        .any(|id| !entry_by_id.contains_key(id))
     {
         return Err(ReconstructError::WindowMismatch);
     }
@@ -5490,6 +5492,379 @@ mod tests {
         // Conservation: paid + retained pending == owed.
         let after = 100i64 + row.pending_delta;
         assert_eq!(i64::try_from(row.paid_sats).unwrap() + after, 500_100);
+    }
+
+    fn hex_id(text: &str) -> SpId {
+        hex::decode(text).unwrap().try_into().unwrap()
+    }
+
+    const LAB_FP: [u8; 32] = [0x7f; 32];
+
+    /// `(slice_id, height, credits)` of one v2 fixture slice.
+    type V2Row<'a> = (u64, u32, &'a [(SpId, u128)]);
+
+    /// v2 slice rows, newest first.
+    fn v2_rows(rows: &[V2Row<'_>]) -> Vec<SliceRow> {
+        rows.iter()
+            .map(|(slice_id, height, credits)| {
+                let credits: Vec<_> = credits.iter().map(|(id, d)| (*id, *d, 0)).collect();
+                let difficulty = credits.iter().map(|c| c.1).sum();
+                let mut row = slice_row(*slice_id, *height, difficulty, 1, &credits);
+                row.work_unit_version = WorkUnitVersion::V2;
+                row.work_unit_fingerprint = Some(LAB_FP);
+                row
+            })
+            .collect()
+    }
+
+    /// Entries and coinbase as the front's pool-template pipeline publishes
+    /// them for a sub-rung window: the same window selection, raw payouts,
+    /// routing and distribution builder `Front::refresh` runs, then the
+    /// `BlockEvent` wire mapping. Every id in `registered` has a committed
+    /// registration and a derived destination.
+    fn front_publication(
+        slices: &[SliceRow],
+        target: u128,
+        subsidy: u64,
+        prior: &BTreeMap<SpId, u64>,
+        registered: &BTreeSet<SpId>,
+    ) -> (Vec<Entry>, Vec<CoinbaseOutput>) {
+        let aggs: Vec<SliceAgg> = slices.iter().map(|row| slice_agg(row).unwrap()).collect();
+        let window =
+            select_window_v2(&aggs, u64::MAX, target, BTreeMap::new(), Some(LAB_FP)).unwrap();
+        let raw = if window.slices.is_empty() {
+            RawPayouts {
+                raw: BTreeMap::new(),
+                pool_sats: subsidy,
+                r_net: subsidy,
+                f_net: 0,
+            }
+        } else {
+            raw_payouts_v2(&window, subsidy, 0, 100).unwrap()
+        };
+        let cfg = AccountingConfig::default();
+        let tier = TierConfig {
+            fee_bps: cfg.fee_bps,
+            dust_limit_sats: cfg.dust_limit_sats,
+            coinbase_threshold_sats: 330,
+            max_payout_slots: cfg.max_payout_slots,
+            budget_wu: cfg.budget_wu,
+            overhead_wu: cfg.overhead_wu,
+        };
+        let caps: BTreeMap<SpId, ArkCapability> = registered
+            .iter()
+            .map(|id| {
+                let cap = ArkCapability {
+                    registered: true,
+                    registration_committed: true,
+                    dest_known: true,
+                };
+                (*id, cap)
+            })
+            .collect();
+        let routing = spc_accounting::route_tiers_with_keys(
+            &raw,
+            prior,
+            &caps,
+            &tier,
+            subsidy,
+            Some(&BTreeSet::new()),
+        )
+        .unwrap();
+        let dests: BTreeMap<SpId, Vec<u8>> =
+            registered.iter().map(|id| (*id, vec![0xd5; 34])).collect();
+        let send = spc_crypto::SendKey::generate(4650).unwrap();
+        let dist = spc_accounting::build_distribution(
+            4650,
+            &send,
+            &routing,
+            &BTreeMap::new(),
+            &pool_script(),
+            &dests,
+        )
+        .unwrap();
+        let entries = dist
+            .entries
+            .iter()
+            .map(|e| Entry {
+                sp_id: e.sp_id,
+                owed_sats: e.owed_sats,
+                rail: match e.rail {
+                    spc_accounting::Rail::Coinbase => Rail::Coinbase,
+                    spc_accounting::Rail::Ark => Rail::Ark,
+                    spc_accounting::Rail::Pending => Rail::Pending,
+                    spc_accounting::Rail::Forfeit => Rail::Forfeit,
+                },
+                p_x: e.p_x.clone(),
+                dest_id: e.dest_id.clone().unwrap_or_default(),
+                sats: e.sats,
+            })
+            .collect();
+        let coinbase = dist
+            .outputs
+            .iter()
+            .map(|(script, value)| output(script.clone(), *value))
+            .collect();
+        (entries, coinbase)
+    }
+
+    fn tiny_input<'a>(
+        hw: &'a BTreeMap<u8, String>,
+        entries: &'a [Entry],
+        slices: &'a [SliceRow],
+        prior: &'a BTreeMap<SpId, u64>,
+        coinbase: &'a [CoinbaseOutput],
+        subsidy: u64,
+        delivered: &'a BTreeSet<SpId>,
+    ) -> ReconstructInput<'a> {
+        ReconstructInput {
+            height: 4650,
+            high_water: hw,
+            entries,
+            slices,
+            work_unit_version: WorkUnitVersion::V2,
+            work_unit_fingerprint: Some(LAB_FP),
+            window_rule: WindowRule::NetworkBlockWork,
+            window_target: Some(65),
+            window_truncated: false,
+            pending: prior,
+            coinbase,
+            economics: BlockEconomics { subsidy, fees: 0 },
+            delivered,
+            cfg: AccountingConfig::default(),
+            coinbase_threshold_sats: 330,
+        }
+    }
+
+    /// Lab run 20261119T112514Z-play5, pool B. The window frozen for height
+    /// 4650 (`distribution_frozen`, job f38ddc0e): Q = 65, 11 slices,
+    /// D_win = 66, `da24..` 38 units and `fdda..` 28 units.
+    fn lab_pool_b_window() -> (SpId, SpId, Vec<SliceRow>) {
+        let da = hex_id("da2443ea8785c0ccef50ae7fa58ba740a559da4e06099fd15ea7c04725e89ece");
+        let fd = hex_id("fdda338d91913138897cff328ce6070d6ff063d8bf6b031c5448534441cadce8");
+        let rows = v2_rows(&[
+            (144116983179756359, 4649, &[(da, 4), (fd, 4)]),
+            (144116983179754108, 4648, &[(da, 4), (fd, 2)]),
+            (144116983179751382, 4647, &[(fd, 2)]),
+            (144116983179747863, 4647, &[(da, 2), (fd, 6)]),
+            (144116983179745362, 4646, &[(da, 2), (fd, 2)]),
+            (144116983179739612, 4645, &[(da, 6), (fd, 2)]),
+            (144116983179735361, 4644, &[(da, 4), (fd, 2)]),
+            (144116983179726859, 4643, &[(da, 4), (fd, 4)]),
+            (144116983179719359, 4641, &[(da, 6)]),
+            (144116983179712111, 4640, &[(da, 2), (fd, 2)]),
+            (144116983179705609, 4638, &[(da, 4), (fd, 2)]),
+        ]);
+        (da, fd, rows)
+    }
+
+    /// The observed halt (decision 2026-11-20-zero-rounded-shares). At 4 sats
+    /// both identities earn a sat and both are published; at 2 sats
+    /// `fdda..` floors to `floor(2 * 28 / 66) = 0`, the front publishes only
+    /// `da24..`, and settlement must still book the block.
+    #[test]
+    fn lab_two_sat_block_settles_with_a_zero_rounded_identity() {
+        let (da, fd, slices) = lab_pool_b_window();
+        let hw = high_water(2, "144116983179756359");
+        let prior = BTreeMap::new();
+        let registered = BTreeSet::from([da, fd]);
+
+        // Era of 4 sats: the same window publishes and settles both ids.
+        let (entries, coinbase) = front_publication(&slices, 65, 4, &prior, &registered);
+        assert_eq!(
+            entries
+                .iter()
+                .map(|e| (e.sp_id, e.rail, e.sats))
+                .collect::<Vec<_>>(),
+            vec![(da, Rail::Ark, 2), (fd, Rail::Ark, 1)]
+        );
+        let four = reconstruct_settlement(&tiny_input(
+            &hw,
+            &entries,
+            &slices,
+            &prior,
+            &coinbase,
+            4,
+            &registered,
+        ))
+        .unwrap();
+        assert_eq!(four.raw, BTreeMap::from([(da, 2), (fd, 1)]));
+        assert_eq!(four.ledger.len(), 2);
+
+        // Height 4650, 2 sats: exactly what front-b1 froze and published.
+        let (entries, coinbase) = front_publication(&slices, 65, 2, &prior, &registered);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            (
+                entries[0].sp_id,
+                entries[0].rail,
+                entries[0].owed_sats,
+                entries[0].sats
+            ),
+            (da, Rail::Ark, 1, 1)
+        );
+        assert_eq!(coinbase, vec![output(pool_script(), 2)]);
+        let two = reconstruct_settlement(&tiny_input(
+            &hw,
+            &entries,
+            &slices,
+            &prior,
+            &coinbase,
+            2,
+            &registered,
+        ))
+        .unwrap();
+        assert_eq!(two.window.len(), 11);
+        assert_eq!(two.raw, BTreeMap::from([(da, 1), (fd, 0)]));
+        assert_eq!(
+            two.ledger,
+            vec![LedgerRow {
+                sp_id: da,
+                rail: LedgerRail::Ark,
+                paid_sats: 0,
+                ark_due_sats: 1,
+                forfeited_sats: 0,
+                pending_delta: 0,
+            }]
+        );
+        assert!(two.pending_deltas.is_empty());
+    }
+
+    /// The fix must not hide a real divergence: an identity the window owes
+    /// sats (fresh raw, or frozen prior pending in pool-template mode) and
+    /// the distribution does not carry still fails closed.
+    #[test]
+    fn a_window_owing_an_unpublished_identity_still_fails_closed() {
+        let (da, fd, slices) = lab_pool_b_window();
+        let hw = high_water(2, "144116983179756359");
+        let none = BTreeMap::new();
+        let registered = BTreeSet::from([da, fd]);
+        let mismatch = |entries: &[Entry],
+                        prior: &BTreeMap<SpId, u64>,
+                        coinbase: &[CoinbaseOutput],
+                        subsidy: u64| {
+            matches!(
+                reconstruct_settlement(&tiny_input(
+                    &hw,
+                    entries,
+                    &slices,
+                    prior,
+                    coinbase,
+                    subsidy,
+                    &registered,
+                )),
+                Err(ReconstructError::WindowMismatch)
+            )
+        };
+
+        // 4 sats: `fdda..` earns 1 sat. Dropping its entry is a mismatch.
+        let (entries, coinbase) = front_publication(&slices, 65, 4, &none, &registered);
+        let without_fd: Vec<Entry> = entries.iter().filter(|e| e.sp_id != fd).cloned().collect();
+        assert!(mismatch(&without_fd, &none, &coinbase, 4));
+
+        // 2 sats: `da24..` earns 1 sat. An empty distribution is a mismatch
+        // even though `fdda..` may legitimately be absent.
+        let (entries, coinbase) = front_publication(&slices, 65, 2, &none, &registered);
+        assert!(mismatch(&[], &none, &coinbase, 2));
+
+        // 2 sats, `fdda..` rounds to zero but its frozen prior pending is
+        // 7 sats: it is owed, so it must be published.
+        let prior = BTreeMap::from([(fd, 7)]);
+        assert!(mismatch(&entries, &prior, &coinbase, 2));
+        let (with_prior, coinbase) = front_publication(&slices, 65, 2, &prior, &registered);
+        assert_eq!(with_prior.len(), 2);
+        let settled = reconstruct_settlement(&tiny_input(
+            &hw,
+            &with_prior,
+            &slices,
+            &prior,
+            &coinbase,
+            2,
+            &registered,
+        ))
+        .unwrap();
+        let row = settled.ledger.iter().find(|r| r.sp_id == fd).unwrap();
+        assert_eq!((row.ark_due_sats, row.pending_delta), (7, -7));
+
+        // An id outside the window with frozen prior pending and no entry.
+        let stranger = BTreeMap::from([(id(9), 1)]);
+        assert!(mismatch(&entries, &stranger, &coinbase, 2));
+    }
+
+    /// Conservation at tiny rewards (SPEC §4.6): for 0-4 sats over three
+    /// identities with mixed registration, front publication and settlement
+    /// agree, every published id has exactly one ledger row, unpublished ids
+    /// are exactly the zero-owed ones, and
+    /// `T = gross K + sum(ark) + sum(forfeit) + sum(pending delta)` with the
+    /// whole of `T` in the pool output.
+    #[test]
+    fn tiny_rewards_conserve_every_sat_through_publication_and_settlement() {
+        let (a, b, c) = (id(0xa1), id(0xb2), id(0xc3));
+        // D_win = 66 >= Q = 65: a 36, b 20, c 10.
+        let slices = v2_rows(&[
+            (30, 4649, &[(a, 16), (b, 8), (c, 2)]),
+            (20, 4648, &[(a, 12), (b, 8), (c, 4)]),
+            (10, 4647, &[(a, 8), (b, 4), (c, 4)]),
+        ]);
+        let hw = high_water(2, "30");
+        // a and c registered with a derived destination; b never registered.
+        let registered = BTreeSet::from([a, c]);
+        for prior in [BTreeMap::new(), BTreeMap::from([(c, 3u64)])] {
+            for reward in 0u64..=4 {
+                let (entries, coinbase) =
+                    front_publication(&slices, 65, reward, &prior, &registered);
+                assert_eq!(coinbase, vec![output(pool_script(), reward)]);
+                let settled = reconstruct_settlement(&tiny_input(
+                    &hw,
+                    &entries,
+                    &slices,
+                    &prior,
+                    &coinbase,
+                    reward,
+                    &registered,
+                ))
+                .unwrap_or_else(|e| panic!("reward {reward}: {e}"));
+                assert_eq!(settled.t_actual, reward);
+                assert_eq!(settled.raw.len(), 3);
+
+                let owed = |id: &SpId| settled.raw[id] + prior.get(id).copied().unwrap_or(0);
+                let published: BTreeSet<SpId> = entries.iter().map(|e| e.sp_id).collect();
+                let expected: BTreeSet<SpId> =
+                    [a, b, c].into_iter().filter(|id| owed(id) > 0).collect();
+                assert_eq!(published, expected, "reward {reward}");
+                let rows: BTreeSet<SpId> = settled.ledger.iter().map(|r| r.sp_id).collect();
+                assert_eq!(rows.len(), settled.ledger.len());
+                assert_eq!(rows, expected, "reward {reward}");
+
+                let (mut ark, mut forfeit, mut delta) = (0i128, 0i128, 0i128);
+                for row in &settled.ledger {
+                    let before = i128::from(prior.get(&row.sp_id).copied().unwrap_or(0));
+                    let after = before + i128::from(row.pending_delta);
+                    assert!(after >= 0);
+                    // Per row: paid + ark + forfeit + E = raw + P.
+                    assert_eq!(
+                        i128::from(row.paid_sats + row.ark_due_sats + row.forfeited_sats) + after,
+                        i128::from(owed(&row.sp_id)),
+                        "reward {reward}"
+                    );
+                    assert_eq!(row.paid_sats, 0);
+                    ark += i128::from(row.ark_due_sats);
+                    forfeit += i128::from(row.forfeited_sats);
+                    delta += i128::from(row.pending_delta);
+                }
+                let raw_sum: u64 = settled.raw.values().sum();
+                assert!(raw_sum <= reward);
+                let gross_k = i128::from(reward - raw_sum);
+                // The pool output holds all of T; nothing is created or lost.
+                assert_eq!(
+                    i128::from(coinbase[0].value),
+                    gross_k + ark + forfeit + delta
+                );
+                // Unregistered b forfeits exactly its fresh raw; nobody else.
+                assert_eq!(forfeit, i128::from(settled.raw[&b]));
+                assert_eq!(ark, i128::from(owed(&a) + owed(&c)));
+            }
+        }
     }
 
     fn test_front() -> crate::front::Front {
