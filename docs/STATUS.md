@@ -4,6 +4,18 @@ Live build board. `docs/IMPLEMENTATION-PLAN.md` defines the packets and gates.
 A packet is Done only when its tests exist, `nix flake check` passes, both
 reviews are recorded for risky packets, and the commit is pushed.
 
+Lab run (2026-11-19/20 board update): the first self-hosted lab run since the
+chain-identity gate and the ladder needed three fixes to start and mine (ark
+roles after fronts, explicitly unaudited miners for profile-less scenarios,
+`max_payout_slots = 1024` in the lab pool template). A 4.5 h run then halted
+at the first 2-sat regtest block: a share that floors to zero was omitted by
+the front but required by settlement. One publication rule (`owed != 0`) now
+decides both sides (decision 2026-11-20-zero-rounded-shares; SPEC 4.6, 4.7,
+7.4, 11.1), and a block entry whose slice row has not arrived is a bounded
+retry. The self-hosted wrapper now defaults to about 40 s blocks, so the
+50 BTC regtest subsidy lasts about 16.7 h above the top ladder rung instead
+of 1.5 h. Open items are listed in MERGE-QUEUE.md under the same dates.
+
 Deployment wave (2026-11-18 board update): public testnet5 hosting is one
 command away - `nixos-rebuild switch --flake .#spc-testnet5-host` composes
 the pinned testnet5 node (P2P public, RPC loopback, health/metrics on),

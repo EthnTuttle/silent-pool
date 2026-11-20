@@ -465,5 +465,28 @@ which holds template building. Evidence:
 
 | branch | base SHA | ready SHA | owned paths | merge notes | gate |
 |---|---|---|---|---|---|
-| `wp-payout-liveness` | `3237f46` | pending | front/payout agreement on which identities a tiny reward publishes; retry (not error) for a block entry whose slice row has not arrived yet; tests; decision record if the spec is silent | SPEC body hunks via changelog fragment | fmt/clippy/test -> merge session |
-| `wp-lab-cadence` | `3237f46` | pending | slower default block cadence for the self-hosted wrapper, LAB-RUNTIME session-horizon text, changelog fragment | flake.nix / bins/spc-lab hunks reported | 20 min live run evidence + spc-lab tests -> merge session |
+| `wp-payout-liveness` | `3237f46` | `f64c35a` | front/payout agreement on which identities a tiny reward publishes; retry (not error) for a block entry whose slice row has not arrived yet; tests; decision record if the spec is silent | SPEC body hunks via changelog fragment | fmt/clippy/test -> merge session |
+| `wp-lab-cadence` | `3237f46` | `1be9536` | slower default block cadence for the self-hosted wrapper, LAB-RUNTIME session-horizon text, changelog fragment | flake.nix / bins/spc-lab hunks reported | 20 min live run evidence + spc-lab tests -> merge session |
+
+Outcomes (merge session, 2026-11-20): `wp-payout-liveness` merged clean; SPEC
+4.6/4.7/7.4/11.1 hunks and the changelog bullet applied (`098b22f`); merged
+tree fmt/clippy clean, 1281 workspace tests, 0 failed. `wp-lab-cadence`
+merged clean (no SPEC bullet: lab tooling is non-normative); its fragment was
+consumed. Measured on the final wrapper: 31 blocks in 27.5 min, 12 accounted
+shares per block, 5.5% share rejection, no payout or settlement errors.
+
+Open items these packets surfaced (not fixed):
+- Three Postgres/Redis-gated tests fail on master when a database is
+  supplied (`payout::tests::confirmed_retry_does_not_emit_a_duplicate_delta`,
+  `payout::tests::pre_migration_row_settles_through_the_warned_estimate`,
+  spc-store `scrub_preserves_scheduled_ark_snapshots_and_clears_settled_ones`);
+  they skip in the usual gate. Four more ark/republish tests fail on a second
+  run against the same database.
+- A slice whose `on_slice` insert fails is left unacked and never re-read
+  (the pending pass covers `spc:blocks` only); the new bound surfaces it as
+  `SliceOverdue` but nothing retries the slice.
+- `testing/lab-ark-funded/source-contract.json` records hashes for the lab
+  wrapper and `lab-ark-wallets.json`; both changed, and the contract was
+  already stale for `runtime.rs`. Not regenerated.
+- The live `stop_run` POST closed the connection without a response in three
+  of four validation stops, although the stop took effect each time.
