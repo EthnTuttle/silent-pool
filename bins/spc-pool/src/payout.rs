@@ -60,6 +60,17 @@ const SCRUB_INTERVAL: Duration = Duration::from_secs(600);
 /// XADD; the front ignores events for a block hash it already applied.
 const REPUBLISH_INTERVAL: Duration = Duration::from_secs(30);
 
+/// How many consecutive attempts a found block may wait for a frozen-window
+/// slice row that `payout` has not persisted yet. The streams are read
+/// `spc:slices` then `spc:blocks`, each blocking up to a second, so a slice
+/// sealed and a block found on the next job can be delivered block first;
+/// the slice row then lands on the next loop pass. The first attempt and a
+/// pending pass in the same loop pass can both precede it, and later
+/// attempts are `PENDING_RETRY_INTERVAL` apart, so four attempts cover at
+/// least two full intervals. Past the bound every attempt is an error (the
+/// entry still stays unacked): the slice was lost, not late.
+const SLICE_WAIT_MAX_ATTEMPTS: u32 = 4;
+
 /// Upper bound on the slice walk used to reconstruct one window. Slices are
 /// pruned after `retain_windows`; hitting this bound means the walk is
 /// ambiguous, so settlement holds (fail closed).
@@ -83,6 +94,8 @@ pub enum PayoutError {
     Overflow,
     #[error("ledger event: {0}")]
     LedgerEvent(String),
+    #[error("frozen window slice {slice_id} still not persisted after {attempts} attempts")]
+    SliceOverdue { slice_id: u64, attempts: u32 },
 }
 
 /// A chain view failure never books anything; settlement waits and retries.
@@ -1217,14 +1230,51 @@ pub struct PayoutService {
     /// Orphan settlements by reason
     /// (`spc_orphaned_settlement_total{reason}`, SPEC §9).
     orphaned: crate::role_metrics::CounterMap,
+    /// Found blocks waiting for a frozen-window slice row, with the number
+    /// of attempts that found it missing (`SLICE_WAIT_MAX_ATTEMPTS`).
+    slice_waits: Arc<std::sync::Mutex<BTreeMap<[u8; 32], u32>>>,
 }
 
 /// How one group entry ends up after handling.
 enum Disposition {
     /// Handled (or settle-orphaned): ack it.
     Done,
-    /// Waiting on the chain: leave unacked; the pending pass retries it.
+    /// Waiting on the chain or on a slice row: leave unacked; the pending
+    /// pass retries it.
     Retry,
+}
+
+/// The job's frozen window rows in the job's own order, or the first frozen
+/// slice id that is not among the stored rows.
+fn frozen_slices(slice_ids: &[u64], stored: &[SliceRow]) -> Result<Vec<SliceRow>, u64> {
+    slice_ids
+        .iter()
+        .map(|id| {
+            stored
+                .iter()
+                .find(|row| row.slice_id == *id)
+                .cloned()
+                .ok_or(*id)
+        })
+        .collect()
+}
+
+/// Count one more attempt that found a frozen slice of `block` missing.
+/// `Ok(attempt)` while the wait is within `SLICE_WAIT_MAX_ATTEMPTS`.
+fn note_slice_wait(
+    waits: &mut BTreeMap<[u8; 32], u32>,
+    block: [u8; 32],
+    slice_id: u64,
+) -> Result<u32, PayoutError> {
+    let attempts = waits.entry(block).or_insert(0);
+    *attempts = attempts.saturating_add(1);
+    if *attempts > SLICE_WAIT_MAX_ATTEMPTS {
+        return Err(PayoutError::SliceOverdue {
+            slice_id,
+            attempts: *attempts,
+        });
+    }
+    Ok(*attempts)
 }
 struct AbortTask(tokio::task::JoinHandle<()>);
 type RecomputedLedger = (Vec<LedgerRow>, Vec<([u8; 32], i64)>, Option<i64>);
@@ -1342,6 +1392,7 @@ impl PayoutService {
             aggregate_server: None,
             ark_retry_blocks: 6,
             orphaned: crate::role_metrics::CounterMap::default(),
+            slice_waits: Arc::default(),
         }
     }
 
@@ -1637,6 +1688,57 @@ impl PayoutService {
 
     async fn on_block(&self, payload: &[u8]) -> Result<Disposition, PayoutError> {
         let e = BlockEvent::decode(payload)?;
+        let block_hash = e.block_hash;
+        let result = self.on_block_event(e).await;
+        if matches!(result, Ok(Disposition::Done)) {
+            self.clear_slice_wait(&block_hash);
+        }
+        result
+    }
+
+    fn clear_slice_wait(&self, block_hash: &[u8; 32]) {
+        if let Ok(mut waits) = self.slice_waits.lock() {
+            waits.remove(block_hash);
+        }
+    }
+
+    /// A frozen slice of this block's window has no row yet. Within the
+    /// bound that is the slice/block stream ordering race: hold the block
+    /// (`Ok(None)`, unacked) and say what it waits for. Past the bound the
+    /// slice is treated as lost and every attempt is an error.
+    fn await_frozen_slice(
+        &self,
+        e: &BlockEvent,
+        slice_id: u64,
+    ) -> Result<Option<RecomputedLedger>, PayoutError> {
+        let attempt = {
+            let mut waits = self
+                .slice_waits
+                .lock()
+                .map_err(|_| PayoutError::Snapshot("slice wait state poisoned"))?;
+            note_slice_wait(&mut waits, e.block_hash, slice_id)?
+        };
+        if attempt == 1 {
+            tracing::debug!(
+                block = %display_hash(&e.block_hash),
+                height = e.height,
+                slice_id,
+                "found block waits for a frozen window slice not persisted yet; retrying"
+            );
+        } else {
+            tracing::warn!(
+                block = %display_hash(&e.block_hash),
+                height = e.height,
+                slice_id,
+                attempt,
+                max_attempts = SLICE_WAIT_MAX_ATTEMPTS,
+                "found block still waits for a frozen window slice not persisted yet; retrying"
+            );
+        }
+        Ok(None)
+    }
+
+    async fn on_block_event(&self, e: BlockEvent) -> Result<Disposition, PayoutError> {
         if let Some(old) = self.store.economic_event_digest(&e.block_hash).await? {
             if old != e.snapshot_id()? {
                 return Err(PayoutError::Snapshot("conflicting found payload"));
@@ -2126,14 +2228,11 @@ impl PayoutService {
                     let frozen = job
                         .prior()
                         .map_err(|_| PayoutError::Snapshot("frozen economic P"))?;
-                    let mut selected = Vec::new();
-                    for id in &job.slice_ids {
-                        let row = slices
-                            .iter()
-                            .find(|s| s.slice_id == *id)
-                            .ok_or(PayoutError::Snapshot("frozen visible slice missing"))?;
-                        selected.push(row.clone());
-                    }
+                    let selected = match frozen_slices(&job.slice_ids, &slices) {
+                        Ok(selected) => selected,
+                        Err(slice_id) => return self.await_frozen_slice(e, slice_id),
+                    };
+                    self.clear_slice_wait(&e.block_hash);
                     if selected.windows(2).any(|w| w[0].slice_id <= w[1].slice_id) {
                         return Err(PayoutError::Snapshot("frozen slice ordering"));
                     }
@@ -5333,6 +5432,145 @@ mod tests {
         assert!(deltas.is_empty());
     }
 
+    /// Service level: a block whose frozen window names a slice row not
+    /// persisted yet is held without an error for `SLICE_WAIT_MAX_ATTEMPTS`
+    /// attempts, errors on every attempt after that while the row stays
+    /// missing, and settles as soon as the row exists.
+    #[tokio::test]
+    async fn missing_frozen_slice_is_a_bounded_retry_then_an_error() {
+        let Some((store, streams)) = ark_test_env().await else {
+            return;
+        };
+        let (alice, bob): ([u8; 32], [u8; 32]) = (rand::random(), rand::random());
+        for sp_id in [alice, bob] {
+            store
+                .upsert_identity(&SpIdentityRow {
+                    sp_id,
+                    b_scan: vec![2; 33],
+                    b_spend: vec![3; 33],
+                    network: 3,
+                })
+                .await
+                .unwrap();
+        }
+        let older = 0x7000_0000_0000_0000u64 | (u64::from(rand::random::<u32>()) << 8);
+        let newer = older + 1;
+        let height = i32::MAX as u32 - 16;
+        let row = |slice_id: u64, sp_id: [u8; 32]| SliceRow {
+            slice_id,
+            height,
+            prev_hash: [1; 32],
+            ref_job_id: 1,
+            ref_fees: 0,
+            n_shares: 1,
+            difficulty: "100".into(),
+            root: [2; 32],
+            shares: vec![3],
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            credits: vec![SliceCreditRow {
+                sp_id,
+                diff_sum: "100".into(),
+                diff_fee_sum: "0".into(),
+            }],
+        };
+        store.insert_slice(&row(older, bob)).await.unwrap();
+
+        let mut entries = vec![
+            entry(alice, Rail::Forfeit, None, 100),
+            entry(bob, Rail::Forfeit, None, 100),
+        ];
+        entries.sort_by_key(|e| e.sp_id);
+        let fingerprint: [u8; 32] = rand::random();
+        store
+            .insert_snapshot(&SnapshotRow {
+                fingerprint,
+                height,
+                a_send_x: [4; 32],
+                distribution_id: None,
+                entries: serde_json::to_value(&entries).unwrap(),
+                high_water: serde_json::json!({ "0": newer.to_string() }),
+                work_unit_version: WorkUnitVersion::V1,
+                work_unit_fingerprint: None,
+                window_rule: WindowRule::ShareWorkLegacy,
+                window_target: Some("200".into()),
+            })
+            .await
+            .unwrap();
+        let svc = PayoutService::new(
+            store.clone(),
+            streams,
+            RETRY_DEPTH,
+            30,
+            Arc::new(ReconstructChain {
+                coinbase: vec![output(pool_script(), 200)],
+                economics: BlockEconomics {
+                    subsidy: 200,
+                    fees: 0,
+                },
+            }),
+            None,
+            0,
+        )
+        .with_accounting(base_cfg(2));
+        let event = BlockEvent {
+            economic: Some(spc_accounting::economic::FrozenJob {
+                version: 1,
+                revision: 0,
+                parent_hash: [1; 32],
+                job_id: 1,
+                generation: 1,
+                balances: entries
+                    .iter()
+                    .map(|e| spc_accounting::economic::Balance {
+                        sp_id: e.sp_id,
+                        booked: 0,
+                        reserved: 0,
+                        available: 0,
+                    })
+                    .collect(),
+                slice_ids: vec![newer, older],
+            }),
+            block_hash: rand::random(),
+            height,
+            front_id: 0,
+            fingerprint,
+            a_send_x: [4; 32],
+            high_water: BTreeMap::from([(0u8, newer.to_string())]),
+            work_unit_version: WorkUnitVersion::V1,
+            work_unit_fingerprint: None,
+            window_rule: WindowRule::ShareWorkLegacy,
+            window_target: 200,
+            entries: entries.clone(),
+        };
+
+        for _ in 0..SLICE_WAIT_MAX_ATTEMPTS {
+            assert!(svc.recompute(&event, fingerprint).await.unwrap().is_none());
+        }
+        for extra in 1..=2 {
+            match svc.recompute(&event, fingerprint).await {
+                Err(PayoutError::SliceOverdue { slice_id, attempts }) => {
+                    assert_eq!(slice_id, newer);
+                    assert_eq!(attempts, SLICE_WAIT_MAX_ATTEMPTS + extra);
+                }
+                other => panic!("expected an overdue slice, got {:?}", other.map(|_| ())),
+            }
+        }
+
+        store.insert_slice(&row(newer, alice)).await.unwrap();
+        let (ledger, deltas, _) = svc
+            .recompute(&event, fingerprint)
+            .await
+            .unwrap()
+            .expect("the block settles once its slice row exists");
+        assert_eq!(ledger.len(), 2);
+        assert!(ledger
+            .iter()
+            .all(|row| row.rail == LedgerRail::Forfeit && row.forfeited_sats == 100));
+        assert!(deltas.is_empty());
+        assert!(svc.slice_waits.lock().unwrap().is_empty());
+    }
+
     /// A persisted window target that is not a u128 is a corrupt row:
     /// settlement fails closed (an error the consumer group retries and
     /// alarms on), never a silent fall-back to the estimate.
@@ -5865,6 +6103,46 @@ mod tests {
                 assert_eq!(ark, i128::from(owed(&a) + owed(&c)));
             }
         }
+    }
+
+    #[test]
+    fn frozen_slices_names_the_first_slice_without_a_row() {
+        let stored = vec![
+            slice_row(9, 3, 1, 1, &[]),
+            slice_row(7, 2, 1, 1, &[]),
+            slice_row(5, 1, 1, 1, &[]),
+        ];
+        let selected = frozen_slices(&[9, 5], &stored).unwrap();
+        assert_eq!(
+            selected.iter().map(|s| s.slice_id).collect::<Vec<_>>(),
+            vec![9, 5]
+        );
+        assert_eq!(frozen_slices(&[9, 8, 6], &stored), Err(8));
+        assert_eq!(frozen_slices(&[], &stored), Ok(Vec::new()));
+    }
+
+    /// A missing frozen slice is a quiet retry for `SLICE_WAIT_MAX_ATTEMPTS`
+    /// attempts per block, then an error on every further attempt until the
+    /// wait is cleared.
+    #[test]
+    fn slice_wait_is_bounded_per_block() {
+        let mut waits = BTreeMap::new();
+        for attempt in 1..=SLICE_WAIT_MAX_ATTEMPTS {
+            assert_eq!(note_slice_wait(&mut waits, id(1), 42).unwrap(), attempt);
+        }
+        for extra in 1..=3 {
+            match note_slice_wait(&mut waits, id(1), 42) {
+                Err(PayoutError::SliceOverdue { slice_id, attempts }) => {
+                    assert_eq!(slice_id, 42);
+                    assert_eq!(attempts, SLICE_WAIT_MAX_ATTEMPTS + extra);
+                }
+                other => panic!("expected an overdue slice, got {other:?}"),
+            }
+        }
+        // Another block has its own budget, and a cleared wait starts over.
+        assert_eq!(note_slice_wait(&mut waits, id(2), 43).unwrap(), 1);
+        waits.remove(&id(1));
+        assert_eq!(note_slice_wait(&mut waits, id(1), 42).unwrap(), 1);
     }
 
     fn test_front() -> crate::front::Front {
