@@ -141,6 +141,18 @@
           # alongside a run (docs/LAB-RUNTIME.md). Pure tooling from the same
           # locked nixpkgs; no lab package or scenario changes.
           spc-lab-observability = import ./nix/lab/observability.nix { inherit pkgs; };
+          # One-command launcher behind `nix run .#lab`
+          # (docs/LAB-QUICKSTART.md). It only wraps the self-hosted wrapper,
+          # the observability pair and `spc-lab reap`; the flake's own
+          # revision and source hash become the run's launch provenance.
+          spc-lab-quickstart = import ./nix/lab/quickstart.nix {
+            inherit pkgs;
+            runtime = spc-lab-self-hosted-ark;
+            observability = spc-lab-observability;
+            lab = spc-lab-ark-tools;
+            revision = self.rev or self.dirtyRev or "local-tree-without-git-revision";
+            sourceHash = self.narHash or "unknown-source-hash";
+          };
           # One compilation for the local infrastructure launch closure, rather
           # than four independent copies of the same dependency build tree.
           spc-lab-ark-tools = pkgs.rustPlatform.buildRustPackage (common // {
@@ -403,6 +415,14 @@
             PROTOC = "${pkgs.protobuf}/bin/protoc";
           };
         }) [ "ap5Packages" ];
+
+        apps = pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          lab = {
+            type = "app";
+            program = "${self.packages.${system}.spc-lab-quickstart}/bin/spc-lab-quickstart";
+            meta.description = "Start the self-hosted regtest lab (docs/LAB-QUICKSTART.md)";
+          };
+        };
 
         checks = {
           fmt = mkCargoCheck "spc-fmt" "cargo fmt --all -- --check";

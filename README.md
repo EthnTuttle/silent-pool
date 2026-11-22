@@ -15,7 +15,7 @@ two-pool runtime with rbitcoin, Redis and PostgreSQL (`docs/LAB-RUNTIME.md`).
 The current tree also includes native funding/traffic, SP-aware wallet and
 Ark lifecycle implementations and their source/audit interfaces. Implementation
 and package qualification are not a full funded-campaign verdict. See the
-source-pinned lab setup below and `docs/reviews/` for exact executed scopes.
+lab quick start below and `docs/reviews/` for exact executed scopes.
 
 ## The two ideas
 
@@ -53,20 +53,29 @@ smoke run.
 
 ## Lab quick start
 
-Use the source-pinned setup in [LAB-RUNTIME](docs/LAB-RUNTIME.md). The current
-application reference is
-`github:EthnTuttle/silent-pool/98f0e6caa2482646e3c7073949f6388cd39f200b`;
-Nix obtains the node, stock Ark server and application tools from published,
-immutable sources. A developer worktree or prebuilt local node is not required.
+On x86_64 Linux with Nix (flakes enabled), one command builds and starts the
+small regtest lab and prints its browser UI addresses:
+
+```sh
+nix run github:EthnTuttle/silent-pool#lab
+```
+
+[LAB-QUICKSTART](docs/LAB-QUICKSTART.md) is the short guide to hand to someone
+new: requirements, what the command prints, where the UI token is, optional
+Grafana, stopping, keeping a run alive and cleaning up.
+[LAB-RUNTIME](docs/LAB-RUNTIME.md) is the full reference. Nix obtains the node,
+stock Ark server and application tools from published, immutable sources. A
+developer worktree or prebuilt local node is not required.
 
 Choose the intended profile:
 
 | Profile | What it supplies |
 |---|---|
-| `spc-lab-self-hosted-ark` wrapper | One node, two pools, four wallet agents/workers at 8 H/s total; no traffic population or full acceptance campaign. Requires an explicit fresh run directory and provenance arguments. |
+| `nix run .#lab` (launcher around the `spc-lab-self-hosted-ark` wrapper) | One node, two pools, four wallet agents/workers at 8 H/s total, about one block every 40 s; no traffic population or full acceptance campaign. The launcher creates a fresh run directory and records the flake revision as provenance; the bare wrapper requires both as explicit arguments. |
 | [Prepared shared campaign](testing/lab-ark-funded/README.md) | Two nodes, two pools, four SP wallets/workers, eight background and four payment wallets, 40 H/s aggregate and 0.2 ordinary tx/s; native funding and audited lifecycle checks through the admitted runtime and a separately pinned QA/AP5 consumer. |
 
-The application pin and QA consumer release are independent. Supply a published,
+The full campaign pins its own application revision (LAB-RUNTIME section 2);
+that pin and the QA consumer release are independent. Supply a published,
 reviewed compatible consumer revision for the full campaign; a future consumer
 revision is not guessed by these docs. Build/qualification, source admission and
 a full funded campaign verdict are distinct results. Full funded acceptance is
@@ -79,7 +88,7 @@ appropriate `private/access/*.json` claim file. See LAB-RUNTIME sections 5-6
 for exact token handling, live API stop, recorded review and ownership-bound
 recovery. Headless `runtime` means omitting `--listen`, usually with a finite
 `--duration-secs`; there is no `runtime --headless` switch. `nix run .` selects
-the pool package, not a lab.
+the pool package; the lab is `nix run .#lab`.
 
 The separate design-feedback/mockup utility, often served on loopback port
 18481, is not an operational lab UI or proof that a simulation is running.
@@ -96,6 +105,7 @@ lifecycle independently of lab run cleanup.
 - [`docs/MULTI-REGION.md`](docs/MULTI-REGION.md) — multi-region deployment design (its §10 deltas are mostly adopted into the spec; the spec wins on conflict)
 - [`docs/WIRE-FORMATS.md`](docs/WIRE-FORMATS.md) — byte-level formats of the project's own Redis streams, `spc:arkreg`, `spc:ark:*` and the front bootstrap RPC
 - [`docs/OPERATIONS.md`](docs/OPERATIONS.md) — build, deploy, v2 profile/retention, migrations and harnesses
+- [`docs/LAB-QUICKSTART.md`](docs/LAB-QUICKSTART.md) - one-command regtest lab launch for a new user: start, UI token, Grafana, stop, cleanup
 - [`docs/LAB-RUNTIME.md`](docs/LAB-RUNTIME.md) — approved host-lab startup, browser/headless controls, artifacts and limits
 - [`docs/LAB-ROLES.md`](docs/LAB-ROLES.md) — actual lab role/process map, `/lab` and `/` UI availability, namespace links and required next Ark/wallet integrations
 - [`docs/share-accounting-ext-deltas.md`](docs/share-accounting-ext-deltas.md) — intentional type-32 deltas and the v2 refusal
