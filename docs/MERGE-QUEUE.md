@@ -490,3 +490,20 @@ Open items these packets surfaced (not fixed):
   already stale for `runtime.rs`. Not regenerated.
 - The live `stop_run` POST closed the connection without a response in three
   of four validation stops, although the stop took effect each time.
+- One lab start in 16 failed by itself during the quickstart validation
+  (`front/front-a1 was not ready before the deadline`, after a PostgreSQL
+  migration-lock warning). Not investigated; the launcher reports it, reaps
+  and the next start works.
+
+## Lab quickstart (2026-11-22)
+
+`wp-lab-quickstart` (base `e70150b`, ready `21bb711`): flake app `lab`
+(`nix run github:EthnTuttle/silent-pool#lab`) wrapping the unchanged
+self-hosted wrapper, with `grafana`/`status`/`stop`/`reap` subcommands, and
+`docs/LAB-QUICKSTART.md` as the hand-out README. Two additive `flake.nix`
+hunks were committed on the branch. Merged clean; non-normative, no SPEC
+bullet. Validated on the branch by real runs: typed stop, Ctrl-C, terminal
+close and the `systemd-run --user` variant each ended with no process left.
+Background: two long orchestrator runs were lost because a lab started from a
+harness shell lives in that shell's systemd scope and is killed with it;
+`setsid nohup` does not escape a cgroup.
