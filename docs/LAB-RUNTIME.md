@@ -1,5 +1,7 @@
 # Lab runtime: setup, live controls and recovery
 
+Quick start: [LAB-QUICKSTART.md](LAB-QUICKSTART.md) starts the small lab with one command; this is the reference.
+
 This is a local regtest operator tool. The recipes below describe published
 application source `98f0e6caa2482646e3c7073949f6388cd39f200b` and its current
 CLI/API. They do not assert a full funded campaign verdict. `DESIGN.md` and
