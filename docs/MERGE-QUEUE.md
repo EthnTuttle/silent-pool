@@ -460,8 +460,9 @@ pool template renders `max_payout_slots = 1024` (`3237f46`).
 A 4.5 h run then stalled at height 4651: regtest halves every 150 blocks, the
 lab mined a block every ~3.5 s, and the first block of the 2-sat subsidy era
 failed settlement (`window contains an id the distribution did not publish`),
-which holds template building. Evidence:
-`/home/ethan/.spc-lab/20261119T112514Z-play5/runtime` (machine-local).
+which holds template building. The run's raw evidence was machine-local and
+has been deleted; the per-height figures that matter are in
+`docs/decisions/2026-11-20-zero-rounded-shares.md`.
 
 | branch | base SHA | ready SHA | owned paths | merge notes | gate |
 |---|---|---|---|---|---|
