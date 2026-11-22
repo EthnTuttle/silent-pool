@@ -143,7 +143,8 @@ nix run github:EthnTuttle/silent-pool#lab -- reap
   directory you own) before the commands in this guide; for `systemd-run`
   also add `-E SPC_LAB_HOME="$SPC_LAB_HOME"`.
 - **`... already exists; every run needs a new directory`**: a run directory
-  is never reused. Drop `--name` or choose a new one.
+  is never reused. This only happens with `-- --name <name>`; pick a new name
+  or leave it out.
 - **The UI asks for a token or rejects it**: paste the `token` value from the
   `operator.json` named in the banner. A token works for its own run only.
 - **`was not ready before the deadline`**: an occasional startup race. Start
